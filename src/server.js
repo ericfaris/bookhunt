@@ -1,0 +1,185 @@
+'use strict';
+
+require('dotenv').config();
+
+const path = require('path');
+const express = require('express');
+const httpProxy = require('http-proxy');
+
+const searcher = require('./searcher');
+const downloader = require('./downloader');
+const history = require('./history');
+const amazon = require('./amazon');
+
+const PORT = process.env.PORT || 3000;
+const app = express();
+
+app.use(express.json());
+
+// --- /warm: live browser view (noVNC) --------------------------------------
+// The container runs Chromium headed under Xvfb; x11vnc + websockify expose it
+// on :6080. We proxy it under /warm so it rides the SAME hostname + Cloudflare
+// Access policy as the app (no extra tunnel ingress, no second Access app).
+// Open /warm to see the real browser and clear Mobilism's Cloudflare challenge.
+const NOVNC_TARGET = 'http://127.0.0.1:6080';
+const warmProxy = httpProxy.createProxyServer({ target: NOVNC_TARGET, ws: true });
+warmProxy.on('error', (err, _req, res) => {
+  if (res && res.writeHead && !res.headersSent) {
+    res.writeHead(502, { 'Content-Type': 'text/plain' });
+    res.end('warm view not reachable: ' + err.message);
+  }
+});
+
+// Land on the full noVNC client, auto-connecting to the in-container VNC.
+app.get('/warm', (_req, res) =>
+  res.redirect('/warm/vnc.html?path=warm/websockify&autoconnect=true&resize=scale&reconnect=true')
+);
+// express strips the /warm mount prefix from req.url, so assets resolve at the
+// websockify web root.
+app.use('/warm', (req, res) => warmProxy.web(req, res));
+
+app.use(express.static(path.join(__dirname, '..', 'public')));
+
+// --- Session status (drives the re-warm banner) ----------------------------
+app.get('/api/session/status', async (_req, res) => {
+  try {
+    res.json(await searcher.sessionStatus());
+  } catch (err) {
+    res.status(500).json({ error: err.message, ready: false });
+  }
+});
+
+// --- Search -----------------------------------------------------------------
+app.post('/api/search', async (req, res) => {
+  const { title, author, sort } = req.body || {};
+  if (!title && !author) {
+    return res.status(400).json({ error: 'Enter a title and/or an author.' });
+  }
+  try {
+    const { results, fallbackLinks } = await searcher.search({ title, author, sort });
+    history.logSearch({ title, author, sort, resultCount: results.length });
+    res.json({ results, fallbackLinks });
+  } catch (err) {
+    console.error('Search failed:', err);
+    if (err.needWarm) {
+      return res.status(409).json({ error: err.message, needWarm: true });
+    }
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// --- Amazon link → title/author -------------------------------------------
+app.post('/api/amazon', async (req, res) => {
+  const { url } = req.body || {};
+  if (!url || !amazon.isAmazonUrl(url)) {
+    return res.status(400).json({ error: 'Please provide a valid Amazon link.' });
+  }
+  try {
+    const data = await amazon.lookup(url);
+    if (!data.title && !data.author) {
+      return res.status(422).json({ error: 'Could not read title/author from that Amazon page.' });
+    }
+    res.json(data);
+  } catch (err) {
+    console.error('Amazon lookup failed:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// --- Premium credentials (in-memory, per session) ---------------------------
+app.get('/api/premium/status', (_req, res) => {
+  res.json({ hasCreds: downloader.hasPremiumCreds() });
+});
+
+app.post('/api/premium/creds', (req, res) => {
+  const { user, pass } = req.body || {};
+  if (!user || !pass) return res.status(400).json({ error: 'Username and password required.' });
+  downloader.setPremiumCreds(user, pass);
+  res.json({ ok: true });
+});
+
+// --- Download (premium path) ------------------------------------------------
+app.post('/api/download', async (req, res) => {
+  const { url, title } = req.body || {};
+  if (!url) return res.status(400).json({ error: 'Missing post url.' });
+  if (!downloader.hasPremiumCreds()) {
+    return res.status(401).json({ error: 'Premium credentials required.', needCreds: true });
+  }
+  try {
+    const result = await downloader.premiumDownload(url);
+    for (const d of result.downloads) {
+      history.logDownload({
+        title: title || result.title,
+        filename: d.filename,
+        savePath: d.savePath,
+        url: d.url,
+        mode: 'premium',
+      });
+    }
+    res.json(result);
+  } catch (err) {
+    console.error('Download failed:', err);
+    if (err.needWarm) {
+      return res.status(409).json({ error: err.message, needWarm: true });
+    }
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// --- Standard download logging (links opened client-side) -------------------
+app.post('/api/download/standard', (req, res) => {
+  const { url, host, title } = req.body || {};
+  history.logDownload({ title, filename: host || 'external link', savePath: null, url, mode: 'standard' });
+  res.json({ ok: true });
+});
+
+// --- History ----------------------------------------------------------------
+app.get('/api/history', (_req, res) => {
+  res.json({ entries: history.readAll() });
+});
+
+// Bind to loopback by default. In Docker the container is isolated by the
+// host-side port mapping (127.0.0.1:3000:3000), so HOST=0.0.0.0 is safe there.
+const HOST = process.env.HOST || '127.0.0.1';
+const server = app.listen(PORT, HOST, () => {
+  console.log(`Mobilism Ebook Finder running at http://localhost:${PORT}`);
+  console.log(`Downloads will be saved to: ${downloader.DOWNLOAD_PATH}`);
+  // Launch the browser at startup and park it on the forum so /warm always shows
+  // a usable page (ready to clear Cloudflare) and status reflects reality — even
+  // before the first search.
+  searcher
+    .getSession()
+    .then(({ page }) => page.goto(searcher.BASE_URL, { waitUntil: 'domcontentloaded' }))
+    .then(() => console.log('Browser ready (headed under Xvfb) — warm at /warm if needed'))
+    .catch((err) => console.error('Startup browser launch failed:', err.message));
+});
+
+// noVNC's WebSocket doesn't pass through Express — bridge upgrades on /warm/* to
+// websockify, stripping the /warm prefix so it lands on the VNC socket.
+server.on('upgrade', (req, socket, head) => {
+  if (req.url.startsWith('/warm/')) {
+    req.url = req.url.slice('/warm'.length); // '/warm/websockify' -> '/websockify'
+    warmProxy.ws(req, socket, head);
+  } else {
+    socket.destroy();
+  }
+});
+
+server.on('error', (err) => {
+  if (err.code === 'EADDRINUSE') {
+    console.error(
+      `Port ${PORT} is already in use — is another instance running? ` +
+        `(check with: ss -tlnp | grep ${PORT})`
+    );
+    process.exit(1);
+  }
+  throw err;
+});
+
+// Clean shutdown of the browser session.
+for (const sig of ['SIGINT', 'SIGTERM']) {
+  process.on(sig, async () => {
+    await searcher.closeSession();
+    process.exit(0);
+  });
+}

@@ -1,0 +1,20 @@
+{
+  "name": "mobilism-finder",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Local web app to search the Mobilism ebook forum and download ePUBs",
+  "main": "src/server.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js",
+    "warm": "node src/warm.js",
+    "install-browser": "playwright install chromium"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "http-proxy": "^1.18.1",
+    "playwright": "^1.44.0"
+  }
+}

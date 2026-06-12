@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Mobilism Ebook Finder</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header class="topbar">
+    <h1>📚 Mobilism Ebook Finder</h1>
+    <button id="historyToggle" class="ghost-btn" type="button">History</button>
+  </header>
+
+  <div id="warmBanner" class="warm-banner" hidden>
+    <span class="warm-msg">⚠️ Mobilism session expired — searches won’t work until you re-warm.</span>
+    <a id="warmLink" class="warm-btn" href="/warm" target="_blank" rel="noopener">Re-warm ↗</a>
+  </div>
+
+  <main>
+    <form id="searchForm" class="search-card">
+      <div class="card-toolbar">
+        <button id="pasteAmazon" type="button" class="ghost-btn paste-btn"
+          title="Paste an Amazon book link to auto-fill title & author">Paste</button>
+      </div>
+      <div class="field">
+        <label for="title">Title</label>
+        <input id="title" name="title" type="text" placeholder="e.g. 1984" autocomplete="off" />
+      </div>
+      <div class="field">
+        <label for="author">Author</label>
+        <input id="author" name="author" type="text" placeholder="e.g. George Orwell" autocomplete="off" />
+        <small class="hint">helps narrow results when names are common</small>
+      </div>
+      <div class="controls">
+        <div class="sort">
+          <label for="sort">Sort</label>
+          <select id="sort" name="sort">
+            <option value="newest">Newest first</option>
+            <option value="oldest">Oldest first</option>
+          </select>
+        </div>
+        <button id="searchBtn" type="submit" class="primary-btn">Search</button>
+      </div>
+    </form>
+
+    <section id="status" class="status" hidden></section>
+
+    <section id="results" class="results"></section>
+  </main>
+
+  <!-- History drawer -->
+  <aside id="historyPanel" class="history-panel" hidden>
+    <div class="history-head">
+      <h2>Search History</h2>
+      <button id="historyClose" class="ghost-btn" type="button">✕</button>
+    </div>
+    <div id="historyList" class="history-list"></div>
+  </aside>
+  <div id="overlay" class="overlay" hidden></div>
+
+  <!-- Premium credentials modal -->
+  <div id="credModal" class="modal" hidden>
+    <div class="modal-card">
+      <h2>Premium Downloader Login</h2>
+      <p class="hint">Used only for this session — never stored on disk.</p>
+      <form id="credForm">
+        <div class="field">
+          <label for="premUser">Username</label>
+          <input id="premUser" type="text" autocomplete="off" required />
+        </div>
+        <div class="field">
+          <label for="premPass">Password</label>
+          <input id="premPass" type="password" autocomplete="off" required />
+        </div>
+        <div class="modal-actions">
+          <button type="button" id="credCancel" class="ghost-btn">Cancel</button>
+          <button type="submit" class="primary-btn">Submit</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

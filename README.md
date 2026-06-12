@@ -1,0 +1,241 @@
+# Mobilism Ebook Finder
+
+A self-hosted web app that searches the Mobilism ebook forum by title and/or author, auto-crawls collection posts, triggers Premium downloads where available, and saves ePUBs to disk. Accessible at `http://localhost:3000` locally or at `https://read.mooseflip.com` via Cloudflare Tunnel.
+
+> For personal use against an account you own. Drives a real Chromium browser with your logged-in session and inserts polite 2–5s delays between requests.
+
+---
+
+## Features
+
+- **ePUB-only** — all other formats filtered out
+- **Fuzzy matching** — `1984` matches `1984: Illustrated Edition`
+- **Collection crawling** — auto-scans up to 3 bundle/series/omnibus posts per search
+- **Author fallback** — second search pass when the title search returns no direct matches
+- **Premium downloads** — saved directly to disk via the Mobilism amember downloader
+- **Standard links** — per-host download buttons when no Premium icon is present
+- **Search history** — stored in `history.json`, re-runnable with one click
+- **Dark mode** — via `prefers-color-scheme`
+
+---
+
+## Prerequisites
+
+- Node.js 20+
+- Docker + Docker Compose (for containerized deployment)
+- A Mobilism forum account
+
+---
+
+## Running locally (no Docker)
+
+**1. Install dependencies and the Playwright browser**
+```bash
+npm install
+npm run install-browser
+```
+
+**2. Create your `.env`**
+```bash
+cp .env.example .env
+```
+
+Fill in:
+```
+MOBILISM_USER=your_forum_username
+MOBILISM_PASS=your_forum_password
+DOWNLOAD_PATH=/mnt/c/temp        # WSL path to C:\temp
+PORT=3000
+
+# Optional: premium downloader login (loaded at startup; UI form overrides)
+MOBILISM_PREMIUM_USER=
+MOBILISM_PREMIUM_PASS=
+```
+
+> **Note:** The premium downloader password is separate from your forum password — Mobilism sends it by PM.
+
+**3. Start**
+```bash
+DISPLAY=:0 npm start
+```
+
+Open [http://localhost:3000](http://localhost:3000).
+
+A Chromium window will appear (required — Mobilism uses Cloudflare bot protection that blocks headless browsers). The session is saved to `.browser-profile/` so you only log in once.
+
+---
+
+## Running with Docker
+
+The container runs Chromium **headed under a virtual display (Xvfb)** as your
+user (`uid:gid 1000`). Mobilism's Cloudflare blocks headless browsers, so the
+browser runs headed in-container and is logged in **remotely via `/warm`** (a
+noVNC view of the live browser) — no host-side warm step is needed.
+
+**1. Create your `.env`** (same as above)
+
+**2. Make sure `history.json` exists**
+```bash
+touch history.json
+```
+
+**3. Start the container**
+```bash
+docker compose up -d
+docker logs mobilism-search-app-1
+```
+
+Expected output:
+```
+Mobilism Ebook Finder running at http://localhost:3000
+Downloads will be saved to: /downloads
+```
+
+**To stop:**
+```bash
+docker compose down
+```
+
+**To rebuild after a code change:**
+```bash
+docker compose up -d --build
+```
+
+### Re-warming (when the session expires)
+
+The saved session lasts a long time, but eventually Mobilism's Cloudflare
+clearance or the forum login expires. When it does, the app shows a red
+**"Mobilism session expired — Re-warm"** banner (and searches return a 409
+`needWarm`). To refresh — no host steps, no restart:
+
+1. Click **Re-warm ↗** in the banner (or open `https://read.mooseflip.com/warm`).
+2. A noVNC view of the live in-container browser appears. Clear any Cloudflare
+   challenge / log into the forum there.
+3. Switch back to the app — the banner clears and search works again.
+
+Keep the container **always running**; a cold Chromium start is the most reliable
+way to trigger a fresh Cloudflare challenge. `entrypoint.sh` self-heals stale X
+and Chromium profile locks on boot, so `docker compose up -d` just works.
+
+### Docker volumes
+
+| Host path | Container path | Purpose |
+|---|---|---|
+| `./.browser-profile` | `/app/.browser-profile` | Playwright persistent session (Cloudflare clearance + forum login) |
+| `./history.json` | `/app/history.json` | Search + download log |
+| `/mnt/c/temp` | `/downloads` | Downloaded ePUBs |
+
+> The container runs as `user: "1000:1000"` so these bind-mounted files stay
+> owned by you, not root. If files ever end up root-owned (e.g. from an older
+> setup), fix them without sudo via:
+> `docker run --rm -v "$PWD/.browser-profile:/p" alpine chown -R 1000:1000 /p`
+
+---
+
+## Cloudflare Tunnel (remote access via read.mooseflip.com)
+
+The app is exposed at `https://read.mooseflip.com` through the existing `youtube-rss` Cloudflare Tunnel. No separate tunnel is needed — it's an additional ingress rule on the same tunnel.
+
+### Current config (`/etc/cloudflared/config.yml`)
+
+```yaml
+tunnel: 83441a36-f288-40e3-ab39-9393b284ccc5
+credentials-file: /etc/cloudflared/83441a36-f288-40e3-ab39-9393b284ccc5.json
+
+ingress:
+  - hostname: rss.mooseflip.com
+    service: http://localhost:8000
+  - hostname: read.mooseflip.com
+    service: http://localhost:3000
+  - service: http_status:404
+```
+
+### If you need to re-add the DNS record
+```bash
+cloudflared tunnel route dns youtube-rss read.mooseflip.com
+sudo systemctl restart cloudflared
+```
+
+### Securing with Cloudflare Access
+
+The app has no built-in authentication. To restrict access to your email only, add a Cloudflare Access application:
+
+1. Go to [dash.cloudflare.com](https://dash.cloudflare.com) → **Zero Trust** → **Access** → **Applications**
+2. Click **Add an application** → **Self-hosted**
+3. Set **Application domain** to `read.mooseflip.com`
+4. Create a policy: **Allow** where **Email** = `ericfaris@gmail.com`
+5. Save
+
+Cloudflare will send a one-time code to your email on each new session.
+
+---
+
+## How search works
+
+1. **Pass 1 — title search** (up to 5 pages of results), scoped to the eBooks forum and its subforums (`fid[]=106&sc=1`). When both title and author are given, both go into the query so it lands directly on the match. Filtered to ePUB, fuzzy-matched, deduplicated by URL.
+2. **Collection detection.** Posts with `Collection`, `Complete Works`, `&`, `Series`, or `Omnibus` in the title are crawled (max 3) and their content scanned line-by-line for a title match.
+3. **"Books by {author}" pass.** When both title and author are given, a second search runs for `books by {author}` (titleonly, eBooks forum). Each resulting set/collection post (e.g. *"7 Books by Sally Hepworth"*) is opened and scanned for the requested title — so a book only available inside a bundle still surfaces. Results merge with Pass 1 and are deduped by URL.
+4. **Author fallback.** Last resort, only if nothing turned up at all. Searches by author and scans each post's content for the title.
+5. **Zero results.** Shows a "Not found" message with manual search links for Mobilism.
+
+### Downloads
+
+- **Premium** (`img.MobilismDownloaderIcon` found in post): each associated download link is fetched through the amember downloader and saved to `DOWNLOAD_PATH`. Credentials are entered in the UI once per session and never written to disk (or optionally set via `MOBILISM_PREMIUM_USER`/`MOBILISM_PREMIUM_PASS` in `.env`).
+- **Standard** (no Premium icon): every `a.postlink` is shown as a button labeled by file host and opens in a new tab.
+
+---
+
+## Environment variables
+
+| Variable | Required | Default | Description |
+|---|---|---|---|
+| `MOBILISM_USER` | Yes | — | Mobilism forum username |
+| `MOBILISM_PASS` | Yes | — | Mobilism forum password |
+| `MOBILISM_PREMIUM_USER` | No | — | Premium downloader username |
+| `MOBILISM_PREMIUM_PASS` | No | — | Premium downloader password |
+| `DOWNLOAD_PATH` | No | `C:\temp` | Where downloaded ePUBs are saved |
+| `PORT` | No | `3000` | HTTP port |
+| `HEADLESS` | No | `false` | Set `true` to run Chromium headless (only safe when the browser profile is warm and Cloudflare clearance is cached) |
+| `PROFILE_DIR` | No | `.browser-profile/` | Path to the Playwright persistent browser profile |
+| `EBOOKS_FID` | No | `106` | Mobilism eBooks forum id that searches are scoped to |
+| `MOBILISM_BASE` | No | `https://forum.mobilism.org` | Forum base URL |
+
+---
+
+## Project layout
+
+```
+src/
+  server.js       Express app + API routes
+  searcher.js     Playwright session, search + crawl logic
+  downloader.js   Premium + standard download logic
+  history.js      Read/write history.json
+public/
+  index.html      Search UI
+  style.css       Dark mode + layout
+  app.js          Fetch calls + result rendering
+Dockerfile
+docker-compose.yml
+.env.example
+history.json      Search + download log (created on first run)
+.browser-profile/ Playwright persistent session (created on first run)
+```
+
+---
+
+## Troubleshooting
+
+**Browser shows a green/black screen**
+Chromium's GPU compositing is broken under WSLg. The `--disable-gpu` flags in `searcher.js` fix this. If it recurs, check that the flags are present.
+
+**"Could not log in to Mobilism" / re-warm banner appears**
+The Cloudflare clearance or forum login expired. Open `/warm`, clear the challenge / log in via the live noVNC browser view, then return to the app. The session is saved to `.browser-profile/` for future runs.
+
+**localhost:3000 shows the wrong app (green page / "Reel Quest")**
+A stale service worker from a previous project on port 3000 is intercepting requests. Open DevTools → Application → Service Workers → Unregister, or clear site data for `localhost`.
+
+**Premium download: "account expired"**
+Your premium subscription has lapsed. The app detects this and reports it immediately rather than hanging. Renew on Mobilism and retry.
+
+**Only one instance can run at a time**
+The browser profile directory can only be used by one Chromium process. If you start a second instance while one is already running, the second one will fail at browser launch.

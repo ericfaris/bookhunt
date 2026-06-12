@@ -1,0 +1,8 @@
+node_modules
+.browser-profile
+.env
+history.json
+*.log
+.DS_Store
+*.md
+*.png

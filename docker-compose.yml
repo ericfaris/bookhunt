@@ -1,0 +1,35 @@
+services:
+  app:
+    build: .
+    image: ericfaris/mobilism-search:latest
+    restart: unless-stopped
+    # Run as the host user (uid:gid 1000) so the bind-mounted browser profile,
+    # history, and downloads stay owned by you — never root.
+    user: "1000:1000"
+    ports:
+      - "127.0.0.1:3000:3000"
+    volumes:
+      # Persistent browser profile — keeps Cloudflare clearance + Mobilism session
+      # between container restarts. Pre-populate by running the app once outside
+      # Docker with `DISPLAY=:0 npm start` so the profile is already authenticated.
+      - ./.browser-profile:/app/.browser-profile
+      # Search + download history
+      - ./history.json:/app/history.json
+      # Downloads land in C:\temp on the Windows side (via WSL2 path)
+      - /mnt/c/temp:/downloads
+    environment:
+      # Forum login credentials — read from .env
+      - MOBILISM_USER=${MOBILISM_USER}
+      - MOBILISM_PASS=${MOBILISM_PASS}
+      # Optional: premium downloader login (loaded at startup; UI form overrides)
+      - MOBILISM_PREMIUM_USER=${MOBILISM_PREMIUM_USER:-}
+      - MOBILISM_PREMIUM_PASS=${MOBILISM_PREMIUM_PASS:-}
+      # Server binding — 0.0.0.0 inside the container; the ports mapping above
+      # restricts host-side exposure to 127.0.0.1
+      - HOST=0.0.0.0
+      - PORT=3000
+      - DOWNLOAD_PATH=/downloads
+      # Headed under a virtual display (Xvfb, started by entrypoint.sh) — Mobilism's
+      # Cloudflare blocks headless browsers, so Chromium runs headed in-container and
+      # is warmed remotely via /warm (noVNC). No host `npm run warm` step anymore.
+      - DISPLAY=:99
