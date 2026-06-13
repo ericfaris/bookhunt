@@ -237,12 +237,20 @@ function normalize(s) {
     .trim();
 }
 
-/** Fuzzy/partial match: every token of the query appears somewhere in target. */
+/**
+ * Fuzzy/partial match: every token of the query must appear in the target at a
+ * WORD START (prefix), not just anywhere as a substring. Word-start matching
+ * keeps useful stem matches ("demon" → "demons") while rejecting the short-token
+ * false positives that bare substring matching produced — e.g. "It Ends with Us"
+ * decomposes into "it"/"us", and a naive includes() matched those inside
+ * "wIThout"/"trUSt", letting unrelated posts pass. Tokens are normalized to
+ * [a-z0-9] so they carry no regex metacharacters.
+ */
 function fuzzyMatch(query, target) {
   const q = normalize(query);
   if (!q) return true;
   const t = normalize(target);
-  return q.split(' ').every((tok) => t.includes(tok));
+  return q.split(' ').every((tok) => new RegExp('\\b' + tok).test(t));
 }
 
 /**
@@ -566,7 +574,13 @@ async function runSearch({ title, author, sort = 'newest' }, onProgress) {
   // ---- Author fallback (last resort — only if nothing turned up at all) ----
   if (results.length === 0 && author) {
     emit({ phase: 'author-fallback' });
-    const arows = await collectRows(page, authorSearchUrl, MAX_PAGES);
+    // Search the author title-only (sf=titleonly): book posts are titled
+    // "Title by Author (.ePUB)", so the author lands in the title. An all-fields
+    // search instead returns every post that merely *mentions* the author in its
+    // blurb — comp-title marketing like "for fans of Colleen Hoover" — which is
+    // exactly how unrelated books leaked into this pass.
+    const fallbackUrl = buildSearchUrl(author, { sd, titleOnly: true });
+    const arows = await collectRows(page, fallbackUrl, MAX_PAGES);
     let colCount = 0;
     for (const row of arows) {
       if (seen.has(row.url)) continue;
@@ -579,6 +593,17 @@ async function runSearch({ title, author, sort = 'newest' }, onProgress) {
       emit({ phase: 'scanning', found: results.length });
       const detail = await fetchDetail(page, row.url);
       if (!detail || detail.format !== 'ePUB') continue;
+      // Require the post's ACTUAL author (parsed from "… by <author>" in the
+      // title) to match. Without this, a body mention of the author was enough
+      // to pass — the root cause of "It Ends with Us / Colleen Hoover" returning
+      // "Loving with Demons by Hana Mahmood".
+      if (
+        detail.author &&
+        !fuzzyMatch(author, detail.author) &&
+        !fuzzyMatch(author, detail.title)
+      ) {
+        continue;
+      }
       if (
         title &&
         !fuzzyMatchLine(title, detail.contentText) &&
