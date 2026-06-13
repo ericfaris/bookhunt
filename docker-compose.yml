@@ -34,6 +34,9 @@ services:
       - CF_ACCESS_TEAM_DOMAIN=${CF_ACCESS_TEAM_DOMAIN:-}
       - CF_ACCESS_AUD=${CF_ACCESS_AUD:-}
       - CF_ACCESS_ALLOWED_EMAILS=${CF_ACCESS_ALLOWED_EMAILS:-}
+      # Optional: Google Books key for stronger spell-correction (keyless Open
+      # Library is the fallback). See .env.example.
+      - GOOGLE_BOOKS_API_KEY=${GOOGLE_BOOKS_API_KEY:-}
       # Notifications + Send-to-Kindle (Gmail SMTP); TWILIO_* reserved for later
       - SMTP_HOST=${SMTP_HOST:-smtp.gmail.com}
       - SMTP_PORT=${SMTP_PORT:-587}
