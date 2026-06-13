@@ -267,21 +267,44 @@ async function saveViaRequest(page, fileUrl, meta) {
   }
 }
 
+/** First letter of every word, uppercased — e.g. "The Calamity Club" → "TCC". */
+function makeAbbr(title) {
+  return (title || '')
+    .split(/\s+/)
+    .map((w) => (w[0] || '').toUpperCase())
+    .join('');
+}
+
+/**
+ * Return true if a collection-post section header matches the target title.
+ * Handles both the full name ("The Calamity Club") and initials ("TCC").
+ */
+function sectionMatchesTitle(sectionHeader, title) {
+  if (!sectionHeader || !title) return false;
+  if (fuzzyMatch(title, sectionHeader) || fuzzyMatch(sectionHeader, title)) return true;
+  const abbr = makeAbbr(title);
+  const normHeader = (sectionHeader || '').replace(/[\s\W]/g, '').toUpperCase();
+  return abbr.length >= 2 && normHeader === abbr;
+}
+
 /**
  * Premium download path. Opens the topic, finds the postlinks associated with a
  * Premium icon, and treats them as MIRRORS of one file: it tries each through
  * the amember downloader in order and stops at the first that downloads
  * successfully, saving to DOWNLOAD_PATH. Failed mirrors are recorded in `errors`.
  *
+ * `targetTitle` is the user's searched title — used to filter links to only those
+ * under the correct book's section in multi-book collection posts.
+ *
  * Returns { downloads: [{ filename, savePath, url, timestamp, verified, size }], errors: [...] }
  */
-function premiumDownload(topicUrl, onProgress) {
+function premiumDownload(topicUrl, onProgress, targetTitle) {
   // Queued: the browser page is shared with searches, so download runs must
   // wait their turn rather than interleave navigations.
-  return enqueue(() => runPremiumDownload(topicUrl, onProgress));
+  return enqueue(() => runPremiumDownload(topicUrl, onProgress, targetTitle));
 }
 
-async function runPremiumDownload(topicUrl, onProgress = () => {}) {
+async function runPremiumDownload(topicUrl, onProgress = () => {}, targetTitle) {
   if (!premiumCreds) throw new Error('Premium credentials not set for this session');
   ensureDownloadDir();
 
@@ -295,23 +318,32 @@ async function runPremiumDownload(topicUrl, onProgress = () => {}) {
   }
 
   // Only run links that have a premium icon next to them; if the adjacency
-  // heuristic found none (markup variant), fall back to all postlinks. The
-  // links themselves change between visits, so they're always scraped fresh
-  // from the post above — never cached.
+  // heuristic found none (markup variant), fall back to all postlinks.
   const flagged = detail.postlinks.filter((l) => l.premium);
-  const premiumLinks = flagged.length ? flagged : detail.postlinks;
+  let premiumLinks = flagged.length ? flagged : detail.postlinks;
+
+  // For collection posts ("Books by Author"), multiple books share one post and
+  // each has its own section with its own mirror links. Filter to only the
+  // links whose section header matches (or abbreviates to) the target title.
+  // If the post title itself matches the target, we're on a single-book post
+  // and no filtering is needed.
+  if (targetTitle && !fuzzyMatch(targetTitle, detail.title)) {
+    const sectionFiltered = premiumLinks.filter((l) => sectionMatchesTitle(l.sectionHeader, targetTitle));
+    if (sectionFiltered.length > 0) premiumLinks = sectionFiltered;
+  }
+
   onProgress({ step: 'mirrors-found', total: premiumLinks.length });
 
   // Carried into each mirror so saved files get a tidy "Title [Author] (Year)"
   // name instead of the host's raw filename, and so verification can confirm
   // the embedded ePUB title matches what we searched for.
-  const meta = { title: detail.title, author: detail.author };
+  const meta = { title: targetTitle || detail.title, author: detail.author };
   const { downloads, errors } = await runMirrors(
     premiumLinks,
     (link) => attemptLink(page, link, meta, onProgress),
     onProgress
   );
-  return { downloads, errors, title: detail.title };
+  return { downloads, errors, title: detail.title, description: detail.description || '' };
 }
 
 /**
@@ -505,4 +537,6 @@ module.exports = {
   ensurePremiumLogin,
   assertAccountActive,
   runMirrors,
+  makeAbbr,
+  sectionMatchesTitle,
 };

@@ -208,6 +208,27 @@ async function ensureLoggedIn(page) {
 const randomDelay = () =>
   new Promise((r) => setTimeout(r, 2000 + Math.floor(Math.random() * 3000))); // 2–5s
 
+/**
+ * Pull a short description blurb out of a Mobilism post's raw text.
+ * Skips lines that look like metadata fields (Format:, Size:, etc.) or URLs.
+ */
+function extractBlurb(text, maxLen = 350) {
+  if (!text) return '';
+  const SKIP =
+    /^(format|size|language|isbn|year|publisher|genre|source|type|pages|series|quality|author\(?s?\)?|title)[:：\s]/i;
+  const lines = text.split(/\n+/).map((s) => s.trim()).filter(Boolean);
+  const out = [];
+  for (const line of lines) {
+    if (SKIP.test(line)) continue;
+    if (/^https?:\/\//i.test(line)) continue;
+    if (/mobilism\.org/i.test(line)) continue;
+    out.push(line);
+    if (out.join(' ').length >= maxLen) break;
+  }
+  const blurb = out.join(' ').trim();
+  return blurb.length > maxLen ? blurb.slice(0, maxLen).trimEnd() + '…' : blurb;
+}
+
 function normalize(s) {
   return (s || '')
     .toLowerCase()
@@ -331,22 +352,46 @@ async function fetchDetail(page, topicUrl) {
     const content = document.querySelector('div.content');
     if (!content) return null;
     const img = content.querySelector('img');
-    // The premium icon, when present, is rendered adjacent to its postlink, so
-    // tag each link with whether an icon sits within its next few siblings.
-    const links = Array.from(document.querySelectorAll('a.postlink')).map((a) => {
-      let premium = false;
-      let n = a.nextElementSibling;
-      for (let i = 0; n && i < 3; i++, n = n.nextElementSibling) {
-        if (
-          (n.matches && n.matches('img.MobilismDownloaderIcon')) ||
-          (n.querySelector && n.querySelector('img.MobilismDownloaderIcon'))
-        ) {
-          premium = true;
-          break;
-        }
+
+    // Walk the content DOM in document order so each postlink gets tagged with
+    // the nearest preceding section header (bold/strong text or text node).
+    // In "Books by Author" collection posts, links are grouped under a book
+    // title or its abbreviation (e.g. "TCC" for "The Calamity Club") — we
+    // capture that context here so the downloader can filter by target book.
+    const links = [];
+    let currentSection = '';
+    (function walk(node) {
+      if (!node) return;
+      if (node.nodeType === 3) { // Text node
+        const t = node.textContent.trim();
+        if (t.length > 2) currentSection = t;
+        return;
       }
-      return { url: a.href, premium };
-    });
+      if (node.nodeType !== 1) return;
+      const tag = node.tagName.toLowerCase();
+      if (tag === 'a' && node.classList && node.classList.contains('postlink')) {
+        let premium = false;
+        let n = node.nextElementSibling;
+        for (let i = 0; n && i < 3; i++, n = n.nextElementSibling) {
+          if (
+            (n.matches && n.matches('img.MobilismDownloaderIcon')) ||
+            (n.querySelector && n.querySelector('img.MobilismDownloaderIcon'))
+          ) {
+            premium = true;
+            break;
+          }
+        }
+        links.push({ url: node.href, premium, sectionHeader: currentSection });
+        return; // don't recurse into the link itself
+      }
+      // Update section for header-like elements that don't themselves contain links
+      if (['strong', 'b', 'em', 'h2', 'h3', 'h4'].includes(tag) && !node.querySelector('a.postlink')) {
+        const t = node.textContent.trim();
+        if (t.length > 2) currentSection = t;
+      }
+      for (const child of node.childNodes) walk(child);
+    })(content);
+
     const premium = !!document.querySelector('img.MobilismDownloaderIcon');
 
     const titleEl =
@@ -388,7 +433,7 @@ async function fetchDetail(page, topicUrl) {
   for (const l of raw.links) {
     if (seenLinks.has(l.url)) continue;
     seenLinks.add(l.url);
-    postlinks.push({ host: hostLabel(l.url), url: l.url, premium: l.premium });
+    postlinks.push({ host: hostLabel(l.url), url: l.url, premium: l.premium, sectionHeader: l.sectionHeader || '' });
   }
 
   return {
@@ -396,6 +441,7 @@ async function fetchDetail(page, topicUrl) {
     title: raw.title,
     cover: raw.cover,
     contentText: raw.text,
+    description: extractBlurb(raw.text),
     format,
     size: sizeMatch ? sizeMatch[1] : null,
     author: authorMatch ? authorMatch[1].trim() : null,
@@ -410,6 +456,7 @@ function publicResult(detail, source, row = {}) {
   return {
     title: detail.title,
     author: detail.author,
+    description: detail.description || '',
     format: 'ePUB',
     size: detail.size,
     date: row.date || null,
@@ -425,12 +472,18 @@ function publicResult(detail, source, row = {}) {
 // ---------------------------------------------------------------------------
 // Search orchestration
 // ---------------------------------------------------------------------------
-function search(params) {
-  return enqueue(() => runSearch(params));
+function search(params, onProgress) {
+  return enqueue(() => runSearch(params, onProgress));
 }
 
-async function runSearch({ title, author, sort = 'newest' }) {
+async function runSearch({ title, author, sort = 'newest' }, onProgress) {
   if (!title && !author) throw new Error('At least one of title or author is required');
+
+  // Optional progress sink. Drives the live spinner text; never throws into the
+  // scrape if a malformed handler is passed.
+  const emit = (ev) => {
+    try { if (typeof onProgress === 'function') onProgress(ev); } catch { /* ignore */ }
+  };
 
   const sd = sort === 'oldest' ? 'a' : 'd';
   const { page } = await getSession();
@@ -446,6 +499,7 @@ async function runSearch({ title, author, sort = 'newest' }) {
   const authorSearchUrl = author ? buildSearchUrl(author, { sd, titleOnly: false }) : null;
 
   // ---- Pass 1: title search ----
+  emit({ phase: 'title-search' });
   const rows = await collectRows(page, pass1Url, MAX_PAGES);
   const collections = [];
 
@@ -458,6 +512,7 @@ async function runSearch({ title, author, sort = 'newest' }) {
     }
     if (results.length >= DETAIL_CAP) break;
     seen.add(row.url);
+    emit({ phase: 'scanning', found: results.length });
     const detail = await fetchDetail(page, row.url);
     if (!detail || detail.format !== 'ePUB') continue;
     if (
@@ -472,6 +527,7 @@ async function runSearch({ title, author, sort = 'newest' }) {
   }
 
   // ---- Collection crawl (max 3) ----
+  if (collections.length) emit({ phase: 'collections' });
   for (const col of collections.slice(0, MAX_COLLECTIONS)) {
     if (seen.has(col.url)) continue;
     seen.add(col.url);
@@ -489,6 +545,7 @@ async function runSearch({ title, author, sort = 'newest' }) {
   // requested title. Always runs when both title and author are given; its
   // results are merged with everything above and deduped via `seen`.
   if (title && author) {
+    emit({ phase: 'author-collections' });
     const byAuthorUrl = buildSearchUrl(`books by ${author}`, { sd, titleOnly: true });
     const byAuthorRows = await collectRows(page, byAuthorUrl, COLLECTION_SEARCH_PAGES);
     let scanned = 0;
@@ -508,6 +565,7 @@ async function runSearch({ title, author, sort = 'newest' }) {
 
   // ---- Author fallback (last resort — only if nothing turned up at all) ----
   if (results.length === 0 && author) {
+    emit({ phase: 'author-fallback' });
     const arows = await collectRows(page, authorSearchUrl, MAX_PAGES);
     let colCount = 0;
     for (const row of arows) {
@@ -518,6 +576,7 @@ async function runSearch({ title, author, sort = 'newest' }) {
       }
       if (results.length >= DETAIL_CAP) break;
       seen.add(row.url);
+      emit({ phase: 'scanning', found: results.length });
       const detail = await fetchDetail(page, row.url);
       if (!detail || detail.format !== 'ePUB') continue;
       if (

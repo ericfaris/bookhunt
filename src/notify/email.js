@@ -25,19 +25,14 @@ function esc(s) {
 }
 
 /**
- * book: { title, author, cover, sourceUrl, format, size, filename, pushedToKindle }
+ * book: { title, author, cover, description, filename, pushedToKindle }
  */
 async function send({ recipient, book }) {
   const title = book.title || book.filename || 'a new book';
   const author = book.author ? ` by ${book.author}` : '';
-  const where = book.pushedToKindle ? 'It’s been sent to your Kindle.' : '';
 
-  const bits = [];
-  if (book.format) bits.push(`Format: ${esc(book.format)}`);
-  if (book.size) bits.push(`Size: ${esc(book.size)}`);
-  const meta = bits.length ? `<p style="color:#666;font-size:13px;margin:6px 0">${bits.join(' &middot; ')}</p>` : '';
-  const src = book.sourceUrl
-    ? `<p style="font-size:13px;margin:6px 0"><a href="${esc(book.sourceUrl)}">View source thread</a></p>`
+  const descHtml = book.description
+    ? `<p style="margin:10px 0 0;line-height:1.6;color:#444;font-size:14px">${esc(book.description)}</p>`
     : '';
 
   // Attach the cover as an inline CID image so it renders even when clients
@@ -46,28 +41,27 @@ async function send({ recipient, book }) {
   let coverHtml = '';
   if (book.cover) {
     attachments.push({ filename: 'cover.jpg', path: book.cover, cid: 'cover@book' });
-    coverHtml = `<img src="cid:cover@book" alt="cover" style="max-width:180px;border-radius:6px;display:block;margin:10px 0">`;
+    coverHtml = `<img src="cid:cover@book" alt="cover" style="max-width:160px;border-radius:6px;display:block;margin:12px 0">`;
   }
 
   const html = `
     <div style="font-family:system-ui,Segoe UI,Roboto,sans-serif;max-width:520px">
-      <p style="font-size:16px;margin:0 0 4px">📚 <strong>${esc(title)}</strong>${esc(author)}</p>
+      <p style="font-size:17px;margin:0 0 16px;font-weight:600">Eric has sent a new book to your Kindle! 📚</p>
       ${coverHtml}
-      <p style="margin:6px 0">A new book was added for you.${where ? ' ' + esc(where) : ''}</p>
-      ${meta}
-      ${src}
-      <p style="color:#999;font-size:12px;margin-top:16px">Sent by Mobilism Finder</p>
+      <p style="font-size:16px;margin:0 0 2px"><strong>${esc(title)}</strong></p>
+      ${book.author ? `<p style="margin:0;color:#555;font-size:14px">${esc(book.author)}</p>` : ''}
+      ${descHtml}
+      <p style="color:#bbb;font-size:11px;margin-top:24px;border-top:1px solid #eee;padding-top:10px">Sent by Eric via Mobilism Finder</p>
     </div>`;
 
   const text =
-    `📚 ${title}${author}\n\nA new book was added for you.` +
-    (where ? ` ${where}` : '') +
-    (book.sourceUrl ? `\n\nSource: ${book.sourceUrl}` : '');
+    `Eric has sent a new book to your Kindle!\n\n${title}${author}` +
+    (book.description ? `\n\n${book.description}` : '');
 
   await smtp.getTransport().sendMail({
     from: smtp.FROM,
     to: recipient.email,
-    subject: `📚 ${title}${author}`,
+    subject: `📚 ${title} — Eric sent it to your Kindle!`,
     text,
     html,
     attachments,

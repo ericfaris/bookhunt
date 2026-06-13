@@ -54,21 +54,43 @@ app.get('/api/session/status', async (_req, res) => {
 });
 
 // --- Search -----------------------------------------------------------------
+// Streamed as Server-Sent Events. A Mobilism scrape can run for minutes (polite
+// 2–5s delays between many requests), which is well past Cloudflare's 100s
+// origin timeout — a plain JSON response would get replaced by Cloudflare's HTML
+// 524 page and the client would choke on `JSON.parse('<!DOCTYPE …')`. Streaming
+// flushes headers immediately and a heartbeat keeps bytes flowing, so the edge
+// never times out. Progress events drive the live spinner; the terminal
+// `done`/`error` frame carries the payload (results or a needWarm signal).
 app.post('/api/search', async (req, res) => {
   const { title, author, sort } = req.body || {};
   if (!title && !author) {
     return res.status(400).json({ error: 'Enter a title and/or an author.' });
   }
+
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache',
+    Connection: 'keep-alive',
+    'X-Accel-Buffering': 'no', // disable proxy buffering so events flush promptly
+  });
+  const send = (event) => res.write(`data: ${JSON.stringify(event)}\n\n`);
+  // Comment-frame heartbeat (every 15s) keeps the connection alive across the
+  // long gaps between page fetches so Cloudflare's 524 timeout never fires.
+  const heartbeat = setInterval(() => res.write(': ping\n\n'), 15000);
+
   try {
-    const { results, fallbackLinks } = await searcher.search({ title, author, sort });
+    const { results, fallbackLinks } = await searcher.search(
+      { title, author, sort },
+      (ev) => send({ step: 'progress', ...ev })
+    );
     history.logSearch({ title, author, sort, resultCount: results.length });
-    res.json({ results, fallbackLinks });
+    send({ step: 'done', results, fallbackLinks });
   } catch (err) {
     console.error('Search failed:', err);
-    if (err.needWarm) {
-      return res.status(409).json({ error: err.message, needWarm: true });
-    }
-    res.status(500).json({ error: err.message });
+    send({ step: 'error', error: err.message, needWarm: !!err.needWarm });
+  } finally {
+    clearInterval(heartbeat);
+    res.end();
   }
 });
 
@@ -109,7 +131,7 @@ app.post('/api/premium/creds', (req, res) => {
 // after the stream opens — including needWarm and fatal errors — is delivered as
 // an SSE `error` event, since the HTTP status is already committed.
 app.post('/api/download', async (req, res) => {
-  const { url, title } = req.body || {};
+  const { url, title, searchedTitle } = req.body || {};
   if (!url) return res.status(400).json({ error: 'Missing post url.' });
   if (!downloader.hasPremiumCreds()) {
     return res.status(401).json({ error: 'Premium credentials required.', needCreds: true });
@@ -124,10 +146,10 @@ app.post('/api/download', async (req, res) => {
   const send = (event) => res.write(`data: ${JSON.stringify(event)}\n\n`);
 
   try {
-    const result = await downloader.premiumDownload(url, send);
+    const result = await downloader.premiumDownload(url, send, searchedTitle || title);
     for (const d of result.downloads) {
       const stored = history.logDownload({
-        title: title || result.title,
+        title: searchedTitle || title || result.title,
         filename: d.filename,
         savePath: d.savePath,
         url: d.url,
@@ -137,7 +159,7 @@ app.post('/api/download', async (req, res) => {
       });
       d.id = stored.id; // safe handle the client passes back to /api/send
     }
-    send({ step: 'done', downloads: result.downloads, errors: result.errors, title: result.title });
+    send({ step: 'done', downloads: result.downloads, errors: result.errors, title: result.title, description: result.description || '' });
   } catch (err) {
     console.error('Download failed:', err.detail || err); // full text kept server-side
     send({ step: 'error', error: err.message, needWarm: !!err.needWarm });
@@ -185,7 +207,8 @@ app.get('/api/notify/status', (_req, res) => {
 
 // --- Send: notify recipients (+ optional Kindle push) -----------------------
 app.post('/api/send', async (req, res) => {
-  const { downloadId, recipientIds, pushToKindle, channels, book } = req.body || {};
+  const { downloadId, recipientIds, channels, book } = req.body || {};
+  const pushToKindle = true; // always push to Kindle when recipient has a Kindle email
   if (!downloadId) return res.status(400).json({ error: 'Missing downloadId.' });
   if (!Array.isArray(recipientIds) || !recipientIds.length) {
     return res.status(400).json({ error: 'Pick at least one recipient.' });
@@ -235,6 +258,15 @@ app.post('/api/send', async (req, res) => {
   }
 
   res.json({ results });
+});
+
+// Ensure all unhandled Express errors return JSON rather than the default HTML
+// error page (which causes the client to surface a confusing JSON-parse error).
+// Must be defined after all routes; 4-arg signature is required by Express.
+// eslint-disable-next-line no-unused-vars
+app.use((err, req, res, _next) => {
+  console.error('Unhandled error:', err);
+  if (!res.headersSent) res.status(500).json({ error: err.message || 'Internal server error' });
 });
 
 // Bind to loopback by default. In Docker the container is isolated by the

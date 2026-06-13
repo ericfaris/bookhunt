@@ -106,25 +106,80 @@ async function runSearch({ title, author, sort }) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ title, author, sort }),
     });
-    const data = await res.json();
-    if (res.status === 409 && data.needWarm) {
-      showWarmBanner(true);
-      showStatus('Mobilism session expired — click “Re-warm ↗” above, then search again.', 'error');
-      return;
-    }
-    if (!res.ok) throw new Error(data.error || 'Search failed');
 
-    if (!data.results.length) {
-      renderNotFound(data.fallbackLinks);
-    } else {
-      hideStatus();
-      data.results.forEach(renderCard);
+    // A failure before the stream opens (e.g. the empty-query 400) still comes
+    // back as a normal JSON body, not SSE.
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      throw new Error(data.error || 'Search failed');
+    }
+    if (!res.body) {
+      throw new Error('Server returned an unexpected response — check the session or try re-warming.');
+    }
+
+    // Read the Server-Sent-Events stream (`data: {…}\n\n`, with `: ping`
+    // heartbeats). Progress frames update the spinner; a terminal done/error
+    // frame carries the payload. The long scrape is what keeps Cloudflare from
+    // 524-ing — the stream never sits silent for 100s.
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let finished = false;
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      let idx;
+      while ((idx = buffer.indexOf('\n\n')) >= 0) {
+        const frame = buffer.slice(0, idx);
+        buffer = buffer.slice(idx + 2);
+        const line = frame.split('\n').find((l) => l.startsWith('data:'));
+        if (!line) continue; // heartbeat / comment frame
+        let ev;
+        try { ev = JSON.parse(line.slice(5).trim()); } catch { continue; }
+
+        if (ev.step === 'progress') {
+          showSearchProgress(ev);
+        } else if (ev.step === 'error') {
+          finished = true;
+          if (ev.needWarm) {
+            showWarmBanner(true);
+            showStatus('Mobilism session expired — click “Re-warm ↗” above, then search again.', 'error');
+          } else {
+            showStatus(ev.error || 'Search failed', 'error');
+          }
+        } else if (ev.step === 'done') {
+          finished = true;
+          if (!ev.results.length) {
+            renderNotFound(ev.fallbackLinks);
+          } else {
+            hideStatus();
+            ev.results.forEach(renderCard);
+          }
+        }
+      }
+    }
+    if (!finished) {
+      throw new Error('Search ended unexpectedly — try re-warming the session.');
     }
   } catch (err) {
     showStatus(err.message, 'error');
   } finally {
     searchBtn.disabled = false;
   }
+}
+
+// Map a backend search phase to friendly spinner text.
+function showSearchProgress(ev) {
+  const msgs = {
+    'title-search': 'Searching Mobilism titles…',
+    'scanning': `Scanning results…${ev.found ? ` (${ev.found} found so far)` : ''}`,
+    'collections': 'Checking collection posts…',
+    'author-collections': 'Looking for “books by author” sets…',
+    'author-fallback': 'Broadening to an author search…',
+  };
+  const text = msgs[ev.phase] || 'Searching Mobilism…';
+  showStatusHTML(`<span class="spinner"></span>${text} <span class="hint">(polite delays — this can take a minute)</span>`);
 }
 
 // ---------------------------------------------------------------------------
@@ -230,7 +285,7 @@ async function premiumDownload(result, btn) {
     const res = await fetch('/api/download', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ url: result.url, title: result.title }),
+      body: JSON.stringify({ url: result.url, title: result.title, searchedTitle: $('#title').value.trim() }),
     });
     if (res.status === 401) {
       const data = await res.json().catch(() => ({}));
@@ -381,12 +436,10 @@ function renderDownloadDone(data, result) {
         openSendModal({
           downloadId: d.id,
           book: {
-            title: result.title,
+            title: $('#title').value.trim() || result.title,
             author: result.author,
             cover: result.cover,
-            sourceUrl: result.url,
-            format: result.format,
-            size: result.size,
+            description: data.description || result.description || '',
             filename: d.filename,
           },
         })
@@ -508,15 +561,10 @@ async function loadChannels() {
   try {
     const s = await fetch('/api/notify/status').then((r) => r.json());
     const on = s.channels.filter((c) => c.configured).map((c) => c.label);
-    const off = s.channels.filter((c) => !c.configured).map((c) => c.label);
-    let msg = on.length
-      ? `Channels: ${on.join(', ')}`
+    const msg = on.length
+      ? `Sending via: ${on.join(', ')}`
       : '⚠️ No notification channel configured — set SMTP_* in .env.';
-    if (off.length) msg += ` · inactive: ${off.join(', ')}`;
     $('#sendChannels').textContent = msg;
-    const push = $('#pushKindle');
-    push.disabled = !s.kindle;
-    if (!s.kindle) push.checked = false;
   } catch {
     $('#sendChannels').textContent = '';
   }
@@ -621,7 +669,6 @@ $('#sendGo').addEventListener('click', async () => {
       body: JSON.stringify({
         downloadId: sendCtx.downloadId,
         recipientIds: ids,
-        pushToKindle: $('#pushKindle').checked && !$('#pushKindle').disabled,
         book: sendCtx.book,
       }),
     });
