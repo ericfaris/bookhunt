@@ -2,11 +2,19 @@
 
 const { getSession, enqueue } = require('./searcher');
 
-/** True for amazon.* / a.co / amzn.* links. */
+/** True for amazon.* / a.co / amzn.* links over http(s). Host patterns are
+ *  fully anchored so lookalikes like `amzn.evil.com` or `amazon.co.attacker.net`
+ *  don't slip through and get navigated to in the shared browser session. */
 function isAmazonUrl(u) {
   try {
-    const h = new URL(u).hostname.toLowerCase();
-    return /(^|\.)amazon\.[a-z.]+$/.test(h) || h === 'a.co' || /(^|\.)amzn\./.test(h);
+    const url = new URL(u);
+    if (url.protocol !== 'https:' && url.protocol !== 'http:') return false;
+    const h = url.hostname.toLowerCase();
+    return (
+      h === 'a.co' ||
+      /^(?:[a-z0-9-]+\.)*amazon\.[a-z]{2,}(?:\.[a-z]{2,})?$/.test(h) || // amazon.com, www.amazon.co.uk
+      /^(?:[a-z0-9-]+\.)*amzn\.[a-z]{2,}$/.test(h) // amzn.to, amzn.com
+    );
   } catch {
     return false;
   }

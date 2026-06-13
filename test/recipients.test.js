@@ -15,3 +15,15 @@ test('recipients.add: requires an email', () => {
   assert.throws(() => recipients.add({ name: 'Alice' }), /email/i);
   assert.throws(() => recipients.add({ name: 'Alice', email: '   ' }), /email/i);
 });
+
+test('recipients.add: rejects a malformed email', () => {
+  assert.throws(() => recipients.add({ name: 'Alice', email: 'not-an-email' }), /not valid/i);
+  assert.throws(() => recipients.add({ name: 'Alice', email: 'a@b' }), /not valid/i);
+});
+
+test('recipients.add: rejects a malformed kindle email', () => {
+  assert.throws(
+    () => recipients.add({ name: 'Alice', email: 'a@b.com', kindleEmail: 'bogus' }),
+    /kindle email is not valid/i
+  );
+});

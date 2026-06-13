@@ -33,14 +33,26 @@ function writeAll(list) {
   }
 }
 
+// Cap field length so a hostile client can't bloat recipients.json, and cap the
+// total number of recipients.
+const MAX_LEN = 200;
+const MAX_RECIPIENTS = 500;
+// Deliberately conservative — one @, a dot in the domain, no spaces/control chars.
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
 function clean(s) {
-  return typeof s === 'string' ? s.trim() : '';
+  return typeof s === 'string' ? s.trim().slice(0, MAX_LEN) : '';
 }
 
 function add({ name, email, kindleEmail, phone, carrier }) {
   if (!clean(name)) throw new Error('Name is required');
   if (!clean(email)) throw new Error('Email is required');
+  if (!EMAIL_RE.test(clean(email))) throw new Error('Email is not valid');
+  if (clean(kindleEmail) && !EMAIL_RE.test(clean(kindleEmail))) {
+    throw new Error('Kindle email is not valid');
+  }
   const list = readAll();
+  if (list.length >= MAX_RECIPIENTS) throw new Error('Too many recipients');
   const entry = {
     id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
     name: clean(name),

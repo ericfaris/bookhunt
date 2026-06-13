@@ -6,6 +6,9 @@ services:
     # Run as the host user (uid:gid 1000) so the bind-mounted browser profile,
     # history, and downloads stay owned by you — never root.
     user: "1000:1000"
+    # Block privilege escalation (setuid binaries can't gain new privs).
+    security_opt:
+      - no-new-privileges:true
     ports:
       - "127.0.0.1:3000:3000"
     volumes:
@@ -26,6 +29,11 @@ services:
       # Optional: premium downloader login (loaded at startup; UI form overrides)
       - MOBILISM_PREMIUM_USER=${MOBILISM_PREMIUM_USER:-}
       - MOBILISM_PREMIUM_PASS=${MOBILISM_PREMIUM_PASS:-}
+      # Cloudflare Access origin verification — makes the app fail closed even if
+      # the tunnel is reached directly or the Access policy is loosened.
+      - CF_ACCESS_TEAM_DOMAIN=${CF_ACCESS_TEAM_DOMAIN:-}
+      - CF_ACCESS_AUD=${CF_ACCESS_AUD:-}
+      - CF_ACCESS_ALLOWED_EMAILS=${CF_ACCESS_ALLOWED_EMAILS:-}
       # Notifications + Send-to-Kindle (Gmail SMTP); TWILIO_* reserved for later
       - SMTP_HOST=${SMTP_HOST:-smtp.gmail.com}
       - SMTP_PORT=${SMTP_PORT:-587}

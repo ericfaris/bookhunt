@@ -19,6 +19,17 @@ test('isAmazonUrl: rejects non-amazon and garbage', () => {
   assert.equal(isAmazonUrl(''), false);
 });
 
+test('isAmazonUrl: rejects lookalike and non-http hosts', () => {
+  // Anchored host match — these must NOT be treated as Amazon.
+  assert.equal(isAmazonUrl('https://amzn.evil.com/x'), false);
+  assert.equal(isAmazonUrl('https://amazon.co.attacker.net/x'), false);
+  assert.equal(isAmazonUrl('https://amazon.com.evil.com/x'), false);
+  assert.equal(isAmazonUrl('https://evilamazon.com/x'), false);
+  // Non-http(s) schemes must be rejected (no file:, javascript:, etc.).
+  assert.equal(isAmazonUrl('file:///etc/passwd'), false);
+  assert.equal(isAmazonUrl('javascript:alert(1)'), false);
+});
+
 test('cleanTitle: drops subtitle after a colon', () => {
   assert.equal(cleanTitle('1984: 75th Anniversary'), '1984');
   assert.equal(cleanTitle('Dune: Book One'), 'Dune');

@@ -158,7 +158,7 @@ sudo systemctl restart cloudflared
 
 ### Securing with Cloudflare Access
 
-The app has no built-in authentication. To restrict access to your email only, add a Cloudflare Access application:
+The app has no user accounts of its own — Cloudflare Access is the front door. To restrict access to your email only, add a Cloudflare Access application:
 
 1. Go to [dash.cloudflare.com](https://dash.cloudflare.com) → **Zero Trust** → **Access** → **Applications**
 2. Click **Add an application** → **Self-hosted**
@@ -167,6 +167,18 @@ The app has no built-in authentication. To restrict access to your email only, a
 5. Save
 
 Cloudflare will send a one-time code to your email on each new session.
+
+### Origin-side hardening (defense in depth)
+
+Cloudflare Access is the front gate, but the origin no longer trusts it blindly. The app adds these layers so it stays locked down even if the tunnel is reached directly or the Access policy is ever loosened (see `src/security.js`):
+
+- **Access JWT verification** — every request (and the `/warm` WebSocket) must carry a valid `Cf-Access-Jwt-Assertion` signed by your Cloudflare team, validated against the team's public keys with the expected audience (AUD). Without it the request gets a `401`. The app **fails closed**. Enable by setting `CF_ACCESS_TEAM_DOMAIN` and `CF_ACCESS_AUD` (find the AUD under the Access app's **Overview**); optionally pin `CF_ACCESS_ALLOWED_EMAILS`. If unset, verification is skipped and a warning is logged.
+- **Security headers** — CSP, `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff`, `Referrer-Policy`, `Permissions-Policy`.
+- **Rate limiting** — per-IP cap on `/api/*` (keyed on `CF-Connecting-IP`).
+- **Input hardening** — 64 KB JSON body cap, length-bounded search inputs, anchored Amazon-host matching (no `amzn.evil.com` lookalikes), `/api/download` restricted to `mobilism.org` URLs, validated recipient emails.
+- **Container** — runs as non-root `uid 1000`, `no-new-privileges`, host port bound to `127.0.0.1` only.
+
+> The single most important setting is `CF_ACCESS_AUD` + `CF_ACCESS_TEAM_DOMAIN`. Set them in `.env` so the origin verifies Cloudflare's signature itself — Access on its own can be bypassed if someone finds the raw tunnel hostname.
 
 ---
 

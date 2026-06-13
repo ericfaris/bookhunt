@@ -14,11 +14,41 @@ const amazon = require('./amazon');
 const recipients = require('./recipients');
 const notify = require('./notify');
 const kindle = require('./kindle');
+const security = require('./security');
 
 const PORT = process.env.PORT || 3000;
 const app = express();
 
-app.use(express.json());
+// True only for http(s) URLs on the Mobilism forum host — used to keep the
+// browser-navigating endpoints (/api/download) from being pointed elsewhere.
+function isForumUrl(u) {
+  try {
+    const url = new URL(u);
+    if (url.protocol !== 'https:' && url.protocol !== 'http:') return false;
+    return /(^|\.)mobilism\.org$/i.test(url.hostname);
+  } catch {
+    return false;
+  }
+}
+
+// Don't advertise the framework, and reject oversized bodies (all real requests
+// here are tiny JSON — capping blunts memory-exhaustion attempts).
+app.disable('x-powered-by');
+
+// Security headers (CSP, anti-clickjacking, no-sniff) on every response.
+app.use(security.securityHeaders);
+
+// Verify the Cloudflare Access JWT at the origin so the app FAILS CLOSED even if
+// someone reaches the tunnel directly or the Access policy is ever loosened.
+// No-op until CF_ACCESS_TEAM_DOMAIN + CF_ACCESS_AUD are set (see .env.example).
+// Mounted before everything so it also gates /warm (the live browser) + statics.
+app.use(security.cloudflareAccess());
+
+app.use(express.json({ limit: '64kb' }));
+
+// Per-IP rate limit on the API. Generous enough for normal use (searches and
+// downloads are few and slow) but caps hammering/abuse if the front gate fails.
+app.use('/api', security.rateLimiter({ windowMs: 60_000, max: 120 }));
 
 // --- /warm: live browser view (noVNC) --------------------------------------
 // The container runs Chromium headed under Xvfb; x11vnc + websockify expose it
@@ -62,7 +92,12 @@ app.get('/api/session/status', async (_req, res) => {
 // never times out. Progress events drive the live spinner; the terminal
 // `done`/`error` frame carries the payload (results or a needWarm signal).
 app.post('/api/search', async (req, res) => {
-  const { title, author, sort } = req.body || {};
+  let { title, author, sort } = req.body || {};
+  // Coerce + bound the free-text inputs so a hostile client can't push huge or
+  // non-string values into the scraper/query builder.
+  title = typeof title === 'string' ? title.slice(0, 300) : '';
+  author = typeof author === 'string' ? author.slice(0, 300) : '';
+  if (sort !== 'oldest') sort = 'newest'; // only two valid sorts
   if (!title && !author) {
     return res.status(400).json({ error: 'Enter a title and/or an author.' });
   }
@@ -133,6 +168,11 @@ app.post('/api/premium/creds', (req, res) => {
 app.post('/api/download', async (req, res) => {
   const { url, title, searchedTitle } = req.body || {};
   if (!url) return res.status(400).json({ error: 'Missing post url.' });
+  // The topic URL is navigated to in the authenticated browser session, so only
+  // allow forum (mobilism.org) http(s) URLs — never an attacker-chosen origin.
+  if (!isForumUrl(url)) {
+    return res.status(400).json({ error: 'Refusing that URL — must be a Mobilism forum link.' });
+  }
   if (!downloader.hasPremiumCreds()) {
     return res.status(401).json({ error: 'Premium credentials required.', needCreds: true });
   }
@@ -287,13 +327,21 @@ const server = app.listen(PORT, HOST, () => {
 
 // noVNC's WebSocket doesn't pass through Express — bridge upgrades on /warm/* to
 // websockify, stripping the /warm prefix so it lands on the VNC socket.
-server.on('upgrade', (req, socket, head) => {
-  if (req.url.startsWith('/warm/')) {
-    req.url = req.url.slice('/warm'.length); // '/warm/websockify' -> '/websockify'
-    warmProxy.ws(req, socket, head);
-  } else {
+server.on('upgrade', async (req, socket, head) => {
+  if (!req.url.startsWith('/warm/')) {
     socket.destroy();
+    return;
   }
+  // WebSocket upgrades bypass Express middleware, so re-check Cloudflare Access
+  // here — otherwise the live in-container browser's VNC stream would be an
+  // unauthenticated path around the front gate.
+  if (!(await security.isUpgradeAuthorized(req))) {
+    socket.write('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n');
+    socket.destroy();
+    return;
+  }
+  req.url = req.url.slice('/warm'.length); // '/warm/websockify' -> '/websockify'
+  warmProxy.ws(req, socket, head);
 });
 
 server.on('error', (err) => {
