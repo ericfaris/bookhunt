@@ -75,6 +75,35 @@ function similarity(a, b) {
 }
 
 /**
+ * How well a candidate title corresponds to the typed term, in [0,1]. Same
+ * notion `correctedField` gates on: best of the full-string similarity and the
+ * candidate's leading-token prefix (so "Harry Potter and the…" still scores high
+ * for "Hary Poter"). Used to pick the best of several search hits — providers
+ * often return an author-prefixed or study-guide edition first.
+ */
+function matchScore(orig, cand) {
+  const no = normalize(orig);
+  const nc = normalize(cand);
+  if (!no || !nc) return 0;
+  if (no === nc) return 1;
+  let best = similarity(no, nc);
+  const ot = no.split(' ').length;
+  const cw = nc.split(' ');
+  if (cw.length > ot) best = Math.max(best, similarity(no, cw.slice(0, ot).join(' ')));
+  return best;
+}
+
+/** Pick the element whose `getTitle(el)` best matches `origTitle`; the first
+ *  element when there's no title to score against. Pure. */
+function pickBest(origTitle, list, getTitle) {
+  if (!Array.isArray(list) || !list.length) return null;
+  if (!origTitle) return list[0];
+  return list.reduce((best, el) =>
+    matchScore(origTitle, getTitle(el)) > matchScore(origTitle, getTitle(best)) ? el : best
+  );
+}
+
+/**
  * Decide the corrected value for a single field. Pure.
  *   - Empty original → left empty (we correct typos, we don't invent fields).
  *   - Identical ignoring case/punctuation → original kept verbatim (no noise).
@@ -139,19 +168,25 @@ async function fetchJson(url, { fetchImpl = fetch, timeoutMs = LOOKUP_TIMEOUT_MS
 }
 
 /**
- * Query Google Books for the best { title, author } candidate (title-first; the
- * canonical author falls out of the matched volume). Returns null on no match,
- * throws on transport/quota failure so the caller can fall through. Reads
- * GOOGLE_BOOKS_API_KEY (avoids the shared anonymous daily-quota 429s).
+ * Query Google Books for the best { title, author } candidate. Returns null on
+ * no match, throws on transport/quota failure so the caller can fall through.
+ * Reads GOOGLE_BOOKS_API_KEY (avoids the shared anonymous daily-quota 429s).
+ *
+ * Uses a PLAIN combined "title author" query — NOT the intitle:/inauthor:
+ * operators. Google's matching is fuzzy enough that the combined query uses both
+ * signals to land the real edition, whereas `intitle:<typo>` matches misspelled
+ * parody/knockoff books whose own metadata carries the typo. (Open Library is the
+ * opposite — see lookupOpenLibrary.)
  */
 async function lookupGoogleBooks({ title, author }, opts = {}) {
-  const q = title ? 'intitle:' + encodeURIComponent(title) : author ? 'inauthor:' + encodeURIComponent(author) : '';
-  if (!q) return null;
+  const terms = [title, author].filter(Boolean).join(' ').trim();
+  if (!terms) return null;
   const key = opts.apiKey || process.env.GOOGLE_BOOKS_API_KEY;
   // country is required by the Books API for unauthenticated calls.
-  const url = `${GOOGLE_BOOKS_URL}?q=${q}&maxResults=5&country=US${key ? '&key=' + encodeURIComponent(key) : ''}`;
+  const url = `${GOOGLE_BOOKS_URL}?q=${encodeURIComponent(terms)}&maxResults=5&country=US${key ? '&key=' + encodeURIComponent(key) : ''}`;
   const data = await fetchJson(url, opts);
-  const item = Array.isArray(data.items) ? data.items.find((i) => i && i.volumeInfo) : null;
+  const items = (Array.isArray(data.items) ? data.items : []).filter((i) => i && i.volumeInfo && i.volumeInfo.title);
+  const item = pickBest(title, items, (i) => i.volumeInfo.title);
   if (!item) return null;
   const vi = item.volumeInfo;
   return {
@@ -169,9 +204,10 @@ async function lookupGoogleBooks({ title, author }, opts = {}) {
 async function lookupOpenLibrary({ title, author }, opts = {}) {
   const q = title || author;
   if (!q) return null;
-  const url = `${OPEN_LIBRARY_URL}?q=${encodeURIComponent(q)}&limit=3&fields=title,author_name`;
+  const url = `${OPEN_LIBRARY_URL}?q=${encodeURIComponent(q)}&limit=5&fields=title,author_name`;
   const data = await fetchJson(url, opts);
-  const doc = Array.isArray(data.docs) ? data.docs.find((d) => d && d.title) : null;
+  const docs = (Array.isArray(data.docs) ? data.docs : []).filter((d) => d && d.title);
+  const doc = pickBest(title, docs, (d) => d.title);
   if (!doc) return null;
   return {
     title: cleanWhitespace(doc.title),
@@ -228,6 +264,8 @@ module.exports = {
   correctedField,
   normalize,
   similarity,
+  matchScore,
+  pickBest,
   levenshtein,
   lookupGoogleBooks,
   lookupOpenLibrary,

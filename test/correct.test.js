@@ -9,7 +9,10 @@ const {
   correctedField,
   normalize,
   similarity,
+  matchScore,
+  pickBest,
   defaultLookup,
+  lookupGoogleBooks,
 } = require('../src/correct');
 
 // --- normalize / similarity -------------------------------------------------
@@ -24,6 +27,44 @@ test('similarity: identical strings score 1, disjoint score low', () => {
   assert.equal(similarity('dune', 'dune'), 1);
   assert.ok(similarity('harry potter', 'hary poter') > 0.8);
   assert.ok(similarity('dune', 'the hobbit') < 0.4);
+});
+
+// --- matchScore / pickBest (best-of-N candidate selection) ------------------
+
+test('matchScore: prefix and full matches score high, junk scores low', () => {
+  assert.ok(matchScore('The Great Gatsbi', 'The Great Gatsby') > 0.9);
+  assert.ok(matchScore('Hary Poter', 'Harry Potter and the Sorcerer\'s Stone') > 0.8);
+  assert.ok(matchScore('The Great Gatsbi', 'F. Scott Fitzgerald: The Great Gatsby') < 0.5);
+});
+
+test('pickBest: chooses the closest title, not the first hit', () => {
+  // Mirrors Google\'s real "The Great Gatsbi" results: an author-prefixed edition
+  // comes back first, the clean title second.
+  const list = [
+    { t: 'F. Scott Fitzgerald: The Great Gatsby' },
+    { t: 'The Great Gatsby' },
+    { t: 'The Great Gatsby by F. Scott Fitzgerald' },
+  ];
+  assert.equal(pickBest('The Great Gatsbi', list, (x) => x.t).t, 'The Great Gatsby');
+});
+
+test('pickBest: with no title to score, keeps the first element', () => {
+  const list = [{ t: 'A' }, { t: 'B' }];
+  assert.equal(pickBest('', list, (x) => x.t).t, 'A');
+  assert.equal(pickBest('x', [], (x) => x.t), null);
+});
+
+test('lookupGoogleBooks: picks the best-matching item, not items[0]', async () => {
+  const fetchImpl = async () =>
+    fakeRes(200, {
+      items: [
+        { volumeInfo: { title: 'F. Scott Fitzgerald: The Great Gatsby', authors: ['F. Scott Fitzgerald'] } },
+        { volumeInfo: { title: 'The Great Gatsby', authors: ['Francis Scott Fitzgerald'] } },
+      ],
+    });
+  const c = await lookupGoogleBooks({ title: 'The Great Gatsbi', author: '' }, { fetchImpl });
+  assert.equal(c.title, 'The Great Gatsby');
+  assert.equal(c.source, 'google-books');
 });
 
 // --- correctedField (the per-field gate) ------------------------------------
