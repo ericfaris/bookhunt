@@ -9,7 +9,10 @@
 <body>
   <header class="topbar">
     <h1>📚 Mobilism Ebook Finder</h1>
-    <button id="historyToggle" class="ghost-btn" type="button">History</button>
+    <div class="topbar-actions">
+      <button id="libraryToggle" class="ghost-btn" type="button">Library</button>
+      <button id="historyToggle" class="ghost-btn" type="button">History</button>
+    </div>
   </header>
 
   <div id="warmBanner" class="warm-banner" hidden>
@@ -20,6 +23,8 @@
   <main>
     <form id="searchForm" class="search-card">
       <div class="card-toolbar">
+        <button id="batchToggle" type="button" class="ghost-btn"
+          title="Search a whole list of books at once">☰ Batch</button>
         <button id="pasteAmazon" type="button" class="ghost-btn paste-btn"
           title="Paste an Amazon book link to auto-fill title & author">Paste</button>
       </div>
@@ -49,6 +54,15 @@
     <section id="results" class="results"></section>
   </main>
 
+  <!-- Library drawer -->
+  <aside id="libraryPanel" class="library-panel" hidden>
+    <div class="library-head">
+      <h2>📚 Library</h2>
+      <button id="libraryClose" class="ghost-btn" type="button">✕</button>
+    </div>
+    <div id="libraryList" class="library-list"></div>
+  </aside>
+
   <!-- History drawer -->
   <aside id="historyPanel" class="history-panel" hidden>
     <div class="history-head">
@@ -58,6 +72,32 @@
     <div id="historyList" class="history-list"></div>
   </aside>
   <div id="overlay" class="overlay" hidden></div>
+
+  <!-- Batch input modal -->
+  <div id="batchModal" class="modal" hidden>
+    <div class="modal-card batch-input-card">
+      <h2>Batch search</h2>
+      <p class="hint">One book per line — <code>Title — Author</code> (also <code>Title, Author</code> or just a title).</p>
+      <textarea id="batchInput" class="batch-textarea" rows="9" autocomplete="off"
+        placeholder="1984 — George Orwell&#10;Dune, Frank Herbert&#10;The Hobbit"></textarea>
+      <div class="batch-input-foot">
+        <span id="batchCount" class="hint">No books yet</span>
+        <div class="sort">
+          <label for="batchSort">Sort</label>
+          <select id="batchSort" name="batchSort">
+            <option value="newest">Newest first</option>
+            <option value="oldest">Oldest first</option>
+          </select>
+        </div>
+      </div>
+      <div class="modal-actions">
+        <button type="button" id="batchPaste" class="ghost-btn">Paste list</button>
+        <span class="spacer"></span>
+        <button type="button" id="batchCancel" class="ghost-btn">Cancel</button>
+        <button type="button" id="batchGo" class="primary-btn">Search</button>
+      </div>
+    </div>
+  </div>
 
   <!-- Premium credentials modal -->
   <div id="credModal" class="modal" hidden>

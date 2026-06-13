@@ -15,21 +15,18 @@ const recipients = require('./recipients');
 const notify = require('./notify');
 const kindle = require('./kindle');
 const security = require('./security');
+const reupload = require('./reupload');
+const library = require('./library');
+const messages = require('./messages');
+const batch = require('./batch');
 
 const PORT = process.env.PORT || 3000;
 const app = express();
 
-// True only for http(s) URLs on the Mobilism forum host — used to keep the
-// browser-navigating endpoints (/api/download) from being pointed elsewhere.
-function isForumUrl(u) {
-  try {
-    const url = new URL(u);
-    if (url.protocol !== 'https:' && url.protocol !== 'http:') return false;
-    return /(^|\.)mobilism\.org$/i.test(url.hostname);
-  } catch {
-    return false;
-  }
-}
+// True only for http(s) URLs on the Mobilism forum host — keeps the
+// browser-navigating endpoints (/api/download, /api/reupload) from being
+// pointed at an attacker-chosen origin while carrying our session cookies.
+const isForumUrl = security.isForumUrl;
 
 // Don't advertise the framework, and reject oversized bodies (all real requests
 // here are tiny JSON — capping blunts memory-exhaustion attempts).
@@ -72,7 +69,20 @@ app.get('/warm', (_req, res) =>
 // websockify web root.
 app.use('/warm', (req, res) => warmProxy.web(req, res));
 
-app.use(express.static(path.join(__dirname, '..', 'public')));
+// Serve the app shell with `no-cache` on HTML/JS/CSS so a redeploy is picked up
+// immediately. The browser may still STORE these, but must revalidate against
+// the origin first — ETag turns the check into a cheap 304 when unchanged. This
+// prevents a stale app.js running against a freshly-updated index.html after a
+// deploy (the cause of "the new button does nothing"). Other assets cache normally.
+app.use(
+  express.static(path.join(__dirname, '..', 'public'), {
+    setHeaders(res, filePath) {
+      if (/\.(html|js|css)$/i.test(filePath)) {
+        res.setHeader('Cache-Control', 'no-cache');
+      }
+    },
+  })
+);
 
 // --- Session status (drives the re-warm banner) ----------------------------
 app.get('/api/session/status', async (_req, res) => {
@@ -122,7 +132,81 @@ app.post('/api/search', async (req, res) => {
     send({ step: 'done', results, fallbackLinks });
   } catch (err) {
     console.error('Search failed:', err);
-    send({ step: 'error', error: err.message, needWarm: !!err.needWarm });
+    const info = messages.classifyError(err, { needWarm: !!err.needWarm });
+    send({ step: 'error', ...info });
+  } finally {
+    clearInterval(heartbeat);
+    res.end();
+  }
+});
+
+// --- Batch search -----------------------------------------------------------
+// Searches a pasted list of books in one pass. Streamed as SSE for the same
+// reason as /api/search (each entry is a full scrape; the whole batch is well
+// past Cloudflare's 100s timeout). Searches run sequentially through the shared
+// browser queue (searcher.search → enqueue), one entry never aborts the rest
+// (batch.runSequential isolates failures), and the session is preflighted once
+// so a stale session fails fast as a single 409 instead of per-entry stalls.
+app.post('/api/search/batch', async (req, res) => {
+  const text = typeof (req.body && req.body.text) === 'string' ? req.body.text : '';
+  const sort = (req.body && req.body.sort) === 'oldest' ? 'oldest' : 'newest';
+  const entries = batch.parseBatchInput(text);
+  if (!entries.length) {
+    return res.status(400).json({ error: 'Enter at least one book (one per line).' });
+  }
+
+  // Preflight the session: if it's stale, don't attempt N logins — tell the
+  // client to re-warm once, up front.
+  try {
+    const status = await searcher.sessionStatus();
+    if (!status.ready) {
+      return res.status(409).json({ error: 'Mobilism session expired — re-warm, then run the batch.', needWarm: true });
+    }
+  } catch {
+    /* fall through — the per-entry searches will surface a real error */
+  }
+
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache',
+    Connection: 'keep-alive',
+    'X-Accel-Buffering': 'no',
+  });
+  const send = (event) => res.write(`data: ${JSON.stringify(event)}\n\n`);
+  const heartbeat = setInterval(() => res.write(': ping\n\n'), 15000);
+
+  // Per-entry worker: a search error becomes a classified outcome (not a throw)
+  // so it's reported inline and the batch keeps going.
+  const worker = async (entry) => {
+    try {
+      const { results, fallbackLinks } = await searcher.search({
+        title: entry.title,
+        author: entry.author,
+        sort,
+      });
+      return { ...batch.classifyBatchOutcome({ results }), results, fallbackLinks };
+    } catch (err) {
+      const info = messages.classifyError(err, { needWarm: !!err.needWarm });
+      return { status: 'error', error: info.message, hint: info.hint, needWarm: info.needWarm };
+    }
+  };
+
+  try {
+    send({ step: 'start', total: entries.length, entries });
+    const outcomes = await batch.runSequential(entries, worker, (ev) => {
+      if (ev.phase === 'start') {
+        send({ step: 'searching', index: ev.index, total: ev.total, title: ev.item.title });
+      } else if (ev.phase === 'ok') {
+        send({ step: 'entry', index: ev.index, total: ev.total, ...ev.value });
+      }
+    });
+    const found = outcomes.filter((o) => o.ok && o.value && (o.value.status === 'found' || o.value.status === 'multiple')).length;
+    history.logSearch({ title: `Batch (${entries.length} books)`, author: '', sort, resultCount: found });
+    send({ step: 'done', total: entries.length, found });
+  } catch (err) {
+    console.error('Batch search failed:', err);
+    const info = messages.classifyError(err, { needWarm: !!err.needWarm });
+    send({ step: 'error', ...info });
   } finally {
     clearInterval(heartbeat);
     res.end();
@@ -202,7 +286,8 @@ app.post('/api/download', async (req, res) => {
     send({ step: 'done', downloads: result.downloads, errors: result.errors, title: result.title, description: result.description || '' });
   } catch (err) {
     console.error('Download failed:', err.detail || err); // full text kept server-side
-    send({ step: 'error', error: err.message, needWarm: !!err.needWarm });
+    const info = messages.classifyError(err, { needWarm: !!err.needWarm });
+    send({ step: 'error', ...info });
   } finally {
     res.end();
   }
@@ -215,9 +300,54 @@ app.post('/api/download/standard', (req, res) => {
   res.json({ ok: true });
 });
 
+// --- Request a re-upload ----------------------------------------------------
+// Asks the original poster to re-upload a book whose links have gone stale,
+// using the existing authenticated forum session. The topic URL is navigated to
+// in that session, so it must be a Mobilism forum link (same SSRF guard as
+// /api/download). Distinct outcomes are mapped to plain-language messages:
+//   success / already-requested / not-available / unknown — and a stale session
+// (needWarm) becomes a 409 that the UI turns into a "re-warm" prompt.
+app.post('/api/reupload', async (req, res) => {
+  const { url, title } = req.body || {};
+  if (!url) return res.status(400).json({ error: 'Missing topic url.' });
+  if (!isForumUrl(url)) {
+    return res.status(400).json({ error: 'Refusing that URL — must be a Mobilism forum link.' });
+  }
+  try {
+    const outcome = await reupload.requestReupload(url);
+    // Note it in history so the request is visible later; failures to log are
+    // non-fatal to the response.
+    try {
+      history.add({ type: 'reupload', title: title || '', url, status: outcome.status });
+    } catch { /* best effort */ }
+    res.json(outcome);
+  } catch (err) {
+    console.error('Re-upload request failed:', err);
+    if (err.needWarm) {
+      return res.status(409).json({ error: err.message, needWarm: true });
+    }
+    res.status(500).json({ error: err.message || 'Re-upload request failed.' });
+  }
+});
+
 // --- History ----------------------------------------------------------------
 app.get('/api/history', (_req, res) => {
   res.json({ entries: history.readAll() });
+});
+
+// --- Library: book-centric view with inline send history -------------------
+// Reshapes the flat history into one row per downloaded book, each carrying its
+// sends. `filePresent` reflects whether the .epub is still on disk so the client
+// can disable resend for files that have been removed.
+app.get('/api/library', (_req, res) => {
+  const books = library.buildLibrary(history.readAll(), (p) => {
+    try {
+      return fs.existsSync(path.resolve(p));
+    } catch {
+      return false;
+    }
+  });
+  res.json({ books });
 });
 
 // --- Notification recipients ------------------------------------------------
@@ -288,6 +418,7 @@ app.post('/api/send', async (req, res) => {
     out.channels = await notify.notify(r, { ...bookInfo, pushedToKindle: !!(out.kindle && out.kindle.ok) }, channels);
 
     history.logNotify({
+      downloadId,
       title: bookInfo.title || entry.title,
       filename: entry.filename,
       to: [r.name],

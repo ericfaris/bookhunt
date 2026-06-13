@@ -20,6 +20,22 @@
 const crypto = require('crypto');
 
 // ---------------------------------------------------------------------------
+// Forum-URL guard (SSRF). The browser-navigating endpoints (/api/download,
+// /api/reupload) drive an AUTHENTICATED session, so the URLs they open must be
+// constrained to the Mobilism forum host — never an attacker-chosen origin that
+// would ride our cookies. http(s) only; host must be mobilism.org or a subdomain.
+// ---------------------------------------------------------------------------
+function isForumUrl(u) {
+  try {
+    const url = new URL(u);
+    if (url.protocol !== 'https:' && url.protocol !== 'http:') return false;
+    return /(^|\.)mobilism\.org$/i.test(url.hostname);
+  } catch {
+    return false;
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Security headers
 // ---------------------------------------------------------------------------
 function securityHeaders(req, res, next) {
@@ -225,6 +241,7 @@ module.exports = {
   cloudflareAccess,
   isUpgradeAuthorized,
   rateLimiter,
+  isForumUrl,
   // exported for tests
   verifyAccessToken,
   tokenFromHeaders,

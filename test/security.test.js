@@ -79,3 +79,20 @@ test('rateLimiter: separate IPs have separate budgets', () => {
   assert.equal(aOk, true);
   assert.equal(bOk, true);
 });
+
+test('isForumUrl: accepts forum.mobilism.org + subdomains over http(s)', () => {
+  assert.equal(security.isForumUrl('https://forum.mobilism.org/viewtopic.php?t=1'), true);
+  assert.equal(security.isForumUrl('http://mobilism.org/'), true);
+  assert.equal(security.isForumUrl('https://dl.mobilism.org/x'), true);
+});
+
+test('isForumUrl: rejects other hosts, look-alikes, and non-http schemes', () => {
+  assert.equal(security.isForumUrl('https://evil.com/'), false);
+  // a look-alike host must not slip past the anchored regex
+  assert.equal(security.isForumUrl('https://mobilism.org.evil.com/'), false);
+  assert.equal(security.isForumUrl('https://notmobilism.org/'), false);
+  assert.equal(security.isForumUrl('file:///etc/passwd'), false);
+  assert.equal(security.isForumUrl('javascript:alert(1)'), false);
+  assert.equal(security.isForumUrl(''), false);
+  assert.equal(security.isForumUrl(null), false);
+});

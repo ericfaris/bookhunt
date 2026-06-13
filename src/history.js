@@ -54,9 +54,14 @@ function logDownload({ title, filename, savePath, url, mode, verified, size }) {
   return add({ type: 'download', title, filename, savePath, url, mode, verified, size });
 }
 
-/** Record a notification / Kindle push send. */
-function logNotify({ title, filename, to, kindlePushed, channels }) {
-  return add({ type: 'notify', title, filename, to, kindlePushed, channels });
+/**
+ * Record a notification / Kindle push send. `downloadId` ties the send back to
+ * the exact download entry it came from, so the Library view can correlate
+ * sends to books precisely (older entries without it fall back to filename
+ * matching).
+ */
+function logNotify({ downloadId, title, filename, to, kindlePushed, channels }) {
+  return add({ type: 'notify', downloadId, title, filename, to, kindlePushed, channels });
 }
 
 module.exports = { readAll, add, logSearch, logDownload, logNotify };

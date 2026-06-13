@@ -9,6 +9,8 @@ const resultsEl = $('#results');
 
 // Pending download to resume after credentials are entered.
 let pendingPremium = null;
+// Pending batch download (list of selected rows) to resume after credentials.
+let pendingBatchDownload = null;
 
 // ---------------------------------------------------------------------------
 // Search
@@ -95,10 +97,15 @@ refreshSessionStatus();
 setInterval(refreshSessionStatus, 30000);
 window.addEventListener('focus', refreshSessionStatus);
 
+// Remembered so the "Retry" affordance on a failed/stalled search can re-run it.
+let lastSearchParams = null;
+
 async function runSearch({ title, author, sort }) {
+  lastSearchParams = { title, author, sort };
   resultsEl.innerHTML = '';
   searchBtn.disabled = true;
-  showStatusHTML('<span class="spinner"></span>Searching Mobilism… this can take a minute (polite 2–5s delays between requests).');
+  searchBtn.textContent = 'Searching…';
+  startSearchTimer();
 
   try {
     const res = await fetch('/api/search', {
@@ -142,34 +149,67 @@ async function runSearch({ title, author, sort }) {
           showSearchProgress(ev);
         } else if (ev.step === 'error') {
           finished = true;
-          if (ev.needWarm) {
-            showWarmBanner(true);
-            showStatus('Mobilism session expired — click “Re-warm ↗” above, then search again.', 'error');
-          } else {
-            showStatus(ev.error || 'Search failed', 'error');
-          }
+          renderSearchError(ev);
         } else if (ev.step === 'done') {
           finished = true;
+          stopSearchTimer();
           if (!ev.results.length) {
             renderNotFound(ev.fallbackLinks);
           } else {
-            hideStatus();
             ev.results.forEach(renderCard);
+            // Brief success confirmation, then get out of the way.
+            showStatus(`✓ Found ${ev.results.length} match${ev.results.length === 1 ? '' : 'es'}.`);
+            setTimeout(hideStatus, 2500);
           }
         }
       }
     }
     if (!finished) {
-      throw new Error('Search ended unexpectedly — try re-warming the session.');
+      renderSearchError({
+        message: 'The search ended unexpectedly.',
+        hint: 'The Mobilism session may have dropped — re-warm it and try again.',
+        retryable: true,
+        needWarm: true,
+      });
     }
   } catch (err) {
-    showStatus(err.message, 'error');
+    renderSearchError({ message: err.message || 'Search failed.', hint: 'Please try again.', retryable: true });
   } finally {
+    stopSearchTimer();
     searchBtn.disabled = false;
+    searchBtn.textContent = 'Search';
   }
 }
 
-// Map a backend search phase to friendly spinner text.
+// --- Live search status: phase label + elapsed time + expectation ----------
+let searchTimer = null;
+let searchStart = 0;
+let lastPhaseText = 'Searching Mobilism…';
+
+function startSearchTimer() {
+  searchStart = Date.now();
+  lastPhaseText = 'Searching Mobilism…';
+  clearInterval(searchTimer);
+  renderSearchStatus();
+  searchTimer = setInterval(renderSearchStatus, 1000);
+}
+function stopSearchTimer() { clearInterval(searchTimer); searchTimer = null; }
+
+function renderSearchStatus() {
+  const secs = Math.floor((Date.now() - searchStart) / 1000);
+  // Distinguish "slow but working" from "stuck": after ~45s the copy changes so
+  // the user knows long is expected, not frozen — the elapsed counter ticking
+  // is itself the heartbeat that the app is alive.
+  const expectation = secs < 45
+    ? 'usually 20–45s · polite delays between requests'
+    : 'taking longer than usual — still working, hang tight';
+  showStatusHTML(
+    `<span class="spinner"></span>${lastPhaseText} <span class="hint">(${secs}s · ${expectation})</span>`
+  );
+}
+
+// Map a backend search phase to friendly status text (the elapsed timer keeps
+// ticking around it via renderSearchStatus).
 function showSearchProgress(ev) {
   const msgs = {
     'title-search': 'Searching Mobilism titles…',
@@ -178,8 +218,30 @@ function showSearchProgress(ev) {
     'author-collections': 'Looking for “books by author” sets…',
     'author-fallback': 'Broadening to an author search…',
   };
-  const text = msgs[ev.phase] || 'Searching Mobilism…';
-  showStatusHTML(`<span class="spinner"></span>${text} <span class="hint">(polite delays — this can take a minute)</span>`);
+  lastPhaseText = msgs[ev.phase] || 'Searching Mobilism…';
+  renderSearchStatus();
+}
+
+// Plain-language search error with a hint and (when transient) a Retry button.
+function renderSearchError(ev) {
+  stopSearchTimer();
+  statusEl.hidden = false;
+  statusEl.className = 'status error';
+  statusEl.innerHTML = '';
+  statusEl.append(el('div', { className: 'err-msg' }, ev.message || 'Search failed.'));
+  if (ev.hint) statusEl.append(el('div', { className: 'err-hint' }, ev.hint));
+
+  const actions = el('div', { className: 'err-actions' });
+  if (ev.needWarm) {
+    showWarmBanner(true);
+    actions.append(el('a', { className: 'warm-btn', href: '/warm', target: '_blank', rel: 'noopener' }, 'Re-warm ↗'));
+  }
+  if (ev.retryable && lastSearchParams) {
+    const retry = el('button', { className: 'ghost-btn', type: 'button' }, '↻ Retry search');
+    retry.addEventListener('click', () => runSearch(lastSearchParams));
+    actions.append(retry);
+  }
+  if (actions.childNodes.length) statusEl.append(actions);
 }
 
 // ---------------------------------------------------------------------------
@@ -231,15 +293,71 @@ function renderCard(r) {
   }
   dlRow.append(el('a', { className: 'topic-link', href: r.url, target: '_blank', rel: 'noopener' }, 'View thread ↗'));
 
+  // "Request re-upload" — always available (the user decides when links are
+  // dead). Asks the OP to re-upload via the forum's Reupload control.
+  const reupRow = buildReuploadRow(r);
+
   const body = el('div', { className: 'card-body' }, [
     el('h3', {}, r.title),
     r.author ? el('p', { className: 'author' }, r.author) : null,
     badges,
     meta,
     dlRow,
+    reupRow,
   ]);
 
   resultsEl.append(el('div', { className: 'card' }, [cover, body]));
+}
+
+// A small row under each result: a "Request re-upload" button plus an inline
+// status message. Disables itself after a successful (or already-pending)
+// request so the user can't spam the OP.
+function buildReuploadRow(r) {
+  const msg = el('span', { className: 'reup-msg hint' }, '');
+  const btn = el('button', { className: 'ghost-btn reup-btn', type: 'button' }, '↻ Request re-upload');
+
+  btn.addEventListener('click', async () => {
+    btn.disabled = true;
+    const original = btn.textContent;
+    btn.textContent = 'Requesting…';
+    msg.className = 'reup-msg hint';
+    msg.textContent = '';
+    try {
+      const res = await fetch('/api/reupload', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: r.url, title: r.title }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.status === 409 && data.needWarm) {
+        showWarmBanner(true);
+        msg.className = 'reup-msg error';
+        msg.textContent = 'Session expired — click “Re-warm ↗” above, then try again.';
+        btn.disabled = false;
+        btn.textContent = original;
+        return;
+      }
+      if (!res.ok) throw new Error(data.error || 'Re-upload request failed.');
+
+      // success / already-requested → leave it disabled; otherwise re-enable.
+      const settled = data.status === 'success' || data.status === 'already-requested';
+      msg.className = 'reup-msg ' + (settled ? 'ok' : data.status === 'not-available' ? 'hint' : 'warn');
+      msg.textContent = data.message || 'Done.';
+      if (settled) {
+        btn.textContent = data.status === 'success' ? '✓ Re-upload requested' : '✓ Already requested';
+      } else {
+        btn.disabled = false;
+        btn.textContent = original;
+      }
+    } catch (err) {
+      msg.className = 'reup-msg error';
+      msg.textContent = err.message;
+      btn.disabled = false;
+      btn.textContent = original;
+    }
+  });
+
+  return el('div', { className: 'reup-row' }, [btn, msg]);
 }
 
 function renderNotFound(links) {
@@ -369,6 +487,7 @@ function handleDownloadEvent(ev, result) {
       break;
     case 'mirror':
       // A new mirror attempt begins — reset the per-mirror steps.
+      stopFetchTimer();
       setStep('login', 'pending', '');
       setStep('fetch', 'active', `Mirror ${ev.index} of ${ev.total}${ev.host ? ' · ' + ev.host : ''}`);
       setStep('verify', 'pending', '');
@@ -379,8 +498,12 @@ function handleDownloadEvent(ev, result) {
     case 'downloading':
       setStep('login', 'done');
       setStep('fetch', 'active', ev.host ? `Downloading from ${ev.host}…` : 'Downloading…');
+      // The transload can run silently for minutes; tick an elapsed counter so
+      // the step reads as "slow but working", not stuck.
+      startFetchTimer(ev.host);
       break;
     case 'saved':
+      stopFetchTimer();
       setStep('fetch', 'done', ev.filename || '');
       break;
     case 'verifying':
@@ -393,16 +516,36 @@ function handleDownloadEvent(ev, result) {
       else setStep('verify', 'done', 'Valid ePUB (no embedded title to compare)');
       break;
     case 'mirror-failed':
+      stopFetchTimer();
       setStep('fetch', 'fail', `${ev.host || 'mirror'}: ${ev.error}`);
       break;
     case 'done':
+      stopFetchTimer();
       renderDownloadDone(ev, result);
       break;
     case 'error':
-      renderDownloadError(ev.error, ev.needWarm);
+      stopFetchTimer();
+      renderDownloadError(ev);
       break;
   }
 }
+
+// Elapsed-time ticker for the (potentially multi-minute) download step.
+let dlFetchTimer = null;
+let dlFetchStart = 0;
+function startFetchTimer(host) {
+  dlFetchStart = Date.now();
+  clearInterval(dlFetchTimer);
+  dlFetchTimer = setInterval(() => {
+    const li = $('#dlstep-fetch');
+    if (!li || !li.classList.contains('active')) return;
+    const secs = Math.floor((Date.now() - dlFetchStart) / 1000);
+    const base = host ? `Downloading from ${host}… ` : 'Downloading… ';
+    const tail = secs > 30 ? ' — large files can take a few minutes' : '';
+    li.querySelector('.dl-step-note').textContent = `${base}(${secs}s${tail})`;
+  }, 1000);
+}
+function stopFetchTimer() { clearInterval(dlFetchTimer); dlFetchTimer = null; }
 
 function renderDownloadDone(data, result) {
   const box = $('#dlResult');
@@ -466,13 +609,17 @@ function renderDownloadDone(data, result) {
   }
 }
 
-function renderDownloadError(message, needWarm) {
+// Accepts either the enriched SSE error event ({ message, hint, needWarm }) or a
+// plain string (client-side failures before/around the stream).
+function renderDownloadError(ev) {
+  const o = typeof ev === 'string' ? { message: ev } : (ev || {});
   $('#dlHeading').textContent = 'Download failed';
   $('#dlHeading').className = 'dl-fail-head';
   const box = $('#dlResult');
   box.innerHTML = '';
-  box.append(el('div', { className: 'dl-check warn' }, `✕ ${message}`));
-  if (needWarm) {
+  box.append(el('div', { className: 'dl-check warn' }, `✕ ${o.message || 'Download failed'}`));
+  if (o.hint) box.append(el('div', { className: 'dl-line hint' }, o.hint));
+  if (o.needWarm) {
     box.append(el('a', { className: 'warm-btn', href: '/warm', target: '_blank', rel: 'noopener' }, 'Re-warm session ↗'));
   }
   $('#dlClose').hidden = false;
@@ -531,6 +678,11 @@ $('#credForm').addEventListener('submit', async (e) => {
     const { result, btn } = pendingPremium;
     pendingPremium = null;
     premiumDownload(result, btn);
+  }
+  if (pendingBatchDownload) {
+    const rows = pendingBatchDownload;
+    pendingBatchDownload = null;
+    downloadBatchSelected(rows);
   }
 });
 
@@ -675,6 +827,8 @@ $('#sendGo').addEventListener('click', async () => {
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || 'Send failed');
     renderSendResults(data.results);
+    // Let an opener (e.g. the Library view) refresh its inline send history.
+    if (sendCtx && typeof sendCtx.onSent === 'function') sendCtx.onSent();
   } catch (err) {
     box.innerHTML = '';
     box.append(el('div', { className: 'dl-result err' }, err.message));
@@ -685,13 +839,138 @@ $('#sendGo').addEventListener('click', async () => {
 });
 
 // ---------------------------------------------------------------------------
+// Library — every downloaded book with its send history inline + resend
+// ---------------------------------------------------------------------------
+const libraryPanel = $('#libraryPanel');
+const libraryList = $('#libraryList');
+$('#libraryToggle').addEventListener('click', openLibrary);
+$('#libraryClose').addEventListener('click', closeLibrary);
+
+async function openLibrary() {
+  libraryPanel.hidden = false;
+  $('#overlay').hidden = false;
+  renderLibrarySkeleton();
+  try {
+    const data = await fetch('/api/library').then((r) => r.json());
+    renderLibrary(data.books || []);
+  } catch {
+    libraryList.innerHTML = '';
+    libraryList.append(
+      el('div', { className: 'lib-empty' }, [
+        el('div', { className: 'lib-empty-icon' }, '⚠️'),
+        el('p', {}, 'Couldn’t load your library. Please try again.'),
+      ])
+    );
+  }
+}
+function closeLibrary() {
+  libraryPanel.hidden = true;
+  $('#overlay').hidden = true;
+}
+
+// Shimmer placeholders while the library loads — keeps the drawer from flashing
+// empty (and reduced-motion users get a static muted block, see CSS).
+function renderLibrarySkeleton() {
+  libraryList.innerHTML = '';
+  for (let i = 0; i < 3; i++) {
+    libraryList.append(
+      el('div', { className: 'lib-book skeleton' }, [
+        el('div', { className: 'sk-line sk-title' }),
+        el('div', { className: 'sk-line sk-sub' }),
+        el('div', { className: 'sk-line sk-row' }),
+      ])
+    );
+  }
+}
+
+function renderLibrary(books) {
+  libraryList.innerHTML = '';
+  if (!books.length) {
+    libraryList.append(
+      el('div', { className: 'lib-empty' }, [
+        el('div', { className: 'lib-empty-icon' }, '📭'),
+        el('p', {}, 'No books yet.'),
+        el('p', { className: 'hint' }, 'Download a book and it’ll show up here with its send history.'),
+      ])
+    );
+    return;
+  }
+  for (const book of books) libraryList.append(renderLibraryBook(book));
+}
+
+function renderLibraryBook(book) {
+  const badges = el('div', { className: 'badges' }, [
+    el('span', { className: 'badge' }, (book.mode === 'standard' ? 'External' : 'Premium')),
+    book.verified ? el('span', { className: 'badge ok-badge' }, 'Verified ✓') : null,
+  ]);
+
+  const metaBits = [];
+  if (book.size) metaBits.push(el('span', {}, `📦 ${formatBytes(book.size)}`));
+  if (book.acquiredAt) metaBits.push(el('span', {}, `📅 ${formatDate(book.acquiredAt)}`));
+  const meta = el('div', { className: 'meta' }, metaBits);
+
+  // Inline send history.
+  const sendsWrap = el('div', { className: 'lib-sends' });
+  if (!book.sends.length) {
+    sendsWrap.append(el('div', { className: 'lib-notsent' }, 'Not sent yet'));
+  } else {
+    sendsWrap.append(el('div', { className: 'lib-sends-head' }, `Sent ${book.sends.length}×`));
+    for (const s of book.sends) sendsWrap.append(renderSend(s));
+  }
+
+  // Resend — reuses the send modal; disabled when the file is gone from disk.
+  const actions = el('div', { className: 'lib-actions' });
+  if (book.filePresent) {
+    const resend = el('button', { className: 'primary-btn lib-resend', type: 'button' },
+      book.sends.length ? '📧 Resend' : '📧 Send to readers');
+    resend.addEventListener('click', () =>
+      openSendModal({
+        downloadId: book.id,
+        book: { title: book.title, filename: book.filename },
+        onSent: openLibrary, // refresh inline history after a send
+      })
+    );
+    actions.append(resend);
+  } else {
+    actions.append(
+      el('div', { className: 'lib-missing' }, '⚠ File removed from disk — re-download to send again.')
+    );
+  }
+
+  return el('div', { className: 'lib-book' }, [
+    el('h3', { className: 'lib-title' }, book.title || book.filename || 'Untitled'),
+    book.filename && book.filename !== book.title
+      ? el('div', { className: 'lib-filename hint' }, book.filename)
+      : null,
+    badges,
+    meta,
+    sendsWrap,
+    actions,
+  ]);
+}
+
+function renderSend(s) {
+  const who = (s.to || []).join(', ') || 'someone';
+  const bits = [];
+  if (s.kindlePushed) bits.push('Kindle 📖');
+  for (const c of s.channels || []) {
+    if (c.ok) bits.push(c.channel);
+  }
+  const via = bits.length ? ` · ${bits.join(', ')}` : '';
+  return el('div', { className: 'lib-send' }, [
+    el('span', { className: 'lib-send-who' }, `→ ${who}`),
+    el('span', { className: 'lib-send-meta hint' }, `${formatDate(s.timestamp)}${via}`),
+  ]);
+}
+
+// ---------------------------------------------------------------------------
 // History
 // ---------------------------------------------------------------------------
 const historyPanel = $('#historyPanel');
 const overlay = $('#overlay');
 $('#historyToggle').addEventListener('click', openHistory);
 $('#historyClose').addEventListener('click', closeHistory);
-overlay.addEventListener('click', closeHistory);
+overlay.addEventListener('click', () => { closeHistory(); closeLibrary(); });
 
 async function openHistory() {
   const data = await fetch('/api/history').then((r) => r.json());
@@ -730,6 +1009,9 @@ function renderHistoryItem(entry) {
       runSearch({ title: entry.title || '', author: entry.author || '', sort: entry.sort || 'newest' });
     });
     item.append(rerun);
+  } else if (entry.type === 'reupload') {
+    const label = { success: 'requested', 'already-requested': 'already pending' }[entry.status] || entry.status;
+    item.append(el('div', {}, `↻ Re-upload ${label}${entry.title ? ` — “${entry.title}”` : ''}`));
   } else {
     const where = entry.savePath ? ` → ${entry.savePath}` : '';
     item.append(el('div', {}, `⬇ ${entry.filename || 'download'}${where}`));
@@ -737,6 +1019,342 @@ function renderHistoryItem(entry) {
   }
   item.append(when);
   return item;
+}
+
+// ---------------------------------------------------------------------------
+// Batch mode — search a pasted list, then download & send selected titles
+// ---------------------------------------------------------------------------
+const batchModal = $('#batchModal');
+const batchInput = $('#batchInput');
+const batchRows = new Map(); // index → { entry, status, match, candidates, downloadId, filename, els }
+
+$('#batchToggle').addEventListener('click', openBatchModal);
+$('#batchCancel').addEventListener('click', () => { batchModal.hidden = true; });
+$('#batchInput').addEventListener('input', updateBatchCount);
+$('#batchGo').addEventListener('click', startBatch);
+$('#batchPaste').addEventListener('click', async () => {
+  try {
+    const text = (await navigator.clipboard.readText()) || '';
+    if (text.trim()) {
+      batchInput.value = batchInput.value ? batchInput.value.replace(/\s*$/, '\n') + text : text;
+      updateBatchCount();
+    }
+  } catch { /* clipboard blocked — the user can paste manually */ }
+});
+
+function openBatchModal() {
+  batchModal.hidden = false;
+  updateBatchCount();
+  batchInput.focus();
+}
+
+// Mirror the server parser closely enough to give live feedback: non-blank
+// lines, capped at 50 (see batch.MAX_BATCH server-side).
+function parseBatchLines(text) {
+  return String(text || '')
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter(Boolean)
+    .slice(0, 50);
+}
+function updateBatchCount() {
+  const n = parseBatchLines(batchInput.value).length;
+  const raw = String(batchInput.value || '').split(/\r?\n/).filter((l) => l.trim()).length;
+  const capped = raw > 50 ? ` (capped from ${raw})` : '';
+  $('#batchCount').textContent = n ? `${n} book${n === 1 ? '' : 's'} detected${capped}` : 'No books yet';
+}
+
+// Shared SSE frame reader (data: {…}\n\n, with `: ping` heartbeats).
+async function consumeSSE(res, onEvent) {
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    let idx;
+    while ((idx = buffer.indexOf('\n\n')) >= 0) {
+      const frame = buffer.slice(0, idx);
+      buffer = buffer.slice(idx + 2);
+      const line = frame.split('\n').find((l) => l.startsWith('data:'));
+      if (!line) continue;
+      let ev;
+      try { ev = JSON.parse(line.slice(5).trim()); } catch { continue; }
+      onEvent(ev);
+    }
+  }
+}
+
+async function startBatch() {
+  const text = batchInput.value;
+  if (!parseBatchLines(text).length) return;
+  const sort = $('#batchSort').value;
+  batchModal.hidden = true;
+
+  // Take over the results area with the batch view.
+  hideStatus();
+  resultsEl.innerHTML = '';
+  batchRows.clear();
+  const header = el('div', { className: 'batch-header' }, [
+    el('h2', { className: 'batch-title' }, 'Batch results'),
+    el('div', { className: 'batch-progress', id: 'batchProgress' }, [
+      el('span', { className: 'spinner' }), 'Starting…',
+    ]),
+  ]);
+  const rowsWrap = el('div', { className: 'batch-rows', id: 'batchRowsWrap' });
+  const actionBar = el('div', { className: 'batch-actionbar', id: 'batchActionBar', hidden: true });
+  resultsEl.append(header, rowsWrap, actionBar);
+
+  try {
+    const res = await fetch('/api/search/batch', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text, sort }),
+    });
+    if (res.status === 409) {
+      const data = await res.json().catch(() => ({}));
+      showWarmBanner(true);
+      setBatchProgress(`⚠ ${data.error || 'Session expired.'}`, false);
+      return;
+    }
+    if (!res.ok || !res.body) {
+      const data = await res.json().catch(() => ({}));
+      throw new Error(data.error || 'Batch search failed');
+    }
+    await consumeSSE(res, handleBatchEvent);
+  } catch (err) {
+    setBatchProgress(`✕ ${err.message}`, false);
+  }
+}
+
+function setBatchProgress(text, spinning = true) {
+  const p = $('#batchProgress');
+  if (!p) return;
+  p.innerHTML = '';
+  if (spinning) p.append(el('span', { className: 'spinner' }));
+  p.append(document.createTextNode(text));
+}
+
+function handleBatchEvent(ev) {
+  switch (ev.step) {
+    case 'start':
+      ev.entries.forEach((entry, i) => createBatchRow(i + 1, entry));
+      setBatchProgress(`Searching ${ev.total} book${ev.total === 1 ? '' : 's'}…`);
+      break;
+    case 'searching':
+      setBatchProgress(`Searching ${ev.index} of ${ev.total}… “${ev.title}”`);
+      setRowPill(ev.index, 'searching', 'Searching…');
+      break;
+    case 'entry':
+      fillBatchRow(ev.index, ev);
+      break;
+    case 'done':
+      setBatchProgress(`✓ Done — ${ev.found} of ${ev.total} found.`, false);
+      finishBatchSearch();
+      break;
+    case 'error':
+      setBatchProgress(`✕ ${ev.message || ev.error || 'Batch failed.'}`, false);
+      if (ev.needWarm) showWarmBanner(true);
+      finishBatchSearch();
+      break;
+  }
+}
+
+function createBatchRow(index, entry) {
+  const pill = el('span', { className: 'batch-pill searching' }, 'Queued');
+  const body = el('div', { className: 'batch-row-body' });
+  const requested = el('div', { className: 'batch-req' }, [
+    el('span', { className: 'batch-req-title' }, entry.title),
+    entry.author ? el('span', { className: 'batch-req-author' }, ` — ${entry.author}`) : null,
+  ]);
+  const row = el('div', { className: 'batch-row', id: 'batchrow-' + index }, [
+    el('div', { className: 'batch-row-head' }, [requested, pill]),
+    body,
+  ]);
+  $('#batchRowsWrap').append(row);
+  batchRows.set(index, { entry, status: 'searching', els: { pill, body }, selected: false });
+}
+
+function setRowPill(index, status, label) {
+  const r = batchRows.get(index);
+  if (!r) return;
+  r.els.pill.className = 'batch-pill ' + status;
+  r.els.pill.textContent = label;
+}
+
+function fillBatchRow(index, ev) {
+  const r = batchRows.get(index);
+  if (!r) return;
+  r.status = ev.status;
+  const body = r.els.body;
+  body.innerHTML = '';
+
+  if (ev.status === 'not-found') {
+    setRowPill(index, 'notfound', 'Not found');
+    const links = el('div', { className: 'batch-links' });
+    if (ev.fallbackLinks?.title) links.append(el('a', { href: ev.fallbackLinks.title, target: '_blank', rel: 'noopener' }, 'Title search ↗'));
+    if (ev.fallbackLinks?.author) links.append(el('a', { href: ev.fallbackLinks.author, target: '_blank', rel: 'noopener' }, 'Author search ↗'));
+    body.append(el('div', { className: 'hint' }, 'No ePUB match. Try the manual searches:'), links);
+    return;
+  }
+  if (ev.status === 'error') {
+    setRowPill(index, 'error', 'Error');
+    body.append(el('div', { className: 'batch-err' }, ev.error || 'Search failed.'));
+    if (ev.hint) body.append(el('div', { className: 'hint' }, ev.hint));
+    if (ev.needWarm) body.append(el('a', { className: 'warm-btn', href: '/warm', target: '_blank', rel: 'noopener' }, 'Re-warm ↗'));
+    return;
+  }
+
+  // found / multiple → selectable, with the best match preselected.
+  const results = ev.results || [];
+  r.candidates = results;
+  r.selectedCandidate = 0;
+  r.selected = true;
+  setRowPill(index, ev.status === 'multiple' ? 'multiple' : 'found', ev.status === 'multiple' ? `${results.length} matches` : 'Found ✓');
+
+  const cb = el('input', { type: 'checkbox', id: 'batchsel-' + index, checked: true });
+  cb.addEventListener('change', () => { r.selected = cb.checked; updateBatchActionBar(); });
+
+  let chosenLabel;
+  if (ev.status === 'multiple') {
+    const sel = el('select', { className: 'batch-candidate' },
+      results.map((res, i) => el('option', { value: String(i) }, `${res.title}${res.premium ? ' (Premium)' : ''}`)));
+    sel.addEventListener('change', () => { r.selectedCandidate = Number(sel.value); });
+    chosenLabel = sel;
+  } else {
+    chosenLabel = el('span', { className: 'batch-match' }, `${results[0].title}${results[0].premium ? '' : ' (external links)'}`);
+  }
+
+  const noteEl = el('div', { className: 'batch-note', id: 'batchnote-' + index });
+  r.els.note = noteEl;
+  body.append(
+    el('label', { className: 'batch-select', htmlFor: 'batchsel-' + index }, [cb, chosenLabel]),
+    noteEl
+  );
+  updateBatchActionBar();
+}
+
+function finishBatchSearch() {
+  const bar = $('#batchActionBar');
+  if (!bar) return;
+  bar.hidden = false;
+  updateBatchActionBar();
+}
+
+function selectableRows() {
+  return [...batchRows.values()].filter((r) => (r.status === 'found' || r.status === 'multiple') && r.candidates && r.candidates.length);
+}
+
+function updateBatchActionBar() {
+  const bar = $('#batchActionBar');
+  if (!bar || bar.hidden) return;
+  const selected = selectableRows().filter((r) => r.selected && !r.downloadId);
+  bar.innerHTML = '';
+  const btn = el('button', { className: 'primary-btn', type: 'button', disabled: !selected.length },
+    `⬇ Download selected (${selected.length})`);
+  btn.addEventListener('click', () => downloadBatchSelected(selected));
+  bar.append(btn);
+}
+
+async function downloadBatchSelected(rows) {
+  // Make sure premium creds exist once before grinding through the list.
+  const status = await fetch('/api/premium/status').then((r) => r.json()).catch(() => ({}));
+  if (!status.hasCreds) {
+    pendingBatchDownload = rows;
+    openCredModal();
+    return;
+  }
+
+  const bar = $('#batchActionBar');
+  if (bar) bar.querySelectorAll('button').forEach((b) => (b.disabled = true));
+
+  for (const r of rows) {
+    if (r.downloadId) continue; // already done in a previous pass
+    const chosen = r.candidates[r.selectedCandidate || 0];
+    const note = r.els.note;
+    setNote(note, 'working', '⏳ Starting…');
+    try {
+      await downloadOneBatch(r, chosen, note);
+    } catch (err) {
+      // Per-book isolation: a failure here never stops the rest of the list.
+      setNote(note, 'fail', `✕ ${err.message}`);
+    }
+  }
+
+  updateBatchActionBar();
+  if (bar) bar.querySelectorAll('button').forEach((b) => (b.disabled = false));
+}
+
+function setNote(note, kind, text) {
+  if (!note) return;
+  note.className = 'batch-note ' + (kind || '');
+  note.textContent = text;
+}
+
+// Drives one book through /api/download and reflects progress on its row. On
+// success it stamps the row's downloadId and reveals a per-book "Send" button.
+async function downloadOneBatch(r, chosen, note) {
+  const res = await fetch('/api/download', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ url: chosen.url, title: chosen.title, searchedTitle: r.entry.title }),
+  });
+  if (res.status === 401) {
+    const data = await res.json().catch(() => ({}));
+    if (data.needCreds) {
+      pendingBatchDownload = selectableRows().filter((x) => x.selected && !x.downloadId);
+      openCredModal();
+      throw new Error('Premium credentials needed.');
+    }
+  }
+  if (!res.ok || !res.body) throw new Error('Download request failed (HTTP ' + res.status + ')');
+
+  let finished = false;
+  await consumeSSE(res, (ev) => {
+    switch (ev.step) {
+      case 'reading-post': setNote(note, 'working', '⏳ Reading post…'); break;
+      case 'mirrors-found': setNote(note, 'working', `⏳ ${ev.total} mirror${ev.total === 1 ? '' : 's'} found`); break;
+      case 'mirror': setNote(note, 'working', `⏳ Mirror ${ev.index}/${ev.total}${ev.host ? ' · ' + ev.host : ''}`); break;
+      case 'downloading': setNote(note, 'working', `⏳ Downloading${ev.host ? ' from ' + ev.host : ''}…`); break;
+      case 'verifying': setNote(note, 'working', '⏳ Verifying the ePUB…'); break;
+      case 'done': {
+        finished = true;
+        const d = (ev.downloads || [])[0];
+        if (d && d.verified) {
+          r.downloadId = d.id;
+          r.filename = d.filename;
+          const ok = d.titleMatch !== false;
+          setNote(note, ok ? 'ok' : 'warn', ok ? `✓ Downloaded — ${d.filename}` : `⚠ Downloaded — verify it's the right book (${d.embeddedTitle || '?'})`);
+          addBatchSendButton(r, note);
+        } else if (d) {
+          setNote(note, 'warn', `⚠ Saved but failed the ePUB check`);
+        } else {
+          const errs = ev.errors || [];
+          setNote(note, 'fail', `✕ ${errs.length ? errs[0].error : 'Download failed'}`);
+        }
+        break;
+      }
+      case 'error':
+        finished = true;
+        setNote(note, 'fail', `✕ ${ev.message || ev.error || 'Download failed'}`);
+        if (ev.needWarm) showWarmBanner(true);
+        break;
+    }
+  });
+  if (!finished) setNote(note, 'fail', '✕ Download ended unexpectedly');
+}
+
+function addBatchSendButton(r, note) {
+  const send = el('button', { className: 'ghost-btn batch-send', type: 'button' }, '📧 Send');
+  send.addEventListener('click', () =>
+    openSendModal({
+      downloadId: r.downloadId,
+      book: { title: r.entry.title, filename: r.filename },
+    })
+  );
+  // Place the Send button right after the note.
+  note.after(send);
 }
 
 // ---------------------------------------------------------------------------
