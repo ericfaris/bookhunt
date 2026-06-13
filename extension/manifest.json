@@ -1,0 +1,31 @@
+{
+  "manifest_version": 3,
+  "name": "Mooseflip — Search on Amazon book pages",
+  "version": "1.0.0",
+  "description": "Adds a 'Search on Mooseflip' button + right-click entry to Amazon book pages that opens your Mobilism search prefilled with the book's title and author.",
+  "permissions": ["contextMenus", "scripting"],
+  "host_permissions": [
+    "*://*.amazon.com/*",
+    "*://*.amazon.co.uk/*",
+    "*://*.amazon.ca/*",
+    "*://read.mooseflip.com/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "*://*.amazon.com/*",
+        "*://*.amazon.co.uk/*",
+        "*://*.amazon.ca/*"
+      ],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "action": {
+    "default_title": "Search this book on Mooseflip"
+  },
+  "icons": {}
+}

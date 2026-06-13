@@ -98,6 +98,59 @@ pasteBtn.addEventListener('click', async () => {
 });
 
 // ---------------------------------------------------------------------------
+// Deep-link prefill — lets the Mooseflip browser extension (or a bookmarklet)
+// hand a book off straight from an Amazon page. Supported query params:
+//   ?title=…&author=…   fill the fields directly and search (no network call)
+//   ?amazon=<url>       scrape the product page via /api/amazon, then search
+//   &go=0               fill only; skip the auto-search
+// Params are stripped from the URL afterward so a refresh doesn't re-fire.
+// ---------------------------------------------------------------------------
+async function prefillFromQuery() {
+  const q = new URLSearchParams(location.search);
+  const sort = $('#sort').value;
+  const auto = q.get('go') !== '0';
+  const strip = () => history.replaceState(null, '', location.pathname);
+
+  const title = (q.get('title') || '').trim();
+  const author = (q.get('author') || '').trim();
+  if (title || author) {
+    $('#title').value = title;
+    $('#author').value = author;
+    strip();
+    if (auto) runSearch({ title, author, sort });
+    return;
+  }
+
+  const amazon = (q.get('amazon') || '').trim();
+  if (!amazon || !AMAZON_RE.test(amazon)) return;
+  strip();
+  showStatusHTML('<span class="spinner"></span>Reading the Amazon page…');
+  try {
+    const res = await fetch('/api/amazon', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url: amazon }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Lookup failed');
+    if (data.title) $('#title').value = data.title;
+    if (data.author) $('#author').value = data.author;
+    if (auto && (data.title || data.author)) {
+      runSearch({ title: data.title || '', author: data.author || '', sort });
+    } else {
+      showStatus(`Filled from Amazon: “${data.title || '?'}” by ${data.author || '?'}`);
+      setTimeout(hideStatus, 2500);
+    }
+  } catch (err) {
+    showStatus(err.message, 'error');
+  }
+}
+
+// NOTE: prefillFromQuery() is invoked at the very bottom of this file, not here.
+// It calls runSearch(), which reads module-level `let` bindings (lastSearchParams
+// et al.) declared further down — calling it early hits their temporal dead zone.
+
+// ---------------------------------------------------------------------------
 // Session warmth banner
 // ---------------------------------------------------------------------------
 const warmBanner = $('#warmBanner');
@@ -1434,3 +1487,7 @@ function showStatusHTML(html) {
   statusEl.innerHTML = html;
 }
 function hideStatus() { statusEl.hidden = true; }
+
+// Run the deep-link prefill last, so every module-level binding runSearch reads
+// (lastSearchParams, etc.) is already initialized — avoids a TDZ ReferenceError.
+prefillFromQuery();
