@@ -527,3 +527,22 @@ input:focus, select:focus { border-color: var(--accent); }
   .confetti { display: none; }
   .dl-step.active .dl-step-icon { animation: none; }
 }
+
+/* --- Spell-correction before→after notice (single + batch) ---------------- */
+.correction-notice,
+.batch-correction {
+  display: flex;
+  align-items: baseline;
+  gap: 0.4rem;
+  font-size: 0.82rem;
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--border));
+  background: color-mix(in srgb, var(--accent) 8%, var(--surface));
+  border-radius: 8px;
+  padding: 0.5rem 0.7rem;
+}
+.correction-notice { margin: 0 0 0.9rem; }
+.batch-correction { margin: 0 0 0.5rem; font-size: 0.78rem; padding: 0.35rem 0.55rem; }
+.corr-icon { color: var(--accent); font-weight: 700; }
+.corr-text { color: var(--text); }
+.corr-before { color: var(--text-dim); text-decoration: line-through; }
+.corr-after { color: var(--accent); font-weight: 600; }

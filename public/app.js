@@ -30,24 +30,49 @@ searchForm.addEventListener('submit', async (e) => {
 });
 
 // ---------------------------------------------------------------------------
-// Amazon link → auto-fill title/author
+// Paste → auto-fill title/author. One smart button: an Amazon link is scraped
+// via /api/amazon (as before); plain "Title — Author" / "Title, Author" text is
+// parsed and filled directly, with NO network call.
 // ---------------------------------------------------------------------------
 const AMAZON_RE = /amazon\.|a\.co\b|amzn\./i;
 const pasteBtn = $('#pasteAmazon');
 
+// Split a plain line into { title, author } — mirrors the server-side batch
+// convention (batch.splitTitleAuthor): first SPACED dash (— – -), else the first
+// comma, else the whole line is a title-only entry. A hyphenated title with no
+// surrounding spaces ("Spider-Man") stays intact.
+function splitTitleAuthor(line) {
+  const dash = line.match(/^(.*?)\s+[—–-]\s+(.*)$/);
+  if (dash) return { title: dash[1].trim(), author: dash[2].trim() };
+  const ci = line.indexOf(',');
+  if (ci >= 0) return { title: line.slice(0, ci).trim(), author: line.slice(ci + 1).trim() };
+  return { title: line.trim(), author: '' };
+}
+
 pasteBtn.addEventListener('click', async () => {
-  // Prefer the clipboard; fall back to a prompt if it's blocked or not a link.
-  let link = '';
-  try { link = ((await navigator.clipboard.readText()) || '').trim(); } catch { /* blocked */ }
-  if (!AMAZON_RE.test(link)) {
-    link = (window.prompt('Paste the Amazon book link:') || '').trim();
+  // Prefer the clipboard; fall back to a prompt if it's blocked or empty.
+  let text = '';
+  try { text = ((await navigator.clipboard.readText()) || '').trim(); } catch { /* blocked */ }
+  if (!text) {
+    text = (window.prompt('Paste an Amazon link, or “Title — Author”:') || '').trim();
   }
-  if (!link) return;
-  if (!AMAZON_RE.test(link)) {
-    showStatus("That doesn't look like an Amazon link.", 'error');
+  if (!text) return;
+
+  // Plain text (not an Amazon link) → parse and fill directly, no scrape.
+  if (!AMAZON_RE.test(text)) {
+    const { title, author } = splitTitleAuthor(text.split(/\r?\n/)[0].trim());
+    if (!title) {
+      showStatus("Couldn't read a title from that. Paste an Amazon link or “Title — Author”.", 'error');
+      return;
+    }
+    $('#title').value = title;
+    $('#author').value = author;
+    showStatus(author ? `Filled: “${title}” by ${author}` : `Filled title: “${title}”`);
+    setTimeout(hideStatus, 2500);
     return;
   }
 
+  // Amazon link → scrape the product page for title/author.
   const original = pasteBtn.textContent;
   pasteBtn.disabled = true;
   pasteBtn.textContent = 'Reading…';
@@ -56,7 +81,7 @@ pasteBtn.addEventListener('click', async () => {
     const res = await fetch('/api/amazon', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ url: link }),
+      body: JSON.stringify({ url: text }),
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || 'Lookup failed');
@@ -147,6 +172,8 @@ async function runSearch({ title, author, sort }) {
 
         if (ev.step === 'progress') {
           showSearchProgress(ev);
+        } else if (ev.step === 'corrected') {
+          applyCorrection(ev);
         } else if (ev.step === 'error') {
           finished = true;
           renderSearchError(ev);
@@ -220,6 +247,31 @@ function showSearchProgress(ev) {
   };
   lastPhaseText = msgs[ev.phase] || 'Searching Mobilism…';
   renderSearchStatus();
+}
+
+// A spelling correction landed before the scrape. Reflect the corrected terms
+// in the input fields (so a download/resend logs the clean spelling), keep retry
+// in sync, and pin a before→after notice above the results.
+function applyCorrection(ev) {
+  $('#title').value = ev.title || '';
+  $('#author').value = ev.author || '';
+  if (lastSearchParams) lastSearchParams = { ...lastSearchParams, title: ev.title || '', author: ev.author || '' };
+  resultsEl.prepend(buildCorrectionNotice(ev.original || {}, { title: ev.title, author: ev.author }));
+}
+
+// "✎ Corrected ‘<before>’ → ‘<after>’" — text-only (echoes external content, so
+// nothing is interpreted as HTML).
+function buildCorrectionNotice(before, after, cls = 'correction-notice') {
+  const fmt = (o) => [o.title, o.author].filter(Boolean).join(' — ');
+  const node = el('div', { className: cls });
+  node.append(el('span', { className: 'corr-icon' }, '✎'));
+  const text = el('span', { className: 'corr-text' });
+  text.append('Corrected ');
+  text.append(el('span', { className: 'corr-before' }, fmt(before)));
+  text.append(' → ');
+  text.append(el('span', { className: 'corr-after' }, fmt(after)));
+  node.append(text);
+  return node;
 }
 
 // Plain-language search error with a hint and (when transient) a Retry button.
@@ -1189,6 +1241,14 @@ function fillBatchRow(index, ev) {
   r.status = ev.status;
   const body = r.els.body;
   body.innerHTML = '';
+
+  // A spelling correction ran before this entry's search. Pin a before→after
+  // line and adopt the corrected spelling so the download/send (which uses
+  // r.entry.title) logs the clean version into History/Library.
+  if (ev.corrected) {
+    r.entry = { title: ev.title || r.entry.title, author: ev.author || '' };
+    body.append(buildCorrectionNotice(ev.original || {}, { title: ev.title, author: ev.author }, 'batch-correction'));
+  }
 
   if (ev.status === 'not-found') {
     setRowPill(index, 'notfound', 'Not found');

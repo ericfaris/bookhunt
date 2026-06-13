@@ -19,6 +19,7 @@ const reupload = require('./reupload');
 const library = require('./library');
 const messages = require('./messages');
 const batch = require('./batch');
+const correct = require('./correct');
 
 const PORT = process.env.PORT || 3000;
 const app = express();
@@ -124,6 +125,18 @@ app.post('/api/search', async (req, res) => {
   const heartbeat = setInterval(() => res.write(': ping\n\n'), 15000);
 
   try {
+    // Fuzzy spell-correction BEFORE the scrape: a misspelled request yields bad
+    // or empty Mobilism results, so fix the title/author against an external book
+    // repo first (fail-open — never blocks the search). On a confident fix, swap
+    // in the clean spelling, tell the client (before→after), and search/log with
+    // the corrected terms so History + the Library stay clean.
+    const fix = await correct.correct({ title, author });
+    if (fix.corrected) {
+      title = fix.title;
+      author = fix.author;
+      send({ step: 'corrected', original: fix.original, title, author, source: fix.source });
+    }
+
     const { results, fallbackLinks } = await searcher.search(
       { title, author, sort },
       (ev) => send({ step: 'progress', ...ev })
@@ -175,19 +188,25 @@ app.post('/api/search/batch', async (req, res) => {
   const send = (event) => res.write(`data: ${JSON.stringify(event)}\n\n`);
   const heartbeat = setInterval(() => res.write(': ping\n\n'), 15000);
 
-  // Per-entry worker: a search error becomes a classified outcome (not a throw)
-  // so it's reported inline and the batch keeps going.
+  // Per-entry worker: spell-correct first (fail-open), then search. A search
+  // error becomes a classified outcome (not a throw) so it's reported inline and
+  // the batch keeps going. The correction (if any) rides along in the outcome so
+  // the row can show before→after and download/log with the corrected spelling.
   const worker = async (entry) => {
+    const fix = await correct.correct({ title: entry.title, author: entry.author });
+    const corrected = fix.corrected
+      ? { corrected: true, original: fix.original, title: fix.title, author: fix.author, source: fix.source }
+      : { corrected: false };
     try {
       const { results, fallbackLinks } = await searcher.search({
-        title: entry.title,
-        author: entry.author,
+        title: fix.title,
+        author: fix.author,
         sort,
       });
-      return { ...batch.classifyBatchOutcome({ results }), results, fallbackLinks };
+      return { ...batch.classifyBatchOutcome({ results }), results, fallbackLinks, ...corrected };
     } catch (err) {
       const info = messages.classifyError(err, { needWarm: !!err.needWarm });
-      return { status: 'error', error: info.message, hint: info.hint, needWarm: info.needWarm };
+      return { status: 'error', error: info.message, hint: info.hint, needWarm: info.needWarm, ...corrected };
     }
   };
 
