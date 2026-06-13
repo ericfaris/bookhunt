@@ -85,4 +85,4 @@ function lookup(url) {
   return enqueue(() => run(url));
 }
 
-module.exports = { isAmazonUrl, lookup };
+module.exports = { isAmazonUrl, lookup, cleanTitle, cleanAuthor };

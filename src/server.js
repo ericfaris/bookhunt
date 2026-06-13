@@ -2,6 +2,7 @@
 
 require('dotenv').config();
 
+const fs = require('fs');
 const path = require('path');
 const express = require('express');
 const httpProxy = require('http-proxy');
@@ -181,12 +182,11 @@ app.post('/api/send', async (req, res) => {
   // sure it lives inside DOWNLOAD_PATH and is an .epub before attaching it.
   const entry = history.readAll().find((e) => e.id === downloadId && e.type === 'download');
   if (!entry || !entry.savePath) return res.status(404).json({ error: 'Download not found.' });
-  const root = path.resolve(downloader.DOWNLOAD_PATH);
-  const filePath = path.resolve(entry.savePath);
-  if (!filePath.startsWith(root + path.sep) || !filePath.toLowerCase().endsWith('.epub')) {
+  if (!downloader.isSafeEpubPath(entry.savePath, downloader.DOWNLOAD_PATH)) {
     return res.status(400).json({ error: 'Refusing to send that file.' });
   }
-  if (!require('fs').existsSync(filePath)) {
+  const filePath = path.resolve(entry.savePath);
+  if (!fs.existsSync(filePath)) {
     return res.status(410).json({ error: 'File no longer exists on disk.' });
   }
 

@@ -9,7 +9,8 @@
     "start": "node src/server.js",
     "dev": "node --watch src/server.js",
     "warm": "node src/warm.js",
-    "install-browser": "playwright install chromium"
+    "install-browser": "playwright install chromium",
+    "test": "node --test test/*.test.js"
   },
   "dependencies": {
     "dotenv": "^16.4.5",

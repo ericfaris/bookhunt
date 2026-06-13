@@ -530,4 +530,9 @@ module.exports = {
   enqueue,
   randomDelay,
   fetchDetail,
+  // exported for unit tests
+  normalize,
+  fuzzyMatch,
+  fuzzyMatchLine,
+  isCollection,
 };
