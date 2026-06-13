@@ -9,9 +9,11 @@ A self-hosted web app that searches the Mobilism ebook forum by title and/or aut
 ## Features
 
 - **ePUB-only** — all other formats filtered out
-- **Fuzzy matching** — `1984` matches `1984: Illustrated Edition`
+- **Fuzzy matching** — `1984` matches `1984: Illustrated Edition`; tokens match at word starts (so short titles like *It Ends with Us* don't false-positive inside unrelated words)
 - **Collection crawling** — auto-scans up to 3 bundle/series/omnibus posts per search
-- **Author fallback** — second search pass when the title search returns no direct matches
+- **Author fallback** — title-only author search as a last resort, gated on the post's actual author so blurb name-drops don't leak in
+- **Spell-correction** — fixes fuzzy title/author before searching (Google Books → Open Library)
+- **Amazon prefill** — a smart **Paste** button scrapes an Amazon link, plus a [browser extension](extension/README.md) that searches straight from any Amazon book page
 - **Premium downloads** — saved directly to disk via the Mobilism amember downloader
 - **Standard links** — per-host download buttons when no Premium icon is present
 - **Search history** — stored in `history.json`, re-runnable with one click
@@ -187,13 +189,34 @@ Cloudflare Access is the front gate, but the origin no longer trusts it blindly.
 1. **Pass 1 — title search** (up to 5 pages of results), scoped to the eBooks forum and its subforums (`fid[]=106&sc=1`). When both title and author are given, both go into the query so it lands directly on the match. Filtered to ePUB, fuzzy-matched, deduplicated by URL.
 2. **Collection detection.** Posts with `Collection`, `Complete Works`, `&`, `Series`, or `Omnibus` in the title are crawled (max 3) and their content scanned line-by-line for a title match.
 3. **"Books by {author}" pass.** When both title and author are given, a second search runs for `books by {author}` (titleonly, eBooks forum). Each resulting set/collection post (e.g. *"7 Books by Sally Hepworth"*) is opened and scanned for the requested title — so a book only available inside a bundle still surfaces. Results merge with Pass 1 and are deduped by URL.
-4. **Author fallback.** Last resort, only if nothing turned up at all. Searches by author and scans each post's content for the title.
+4. **Author fallback.** Last resort, only if nothing turned up at all. Searches the author **title-only**, and for each hit requires the post's actual author (parsed from "… by *author*") to match before scanning its content for the title — so a book whose blurb merely name-drops the author (e.g. "for fans of *Colleen Hoover*") can't masquerade as a match.
 5. **Zero results.** Shows a "Not found" message with manual search links for Mobilism.
+
+> Title and author tokens are matched at **word starts**, not bare substrings — short tokens like `it`/`us` in *It Ends with Us* no longer match inside `with`/`trust`, while stems like `demon` → `demons` still do.
 
 ### Downloads
 
 - **Premium** (`img.MobilismDownloaderIcon` found in post): each associated download link is fetched through the amember downloader and saved to `DOWNLOAD_PATH`. Credentials are entered in the UI once per session and never written to disk (or optionally set via `MOBILISM_PREMIUM_USER`/`MOBILISM_PREMIUM_PASS` in `.env`).
 - **Standard** (no Premium icon): every `a.postlink` is shown as a button labeled by file host and opens in a new tab.
+
+---
+
+## Prefilling a search from Amazon
+
+Two ways to jump from an Amazon book page straight into a search:
+
+- **Paste button** (in the app) — copy an Amazon link (or `Title — Author` text) and click **Paste**. Amazon links are scraped server-side via `/api/amazon`; plain text is parsed locally with no network call.
+- **Browser extension** (`extension/`, Chrome/Edge, Manifest V3) — adds a **"🔍 Search on Mooseflip"** button, a right-click entry, and a toolbar action to Amazon book pages. It scrapes the title/author (same cleaning rules as `src/amazon.js`) and opens the search prefilled. See [`extension/README.md`](extension/README.md) for install (load-unpacked) and config.
+
+Both rely on **deep-link query params** the search page reads on load (`public/app.js` → `prefillFromQuery`, invoked last so module-level bindings are initialized before it runs):
+
+| Param | Effect |
+|---|---|
+| `?title=…&author=…` | Fill the fields and auto-run the search (no network call) |
+| `?amazon=<url>` | Scrape the product page server-side via `/api/amazon`, then search |
+| `&go=0` | Fill the fields only; skip the auto-search |
+
+The params are stripped from the URL afterward so a refresh doesn't re-fire.
 
 ---
 
@@ -248,6 +271,8 @@ Notification channels live in `src/notify/` and share one contract (`isConfigure
 src/
   server.js       Express app + API routes
   searcher.js     Playwright session, search + crawl logic
+  correct.js      Spell-correction of title/author before search
+  amazon.js       Scrape title/author from an Amazon product page (Paste + prefill)
   downloader.js   Premium + standard download logic (+ ePUB verification)
   history.js      Read/write history.json
   recipients.js   CRUD over recipients.json
@@ -260,7 +285,11 @@ src/
 public/
   index.html      Search UI + send modal
   style.css       Dark mode + layout
-  app.js          Fetch calls + result rendering + send/recipients
+  app.js          Fetch calls + result rendering + send/recipients + deep-link prefill
+extension/        Chrome/Edge extension: search from Amazon book pages
+  manifest.json   Manifest V3
+  background.js   Context menu + toolbar action
+  content.js      Scrapes title/author, opens the prefilled search
 entrypoint.sh     Xvfb + noVNC + app startup
 Dockerfile
 docker-compose.yml
