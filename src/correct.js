@@ -34,6 +34,15 @@ const LOOKUP_TIMEOUT_MS = 4000;
 // genuinely different titles (a wrong-book match scores far lower).
 const ACCEPT_THRESHOLD = 0.7;
 
+// When the OTHER field corroborates strongly (e.g. an exact author match), the
+// candidate is high-confidence regardless, so a borderline field correction is
+// accepted at a looser threshold. This catches near-typos that just miss 0.7
+// ("Mad Maple" → "Mad Mabel", ratio ≈ 0.67) when the author confirms the book.
+const LOOSE_THRESHOLD = 0.5;
+
+// How strongly the other field must match to grant the loosening above.
+const CORROBORATE_THRESHOLD = 0.8;
+
 /** Lowercase, fold punctuation to spaces, collapse runs, trim — so comparisons
  *  ignore case/punctuation differences ("J.K. Rowling" ≈ "j k rowling"). */
 function normalize(s) {
@@ -113,7 +122,7 @@ function pickBest(origTitle, list, getTitle) {
  *     typed term, return just that prefix so the search stays close to intent.
  *   - Too different → original untouched (likely a wrong-book match).
  */
-function correctedField(orig, cand) {
+function correctedField(orig, cand, threshold = ACCEPT_THRESHOLD) {
   const o = String(orig || '');
   if (!o) return o; // never fill a field the user left blank
   const candClean = cleanWhitespace(cand);
@@ -123,7 +132,7 @@ function correctedField(orig, cand) {
   const nc = normalize(candClean);
   if (!no || no === nc) return o; // already a match (ignoring case/punct)
 
-  if (similarity(no, nc) >= ACCEPT_THRESHOLD) return candClean;
+  if (similarity(no, nc) >= threshold) return candClean;
 
   const origTokenCount = no.split(' ').length;
   const candWords = candClean.split(' ');
@@ -131,9 +140,15 @@ function correctedField(orig, cand) {
     const prefix = candWords.slice(0, origTokenCount).join(' ');
     const np = normalize(prefix);
     if (np === no) return o; // prefix is just a re-cased original — not a correction
-    if (similarity(no, np) >= ACCEPT_THRESHOLD) return prefix;
+    if (similarity(no, np) >= threshold) return prefix;
   }
   return o; // not confident — leave the typed term alone
+}
+
+/** The other field gives independent evidence this is the right book when it
+ *  matches strongly. A blank original gives no positive evidence. Pure. */
+function corroborates(orig, cand) {
+  return !!orig && matchScore(orig, cand) >= CORROBORATE_THRESHOLD;
 }
 
 /** Shape returned when nothing is corrected. */
@@ -147,8 +162,12 @@ function passthrough(original, source = null) {
  */
 function reconcile(original, candidate, source) {
   if (!candidate) return passthrough(original, source || null);
-  const title = correctedField(original.title, candidate.title);
-  const author = correctedField(original.author, candidate.author);
+  // A strong match on one field corroborates the other, loosening its gate so a
+  // borderline typo (just under ACCEPT_THRESHOLD) is still corrected.
+  const titleThreshold = corroborates(original.author, candidate.author) ? LOOSE_THRESHOLD : ACCEPT_THRESHOLD;
+  const authorThreshold = corroborates(original.title, candidate.title) ? LOOSE_THRESHOLD : ACCEPT_THRESHOLD;
+  const title = correctedField(original.title, candidate.title, titleThreshold);
+  const author = correctedField(original.author, candidate.author, authorThreshold);
   const corrected = title !== original.title || author !== original.author;
   return { title, author, corrected, original, source: candidate.source || source || null };
 }

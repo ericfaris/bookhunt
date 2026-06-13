@@ -132,6 +132,37 @@ test('reconcile: a null candidate passes the original through', () => {
   assert.equal(out.title, 'Dune');
 });
 
+test('reconcile: an exact author match corroborates a borderline title fix', () => {
+  // "Mad Maple" → "Mad Mabel" is ratio ≈ 0.67 (under 0.7 standalone), but the
+  // exact author match confirms the book, so the title is still corrected.
+  const out = reconcile(
+    { title: 'Mad Maple', author: 'Sally Hepworth' },
+    { title: 'Mad Mabel', author: 'Sally Hepworth' }
+  );
+  assert.equal(out.corrected, true);
+  assert.equal(out.title, 'Mad Mabel');
+  assert.equal(out.author, 'Sally Hepworth');
+});
+
+test('reconcile: WITHOUT corroboration a borderline title fix is rejected', () => {
+  // Same title edit, but no author given → nothing corroborates → 0.67 < 0.7,
+  // so the typed term is left untouched (guards against wrong-book matches).
+  const out = reconcile({ title: 'Mad Maple', author: '' }, { title: 'Mad Mabel', author: '' });
+  assert.equal(out.corrected, false);
+  assert.equal(out.title, 'Mad Maple');
+});
+
+test('reconcile: corroboration does NOT pull in a genuinely different title', () => {
+  // Exact author, but a wildly different title (ratio well under 0.5) must NOT
+  // be "corrected" just because the author matches.
+  const out = reconcile(
+    { title: 'Dune', author: 'Frank Herbert' },
+    { title: 'The Santaroga Barrier', author: 'Frank Herbert' }
+  );
+  assert.equal(out.corrected, false);
+  assert.equal(out.title, 'Dune');
+});
+
 // --- correct (async orchestration, injected lookup) -------------------------
 
 test('correct: applies a high-confidence correction', async () => {
