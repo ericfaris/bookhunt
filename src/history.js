@@ -50,8 +50,13 @@ function logSearch({ title, author, sort, resultCount }) {
 }
 
 /** Record a completed download. */
-function logDownload({ title, filename, savePath, url, mode }) {
-  return add({ type: 'download', title, filename, savePath, url, mode });
+function logDownload({ title, filename, savePath, url, mode, verified, size }) {
+  return add({ type: 'download', title, filename, savePath, url, mode, verified, size });
 }
 
-module.exports = { readAll, add, logSearch, logDownload };
+/** Record a notification / Kindle push send. */
+function logNotify({ title, filename, to, kindlePushed, channels }) {
+  return add({ type: 'notify', title, filename, to, kindlePushed, channels });
+}
+
+module.exports = { readAll, add, logSearch, logDownload, logNotify };

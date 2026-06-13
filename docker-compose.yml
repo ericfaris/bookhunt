@@ -15,6 +15,8 @@ services:
       - ./.browser-profile:/app/.browser-profile
       # Search + download history
       - ./history.json:/app/history.json
+      # Notification recipients (name / email / kindle email / phone / carrier)
+      - ./recipients.json:/app/recipients.json
       # Downloads land in C:\temp on the Windows side (via WSL2 path)
       - /mnt/c/temp:/downloads
     environment:
@@ -24,6 +26,15 @@ services:
       # Optional: premium downloader login (loaded at startup; UI form overrides)
       - MOBILISM_PREMIUM_USER=${MOBILISM_PREMIUM_USER:-}
       - MOBILISM_PREMIUM_PASS=${MOBILISM_PREMIUM_PASS:-}
+      # Notifications + Send-to-Kindle (Gmail SMTP); TWILIO_* reserved for later
+      - SMTP_HOST=${SMTP_HOST:-smtp.gmail.com}
+      - SMTP_PORT=${SMTP_PORT:-587}
+      - SMTP_USER=${SMTP_USER:-}
+      - SMTP_PASS=${SMTP_PASS:-}
+      - SMTP_FROM=${SMTP_FROM:-}
+      - TWILIO_ACCOUNT_SID=${TWILIO_ACCOUNT_SID:-}
+      - TWILIO_AUTH_TOKEN=${TWILIO_AUTH_TOKEN:-}
+      - TWILIO_FROM=${TWILIO_FROM:-}
       # Server binding — 0.0.0.0 inside the container; the ports mapping above
       # restricts host-side exposure to 127.0.0.1
       - HOST=0.0.0.0

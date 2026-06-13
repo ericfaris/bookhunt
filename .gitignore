@@ -1,6 +1,7 @@
 node_modules/
 .env
 history.json
+recipients.json
 .browser-profile/
 *.log
 .DS_Store

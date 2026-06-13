@@ -28,6 +28,30 @@ function clearPremiumCreds() {
   premiumCreds = null;
 }
 
+/**
+ * Verify a saved file is a real EPUB and not a truncated file or an HTML error
+ * page served by the downloader. Checks the ZIP magic (EPUBs are ZIP files) and
+ * a sane size, plus the EPUB `mimetype` header when present (the spec requires
+ * the first ZIP entry to be an uncompressed `mimetype` = application/epub+zip).
+ * Returns { ok, size, epub }.
+ */
+function verifyEpub(filePath) {
+  try {
+    const { size } = fs.statSync(filePath);
+    const fd = fs.openSync(filePath, 'r');
+    const buf = Buffer.alloc(60);
+    fs.readSync(fd, buf, 0, 60, 0);
+    fs.closeSync(fd);
+    const isZip = buf[0] === 0x50 && buf[1] === 0x4b && buf[2] === 0x03 && buf[3] === 0x04;
+    const epub =
+      buf.slice(30, 38).toString('latin1') === 'mimetype' &&
+      buf.slice(38, 58).toString('latin1') === 'application/epub+zip';
+    return { ok: isZip && size > 1024, size, epub };
+  } catch {
+    return { ok: false, size: 0, epub: false };
+  }
+}
+
 function ensureDownloadDir() {
   try {
     fs.mkdirSync(DOWNLOAD_PATH, { recursive: true });
@@ -152,7 +176,15 @@ async function runPremiumDownload(topicUrl) {
       const filename = download.suggestedFilename();
       const savePath = path.join(DOWNLOAD_PATH, filename);
       await download.saveAs(savePath);
-      downloads.push({ filename, savePath, url: link.url, timestamp: new Date().toISOString() });
+      const v = verifyEpub(savePath);
+      downloads.push({
+        filename,
+        savePath,
+        url: link.url,
+        timestamp: new Date().toISOString(),
+        verified: v.ok,
+        size: v.size,
+      });
     } catch (err) {
       if (err.fatal) throw err; // account-level error — abort remaining links
       errors.push({ url: link.url, error: err.message });
@@ -168,4 +200,5 @@ module.exports = {
   hasPremiumCreds,
   clearPremiumCreds,
   premiumDownload,
+  verifyEpub,
 };

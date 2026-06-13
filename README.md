@@ -185,6 +185,26 @@ Cloudflare will send a one-time code to your email on each new session.
 
 ---
 
+## Notifications & Send-to-Kindle
+
+After a **premium** download that passes ePUB **verification** (ZIP magic + size; standard links never touch the server, so they can't be sent), each file shows a **📧 Send to readers** button. Clicking it opens a modal where you pick recipients and send.
+
+For each selected recipient the app can:
+1. **Notify** them — an email to their normal inbox with the cover image and book details (this is the message a person actually reads).
+2. **Push to Kindle** — if the recipient has a `@kindle.com` address set, the `.epub` is emailed there as an attachment; Amazon's Send-to-Kindle delivers it to their device.
+
+Both use Gmail SMTP, sending **from `ericfaris@gmail.com`** (set via `SMTP_FROM`).
+
+### Setup
+1. Create a **Gmail App Password** for the account (requires 2FA) and put it in `SMTP_PASS` in `.env`.
+2. For Kindle push: in **each recipient's** Amazon account → *Manage Your Content & Devices → Preferences → Personal Document Settings* — note their `@kindle.com` address and add `ericfaris@gmail.com` to the **Approved Personal Document E-mail List** (Amazon rejects un-approved senders).
+3. Manage recipients in the Send modal ("Manage recipients"): `{ name, email, kindleEmail?, phone?, carrier? }`, stored in the gitignored `recipients.json`.
+
+### Pluggable channels
+Notification channels live in `src/notify/` and share one contract (`isConfigured`, `supports`, `send`). **Email** is active. **SMS/MMS via Twilio** is scaffolded in `src/notify/twilio.js` but disabled — enable it later by `npm install twilio`, setting `TWILIO_*` in `.env`, and filling in the (already-commented) `send()` body. The registry picks it up automatically; no caller changes. (Note: free carrier email-to-SMS gateways were not used — US carriers are decommissioning them.)
+
+---
+
 ## Environment variables
 
 | Variable | Required | Default | Description |
@@ -199,6 +219,14 @@ Cloudflare will send a one-time code to your email on each new session.
 | `PROFILE_DIR` | No | `.browser-profile/` | Path to the Playwright persistent browser profile |
 | `EBOOKS_FID` | No | `106` | Mobilism eBooks forum id that searches are scoped to |
 | `MOBILISM_BASE` | No | `https://forum.mobilism.org` | Forum base URL |
+| `SMTP_HOST` | No | `smtp.gmail.com` | SMTP host for notifications + Kindle push |
+| `SMTP_PORT` | No | `587` | SMTP port (587 STARTTLS / 465 TLS) |
+| `SMTP_USER` | For email | — | Gmail address (`ericfaris@gmail.com`) |
+| `SMTP_PASS` | For email | — | Gmail **App Password** (needs 2FA) |
+| `SMTP_FROM` | No | `SMTP_USER` | From header; must be on recipients' Amazon approved-sender list |
+| `TWILIO_ACCOUNT_SID` | No | — | Reserved for the future SMS/MMS channel |
+| `TWILIO_AUTH_TOKEN` | No | — | Reserved for the future SMS/MMS channel |
+| `TWILIO_FROM` | No | — | Reserved — Twilio sending number |
 
 ---
 
@@ -208,16 +236,25 @@ Cloudflare will send a one-time code to your email on each new session.
 src/
   server.js       Express app + API routes
   searcher.js     Playwright session, search + crawl logic
-  downloader.js   Premium + standard download logic
+  downloader.js   Premium + standard download logic (+ ePUB verification)
   history.js      Read/write history.json
+  recipients.js   CRUD over recipients.json
+  smtp.js         Shared Gmail SMTP transport
+  kindle.js       Send-to-Kindle push (.epub → @kindle.com)
+  notify/
+    index.js      Channel registry / fan-out
+    email.js      Email notification channel (active)
+    twilio.js     SMS/MMS channel (scaffolded, disabled)
 public/
-  index.html      Search UI
+  index.html      Search UI + send modal
   style.css       Dark mode + layout
-  app.js          Fetch calls + result rendering
+  app.js          Fetch calls + result rendering + send/recipients
+entrypoint.sh     Xvfb + noVNC + app startup
 Dockerfile
 docker-compose.yml
 .env.example
 history.json      Search + download log (created on first run)
+recipients.json   Notification recipients (gitignored)
 .browser-profile/ Playwright persistent session (created on first run)
 ```
 

@@ -10,6 +10,9 @@ const searcher = require('./searcher');
 const downloader = require('./downloader');
 const history = require('./history');
 const amazon = require('./amazon');
+const recipients = require('./recipients');
+const notify = require('./notify');
+const kindle = require('./kindle');
 
 const PORT = process.env.PORT || 3000;
 const app = express();
@@ -108,13 +111,16 @@ app.post('/api/download', async (req, res) => {
   try {
     const result = await downloader.premiumDownload(url);
     for (const d of result.downloads) {
-      history.logDownload({
+      const stored = history.logDownload({
         title: title || result.title,
         filename: d.filename,
         savePath: d.savePath,
         url: d.url,
         mode: 'premium',
+        verified: d.verified,
+        size: d.size,
       });
+      d.id = stored.id; // safe handle the client passes back to /api/send
     }
     res.json(result);
   } catch (err) {
@@ -136,6 +142,86 @@ app.post('/api/download/standard', (req, res) => {
 // --- History ----------------------------------------------------------------
 app.get('/api/history', (_req, res) => {
   res.json({ entries: history.readAll() });
+});
+
+// --- Notification recipients ------------------------------------------------
+app.get('/api/recipients', (_req, res) => {
+  res.json({ recipients: recipients.readAll() });
+});
+
+app.post('/api/recipients', (req, res) => {
+  try {
+    const entry = recipients.add(req.body || {});
+    res.json({ recipient: entry });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.delete('/api/recipients/:id', (req, res) => {
+  const removed = recipients.remove(req.params.id);
+  if (!removed) return res.status(404).json({ error: 'Recipient not found.' });
+  res.json({ ok: true });
+});
+
+// --- Notification channel status (drives the Send UI) -----------------------
+app.get('/api/notify/status', (_req, res) => {
+  res.json({ channels: notify.listChannels(), kindle: kindle.isConfigured() });
+});
+
+// --- Send: notify recipients (+ optional Kindle push) -----------------------
+app.post('/api/send', async (req, res) => {
+  const { downloadId, recipientIds, pushToKindle, channels, book } = req.body || {};
+  if (!downloadId) return res.status(400).json({ error: 'Missing downloadId.' });
+  if (!Array.isArray(recipientIds) || !recipientIds.length) {
+    return res.status(400).json({ error: 'Pick at least one recipient.' });
+  }
+
+  // Resolve the file via history (never trust a client-supplied path) and make
+  // sure it lives inside DOWNLOAD_PATH and is an .epub before attaching it.
+  const entry = history.readAll().find((e) => e.id === downloadId && e.type === 'download');
+  if (!entry || !entry.savePath) return res.status(404).json({ error: 'Download not found.' });
+  const root = path.resolve(downloader.DOWNLOAD_PATH);
+  const filePath = path.resolve(entry.savePath);
+  if (!filePath.startsWith(root + path.sep) || !filePath.toLowerCase().endsWith('.epub')) {
+    return res.status(400).json({ error: 'Refusing to send that file.' });
+  }
+  if (!require('fs').existsSync(filePath)) {
+    return res.status(410).json({ error: 'File no longer exists on disk.' });
+  }
+
+  const recips = recipients.byIds(recipientIds);
+  if (!recips.length) return res.status(404).json({ error: 'No matching recipients.' });
+
+  const bookInfo = { ...(book || {}), filename: entry.filename };
+  const results = [];
+  for (const r of recips) {
+    const out = { id: r.id, name: r.name, kindle: null, channels: [] };
+
+    if (pushToKindle && r.kindleEmail) {
+      try {
+        await kindle.pushToKindle({ kindleEmail: r.kindleEmail, filePath, filename: entry.filename });
+        out.kindle = { ok: true };
+      } catch (err) {
+        out.kindle = { ok: false, error: err.message };
+      }
+    } else if (pushToKindle && !r.kindleEmail) {
+      out.kindle = { ok: false, skipped: true, error: 'no Kindle email' };
+    }
+
+    out.channels = await notify.notify(r, { ...bookInfo, pushedToKindle: !!(out.kindle && out.kindle.ok) }, channels);
+
+    history.logNotify({
+      title: bookInfo.title || entry.title,
+      filename: entry.filename,
+      to: [r.name],
+      kindlePushed: !!(out.kindle && out.kindle.ok),
+      channels: out.channels,
+    });
+    results.push(out);
+  }
+
+  res.json({ results });
 });
 
 // Bind to loopback by default. In Docker the container is isolated by the

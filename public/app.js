@@ -238,6 +238,28 @@ async function premiumDownload(result, btn, dlRow) {
       dlRow.parentElement.append(
         el('div', { className: 'dl-result' }, `✓ ${d.filename} → ${d.savePath}  (${formatTime(d.timestamp)})`)
       );
+      if (d.id && d.verified) {
+        const sendBtn = el('button', { className: 'ghost-btn send-btn', type: 'button' }, '📧 Send to readers');
+        sendBtn.addEventListener('click', () =>
+          openSendModal({
+            downloadId: d.id,
+            book: {
+              title: result.title,
+              author: result.author,
+              cover: result.cover,
+              sourceUrl: result.url,
+              format: result.format,
+              size: result.size,
+              filename: d.filename,
+            },
+          })
+        );
+        dlRow.parentElement.append(sendBtn);
+      } else if (d.id && !d.verified) {
+        dlRow.parentElement.append(
+          el('div', { className: 'dl-result err' }, '⚠ File failed ePUB verification — not offered for sending.')
+        );
+      }
     }
     for (const e of data.errors || []) {
       dlRow.parentElement.append(el('div', { className: 'dl-result err' }, `✕ ${e.error}`));
@@ -296,6 +318,159 @@ $('#credForm').addEventListener('submit', async (e) => {
 
 function openCredModal() { credModal.hidden = false; $('#premUser').focus(); }
 function closeCredModal() { credModal.hidden = true; }
+
+// ---------------------------------------------------------------------------
+// Send / notify
+// ---------------------------------------------------------------------------
+const sendModal = $('#sendModal');
+let sendCtx = null;
+let recipientsCache = [];
+
+async function openSendModal(ctx) {
+  sendCtx = ctx;
+  const b = ctx.book;
+  $('#sendBookLabel').textContent =
+    `${b.title || b.filename}${b.author ? ' — ' + b.author : ''}`;
+  $('#sendResults').innerHTML = '';
+  $('#managePanel').hidden = true;
+  await loadChannels();
+  await loadRecipients();
+  sendModal.hidden = false;
+}
+function closeSendModal() { sendModal.hidden = true; sendCtx = null; }
+
+async function loadChannels() {
+  try {
+    const s = await fetch('/api/notify/status').then((r) => r.json());
+    const on = s.channels.filter((c) => c.configured).map((c) => c.label);
+    const off = s.channels.filter((c) => !c.configured).map((c) => c.label);
+    let msg = on.length
+      ? `Channels: ${on.join(', ')}`
+      : '⚠️ No notification channel configured — set SMTP_* in .env.';
+    if (off.length) msg += ` · inactive: ${off.join(', ')}`;
+    $('#sendChannels').textContent = msg;
+    const push = $('#pushKindle');
+    push.disabled = !s.kindle;
+    if (!s.kindle) push.checked = false;
+  } catch {
+    $('#sendChannels').textContent = '';
+  }
+}
+
+async function loadRecipients() {
+  const data = await fetch('/api/recipients').then((r) => r.json());
+  recipientsCache = data.recipients || [];
+  const list = $('#recipientList');
+  list.innerHTML = '';
+  if (!recipientsCache.length) {
+    list.append(el('p', { className: 'hint' }, 'No recipients yet — add one via “Manage recipients”.'));
+  }
+  for (const r of recipientsCache) {
+    const id = 'rc_' + r.id;
+    const cb = el('input', { type: 'checkbox', id, value: r.id });
+    const tag = r.kindleEmail ? ' 📖' : '';
+    list.append(el('label', { className: 'recip-row', htmlFor: id }, [cb, ` ${r.name} (${r.email})${tag}`]));
+  }
+  renderManageList();
+}
+
+function renderManageList() {
+  const ml = $('#manageList');
+  ml.innerHTML = '';
+  for (const r of recipientsCache) {
+    const del = el('button', { className: 'ghost-btn', type: 'button' }, 'Delete');
+    del.addEventListener('click', async () => {
+      await fetch('/api/recipients/' + r.id, { method: 'DELETE' });
+      await loadRecipients();
+    });
+    ml.append(
+      el('div', { className: 'manage-row' }, [
+        el('span', {}, `${r.name} · ${r.email}${r.kindleEmail ? ' · ' + r.kindleEmail : ''}`),
+        del,
+      ])
+    );
+  }
+}
+
+function renderSendResults(results) {
+  const box = $('#sendResults');
+  box.innerHTML = '';
+  for (const r of results) {
+    const parts = [];
+    if (r.kindle) {
+      parts.push(
+        r.kindle.ok ? 'Kindle ✓' : r.kindle.skipped ? 'Kindle skipped' : 'Kindle ✕ ' + r.kindle.error
+      );
+    }
+    for (const c of r.channels) {
+      parts.push(c.ok ? `${c.channel} ✓` : c.skipped ? `${c.channel} skipped (${c.error})` : `${c.channel} ✕ ${c.error}`);
+    }
+    const ok =
+      (!r.kindle || r.kindle.ok || r.kindle.skipped) && r.channels.every((c) => c.ok || c.skipped);
+    box.append(el('div', { className: 'dl-result' + (ok ? '' : ' err') }, `${r.name}: ${parts.join(' · ')}`));
+  }
+}
+
+$('#sendCancel').addEventListener('click', closeSendModal);
+$('#manageToggle').addEventListener('click', () => {
+  const p = $('#managePanel');
+  p.hidden = !p.hidden;
+});
+
+$('#recipForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const body = {
+    name: $('#rName').value,
+    email: $('#rEmail').value,
+    kindleEmail: $('#rKindle').value,
+    phone: $('#rPhone').value,
+    carrier: $('#rCarrier').value,
+  };
+  const res = await fetch('/api/recipients', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  const data = await res.json();
+  if (!res.ok) { alert(data.error || 'Could not add recipient'); return; }
+  e.target.reset();
+  await loadRecipients();
+});
+
+$('#sendGo').addEventListener('click', async () => {
+  if (!sendCtx) return;
+  const ids = recipientsCache.filter((r) => $('#rc_' + r.id) && $('#rc_' + r.id).checked).map((r) => r.id);
+  const box = $('#sendResults');
+  if (!ids.length) {
+    box.innerHTML = '';
+    box.append(el('div', { className: 'dl-result err' }, 'Pick at least one recipient.'));
+    return;
+  }
+  const go = $('#sendGo');
+  go.disabled = true;
+  go.textContent = 'Sending…';
+  try {
+    const res = await fetch('/api/send', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        downloadId: sendCtx.downloadId,
+        recipientIds: ids,
+        pushToKindle: $('#pushKindle').checked && !$('#pushKindle').disabled,
+        book: sendCtx.book,
+      }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Send failed');
+    renderSendResults(data.results);
+  } catch (err) {
+    box.innerHTML = '';
+    box.append(el('div', { className: 'dl-result err' }, err.message));
+  } finally {
+    go.disabled = false;
+    go.textContent = 'Send';
+  }
+});
 
 // ---------------------------------------------------------------------------
 // History

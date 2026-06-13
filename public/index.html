@@ -81,6 +81,44 @@
     </div>
   </div>
 
+  <!-- Send / notify modal -->
+  <div id="sendModal" class="modal" hidden>
+    <div class="modal-card">
+      <h2>Send to readers</h2>
+      <p class="hint" id="sendBookLabel"></p>
+      <p class="hint" id="sendChannels"></p>
+
+      <div id="recipientList" class="recipient-list"></div>
+
+      <label class="check">
+        <input type="checkbox" id="pushKindle" checked />
+        Also push the ePUB to their Kindle (where a Kindle email is set)
+      </label>
+
+      <div id="sendResults" class="send-results"></div>
+
+      <div class="modal-actions">
+        <button type="button" id="manageToggle" class="ghost-btn">Manage recipients</button>
+        <span class="spacer"></span>
+        <button type="button" id="sendCancel" class="ghost-btn">Close</button>
+        <button type="button" id="sendGo" class="primary-btn">Send</button>
+      </div>
+
+      <div id="managePanel" hidden>
+        <h3>Recipients</h3>
+        <form id="recipForm" class="recip-form">
+          <input id="rName" placeholder="Name" autocomplete="off" />
+          <input id="rEmail" type="email" placeholder="Email (notification)" autocomplete="off" />
+          <input id="rKindle" type="email" placeholder="name@kindle.com (optional)" autocomplete="off" />
+          <input id="rPhone" placeholder="Phone +1… (optional, future SMS)" autocomplete="off" />
+          <input id="rCarrier" placeholder="Carrier (optional)" autocomplete="off" />
+          <button type="submit" class="primary-btn">Add</button>
+        </form>
+        <div id="manageList" class="manage-list"></div>
+      </div>
+    </div>
+  </div>
+
   <script src="app.js"></script>
 </body>
 </html>

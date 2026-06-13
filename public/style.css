@@ -295,3 +295,37 @@ input:focus, select:focus { border-color: var(--accent); }
   .warm-banner .warm-btn { background: #d65a4a; }
   .warm-banner .warm-btn:hover { background: #e06a5a; }
 }
+
+/* --- Send / notify modal -------------------------------------------------- */
+.send-btn { margin: 4px 0 8px; font-size: 0.85rem; }
+.modal-actions .spacer { flex: 1; }
+
+.recipient-list { margin: 0.5rem 0; max-height: 220px; overflow-y: auto; }
+.recip-row {
+  display: flex; align-items: center; gap: 0.5rem;
+  padding: 0.35rem 0.5rem; border-radius: 6px; cursor: pointer;
+}
+.recip-row:hover { background: var(--surface-2); }
+.recip-row input { margin: 0; }
+
+.check {
+  display: flex; align-items: center; gap: 0.5rem;
+  font-size: 0.9rem; color: var(--text-dim); margin: 0.5rem 0;
+}
+
+.send-results { margin: 0.5rem 0; }
+.send-results .dl-result { font-size: 0.85rem; }
+
+#managePanel { border-top: 1px solid var(--border); margin-top: 0.75rem; padding-top: 0.75rem; }
+#managePanel h3 { margin: 0 0 0.5rem; font-size: 0.95rem; }
+.recip-form { display: grid; grid-template-columns: 1fr 1fr; gap: 0.4rem; margin-bottom: 0.6rem; }
+.recip-form input {
+  padding: 0.4rem 0.5rem; border: 1px solid var(--border);
+  border-radius: 6px; background: var(--surface); color: var(--text);
+}
+.recip-form button { grid-column: 1 / -1; }
+.manage-list { display: flex; flex-direction: column; gap: 0.3rem; }
+.manage-row {
+  display: flex; align-items: center; justify-content: space-between; gap: 0.5rem;
+  font-size: 0.85rem; padding: 0.3rem 0.4rem; border-radius: 6px; background: var(--surface-2);
+}
