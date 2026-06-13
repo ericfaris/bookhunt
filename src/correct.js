@@ -29,19 +29,19 @@ const GOOGLE_BOOKS_URL = 'https://www.googleapis.com/books/v1/volumes';
 const OPEN_LIBRARY_URL = 'https://openlibrary.org/search.json';
 const LOOKUP_TIMEOUT_MS = 4000;
 
-// Levenshtein-ratio threshold for accepting a field correction. 0.7 keeps
+// Levenshtein-ratio threshold for accepting a field correction. 0.75 keeps
 // typo-level edits ("hary poter" → "harry potter", ratio ≈ 0.83) while rejecting
 // genuinely different titles (a wrong-book match scores far lower).
-const ACCEPT_THRESHOLD = 0.7;
+const ACCEPT_THRESHOLD = 0.75;
 
 // When the OTHER field corroborates strongly (e.g. an exact author match), the
 // candidate is high-confidence regardless, so a borderline field correction is
-// accepted at a looser threshold. This catches near-typos that just miss 0.7
+// accepted at a looser threshold. This catches near-typos that just miss 0.75
 // ("Mad Maple" → "Mad Mabel", ratio ≈ 0.67) when the author confirms the book.
-const LOOSE_THRESHOLD = 0.5;
+const LOOSE_THRESHOLD = 0.6;
 
 // How strongly the other field must match to grant the loosening above.
-const CORROBORATE_THRESHOLD = 0.8;
+const CORROBORATE_THRESHOLD = 0.85;
 
 /** Lowercase, fold punctuation to spaces, collapse runs, trim — so comparisons
  *  ignore case/punctuation differences ("J.K. Rowling" ≈ "j k rowling"). */
@@ -84,22 +84,51 @@ function similarity(a, b) {
 }
 
 /**
- * How well a candidate title corresponds to the typed term, in [0,1]. Same
- * notion `correctedField` gates on: best of the full-string similarity and the
- * candidate's leading-token prefix (so "Harry Potter and the…" still scores high
- * for "Hary Poter"). Used to pick the best of several search hits — providers
- * often return an author-prefixed or study-guide edition first.
+ * Generate plausible "what the user actually meant" forms of a catalogue title.
+ * Book APIs decorate titles in ways the typed query never will — subtitles after
+ * a colon, edition/language tags in parens ("(Tamil)"), trailing series numbers
+ * ("… and Roses 7"), or the full canonical title when the user typed a short form
+ * ("Harry Potter and the …"). We compare ALL of these against the typed term and
+ * keep whichever is closest, so a junk tail is dropped while a legitimately longer
+ * title (a mid-word omission like "It Ends Us" → "It Ends with Us") is preserved.
  */
-function matchScore(orig, cand) {
+function candidateVariants(cand, origTokenCount) {
+  const base = cleanWhitespace(cand);
+  const v = new Set();
+  if (!base) return [];
+  v.add(base);
+  v.add(base.split(/\s*[:–—]\s+/)[0].trim()); // drop subtitle after colon / spaced dash
+  v.add(base.replace(/\s*[([][^)\]]*[)\]]\s*$/, '').trim()); // drop trailing (paren)/[bracket]
+  v.add(base.replace(/\s+\d{1,4}\s*$/, '').trim()); // drop a trailing series number
+  const words = base.split(' '); // leading tokens = typed-length canonical prefix
+  if (origTokenCount && words.length > origTokenCount) v.add(words.slice(0, origTokenCount).join(' '));
+  return [...v].filter(Boolean);
+}
+
+/**
+ * Best { score, variant } for a candidate against the typed term: the variant
+ * (see candidateVariants) whose normalized form is closest to the original, with
+ * its similarity in [0,1]. The single source of truth for both candidate ranking
+ * (pickBest) and the per-field correction gate (correctedField).
+ */
+function bestVariant(orig, cand) {
   const no = normalize(orig);
-  const nc = normalize(cand);
-  if (!no || !nc) return 0;
-  if (no === nc) return 1;
-  let best = similarity(no, nc);
-  const ot = no.split(' ').length;
-  const cw = nc.split(' ');
-  if (cw.length > ot) best = Math.max(best, similarity(no, cw.slice(0, ot).join(' ')));
-  return best;
+  if (!no) return { score: 0, variant: cleanWhitespace(cand) };
+  let best = '';
+  let bestScore = -1;
+  for (const variant of candidateVariants(cand, no.split(' ').length)) {
+    const score = similarity(no, normalize(variant));
+    if (score > bestScore) {
+      bestScore = score;
+      best = variant;
+    }
+  }
+  return { score: Math.max(bestScore, 0), variant: best };
+}
+
+/** How well a candidate corresponds to the typed term, in [0,1]. */
+function matchScore(orig, cand) {
+  return bestVariant(orig, cand).score;
 }
 
 /** Pick the element whose `getTitle(el)` best matches `origTitle`; the first
@@ -115,34 +144,17 @@ function pickBest(origTitle, list, getTitle) {
 /**
  * Decide the corrected value for a single field. Pure.
  *   - Empty original → left empty (we correct typos, we don't invent fields).
+ *   - Pick the closest candidate variant (drops junk tails, keeps real words).
  *   - Identical ignoring case/punctuation → original kept verbatim (no noise).
- *   - Strong full-string match → take the candidate's canonical spelling.
- *   - Otherwise compare the candidate's LEADING tokens (Google often returns a
- *     longer canonical title, e.g. "Harry Potter and the …"); if those match the
- *     typed term, return just that prefix so the search stays close to intent.
+ *   - Close enough (≥ threshold) → take that variant's spelling.
  *   - Too different → original untouched (likely a wrong-book match).
  */
 function correctedField(orig, cand, threshold = ACCEPT_THRESHOLD) {
   const o = String(orig || '');
   if (!o) return o; // never fill a field the user left blank
-  const candClean = cleanWhitespace(cand);
-  if (!candClean) return o;
-
-  const no = normalize(o);
-  const nc = normalize(candClean);
-  if (!no || no === nc) return o; // already a match (ignoring case/punct)
-
-  if (similarity(no, nc) >= threshold) return candClean;
-
-  const origTokenCount = no.split(' ').length;
-  const candWords = candClean.split(' ');
-  if (candWords.length > origTokenCount) {
-    const prefix = candWords.slice(0, origTokenCount).join(' ');
-    const np = normalize(prefix);
-    if (np === no) return o; // prefix is just a re-cased original — not a correction
-    if (similarity(no, np) >= threshold) return prefix;
-  }
-  return o; // not confident — leave the typed term alone
+  const { score, variant } = bestVariant(o, cand);
+  if (!variant || normalize(variant) === normalize(o)) return o; // nothing / re-cased only
+  return score >= threshold ? variant : o;
 }
 
 /** The other field gives independent evidence this is the right book when it
@@ -235,21 +247,35 @@ async function lookupOpenLibrary({ title, author }, opts = {}) {
   };
 }
 
+/** Combined evidence that a candidate is the typed book: the mean of the
+ *  per-field match scores over the fields the user actually supplied. Pure. */
+function combinedScore(original, cand) {
+  if (!cand) return 0;
+  const scores = [];
+  if (original.title) scores.push(matchScore(original.title, cand.title));
+  if (original.author) scores.push(matchScore(original.author, cand.author));
+  return scores.length ? scores.reduce((a, b) => a + b, 0) / scores.length : 0;
+}
+
 /**
- * Default lookup: try each source in order, returning the first usable
- * candidate. A source that throws (quota/timeout) is skipped so a later one can
- * still succeed; all-failed yields null (→ caller fails open to the original).
+ * Default lookup: query every source in PARALLEL and return the candidate that
+ * best matches BOTH typed fields. Querying both (rather than stopping at the
+ * first hit) means a source that returns a junk/wrong top result no longer
+ * shadows a better answer from the other. A source that throws (quota/timeout)
+ * is ignored; all-failed yields null (→ caller fails open to the original).
  */
 async function defaultLookup(original, opts = {}) {
-  for (const src of [lookupGoogleBooks, lookupOpenLibrary]) {
-    try {
-      const c = await src(original, opts);
-      if (c && (c.title || c.author)) return c;
-    } catch {
-      /* try the next source */
-    }
-  }
-  return null;
+  const settled = await Promise.allSettled([
+    lookupGoogleBooks(original, opts),
+    lookupOpenLibrary(original, opts),
+  ]);
+  const candidates = settled
+    .filter((r) => r.status === 'fulfilled' && r.value && (r.value.title || r.value.author))
+    .map((r) => r.value);
+  if (!candidates.length) return null;
+  return candidates.reduce((best, c) =>
+    combinedScore(original, c) > combinedScore(original, best) ? c : best
+  );
 }
 
 /**
@@ -284,6 +310,9 @@ module.exports = {
   normalize,
   similarity,
   matchScore,
+  bestVariant,
+  candidateVariants,
+  combinedScore,
   pickBest,
   levenshtein,
   lookupGoogleBooks,

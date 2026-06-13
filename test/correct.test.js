@@ -13,6 +13,7 @@ const {
   pickBest,
   defaultLookup,
   lookupGoogleBooks,
+  combinedScore,
 } = require('../src/correct');
 
 // --- normalize / similarity -------------------------------------------------
@@ -65,6 +66,32 @@ test('lookupGoogleBooks: picks the best-matching item, not items[0]', async () =
   const c = await lookupGoogleBooks({ title: 'The Great Gatsbi', author: '' }, { fetchImpl });
   assert.equal(c.title, 'The Great Gatsby');
   assert.equal(c.source, 'google-books');
+});
+
+// --- candidate variants: junk tails dropped, real words kept ----------------
+
+test('correctedField: drops a trailing edition/language parenthetical', () => {
+  assert.equal(correctedField('Atomik Habit', 'Atomic Habits (Tamil)'), 'Atomic Habits');
+});
+
+test('correctedField: drops a trailing series number', () => {
+  assert.equal(
+    correctedField('A Court of Thorn and Rose', 'A Court of Thorns and Roses 7'),
+    'A Court of Thorns and Roses'
+  );
+});
+
+test('correctedField: keeps a number that is part of the title (no over-trim)', () => {
+  // "Fahrenheit 451" must NOT collapse to "Fahrenheit" — the full form matches
+  // the typed term better, so it wins.
+  assert.equal(correctedField('Farenheit 451', 'Fahrenheit 451'), 'Fahrenheit 451');
+});
+
+test('correctedField: preserves a legitimately longer title (mid-word omission)', () => {
+  // The user dropped an interior word; the candidate is correctly longer, so the
+  // full form must survive (with corroboration loosening the gate to 0.6).
+  assert.equal(correctedField('It Ends Us', 'It Ends with Us', 0.6), 'It Ends with Us');
+  assert.equal(correctedField('The God of Woods', 'The God of the Woods', 0.6), 'The God of the Woods');
 });
 
 // --- correctedField (the per-field gate) ------------------------------------
@@ -268,4 +295,40 @@ test('defaultLookup: prefers Google Books when it answers', async () => {
 test('defaultLookup: returns null when every source fails (→ fail open)', async () => {
   const fetchImpl = async () => fakeRes(500, {});
   assert.equal(await defaultLookup({ title: 'X', author: '' }, { fetchImpl }), null);
+});
+
+test('defaultLookup: picks the source whose candidate matches BOTH fields best', async () => {
+  // Google returns a wrong-but-present book; Open Library returns the right one.
+  // Querying both (not stopping at Google) lets the better answer win.
+  const fetchImpl = async (url) => {
+    if (url.includes('googleapis.com')) {
+      return fakeRes(200, { items: [{ volumeInfo: { title: 'Some Other Book', authors: ['Wrong Author'] } }] });
+    }
+    return fakeRes(200, { docs: [{ title: 'Iron Flame', author_name: ['Rebecca Yarros'] }] });
+  };
+  const c = await defaultLookup({ title: 'Iron Flames', author: 'Rebecka Yarros' }, { fetchImpl });
+  assert.equal(c.title, 'Iron Flame');
+  assert.equal(c.source, 'open-library');
+});
+
+// --- combinedScore ----------------------------------------------------------
+
+test('combinedScore: averages the supplied fields; ignores blank ones', () => {
+  const strong = combinedScore({ title: 'Iron Flames', author: 'Rebecka Yarros' }, { title: 'Iron Flame', author: 'Rebecca Yarros' });
+  const weak = combinedScore({ title: 'Iron Flames', author: 'Rebecka Yarros' }, { title: 'Cooking 101', author: 'Nobody' });
+  assert.ok(strong > 0.8 && strong > weak);
+  // title-only request → author not factored in
+  assert.equal(combinedScore({ title: 'Dune', author: '' }, { title: 'Dune', author: 'Whoever' }), 1);
+});
+
+// --- end-to-end reconcile: both fields misspelled ---------------------------
+
+test('reconcile: corrects BOTH fields when each corroborates the other', () => {
+  const out = reconcile(
+    { title: 'Atomik Habit', author: 'James Cleer' },
+    { title: 'Atomic Habits (Tamil)', author: 'James Clear' }
+  );
+  assert.equal(out.corrected, true);
+  assert.equal(out.title, 'Atomic Habits');
+  assert.equal(out.author, 'James Clear');
 });
