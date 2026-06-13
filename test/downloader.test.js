@@ -6,8 +6,22 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 
+const { writeEpub: writeRealEpub } = require('./helpers');
+
 const downloader = require('../src/downloader');
-const { verifyEpub, sanitizeUrl, cleanError, isSafeEpubPath } = downloader;
+const {
+  verifyEpub,
+  verifyBook,
+  sanitizeUrl,
+  cleanError,
+  isSafeEpubPath,
+  looksLikeHtmlBuffer,
+  isHtmlFile,
+  fsSafe,
+  extractYear,
+  cleanBookTitle,
+  buildBookFilename,
+} = downloader;
 
 // Build a buffer that looks like a real EPUB: ZIP magic at 0, and the
 // uncompressed `mimetype` entry the spec requires, padded past the 1 KB floor.
@@ -79,4 +93,118 @@ test('isSafeEpubPath: rejects traversal, outside-root, and non-epub', () => {
   assert.equal(isSafeEpubPath('/downloads/book.rar', '/downloads'), false);
   assert.equal(isSafeEpubPath('', '/downloads'), false);
   assert.equal(isSafeEpubPath('/downloads/book.epub', ''), false);
+});
+
+// --- Regression guards: HTML pages must never count as a downloaded file -----
+// (Case 3: a host served its own landing page; we saved 38 KB of HTML and
+// reported it as a successful download.)
+test('looksLikeHtmlBuffer: detects HTML landing/error pages', () => {
+  assert.equal(looksLikeHtmlBuffer(Buffer.from('<!DOCTYPE html><html>...')), true);
+  assert.equal(looksLikeHtmlBuffer(Buffer.from('  \n<html lang="en">')), true);
+  assert.equal(looksLikeHtmlBuffer(Buffer.from('<HEAD><title>404</title>')), true);
+});
+
+test('looksLikeHtmlBuffer: does NOT flag real book/archive bytes', () => {
+  assert.equal(looksLikeHtmlBuffer(Buffer.from('PK\x03\x04', 'latin1')), false); // epub/zip
+  assert.equal(looksLikeHtmlBuffer(Buffer.from('%PDF-1.7\n', 'latin1')), false); // pdf
+  assert.equal(looksLikeHtmlBuffer(Buffer.alloc(0)), false);
+});
+
+test('isHtmlFile: flags .html/.htm by name and HTML by content', () => {
+  // by extension (the case-3 filename was "...pdf.html")
+  const named = tmp('Ranger.Rick.2026.pdf.html', Buffer.from('PK\x03\x04anything'));
+  assert.equal(isHtmlFile(named, 'Ranger.Rick.2026.pdf.html'), true);
+  // by content even with a book-looking extension
+  const htmlAsEpub = tmp('fake.epub', Buffer.from('<!doctype html><html></html>'));
+  assert.equal(isHtmlFile(htmlAsEpub, 'fake.epub'), true);
+});
+
+test('isHtmlFile: passes a real epub through', () => {
+  const real = tmp('real.epub', epubBuffer());
+  assert.equal(isHtmlFile(real, 'real.epub'), false);
+});
+
+// --- Filename building: "Title [Author] (Year).ext" --------------------------
+test('fsSafe: strips filesystem-illegal characters and tidies whitespace', () => {
+  assert.equal(fsSafe('a/b\\c:d*e?f"g<h>i|j'), 'abcdefghij');
+  assert.equal(fsSafe('  spaced   out  '), 'spaced out');
+  assert.equal(fsSafe('trailing dots...'), 'trailing dots'); // no trailing dot (Windows)
+  assert.equal(fsSafe('keep-hyphens & co'), 'keep-hyphens & co');
+  assert.equal(fsSafe(null), '');
+});
+
+test('extractYear: finds a 19xx/20xx year, else null', () => {
+  assert.equal(extractYear('Some Book (2024) Retail'), '2024');
+  assert.equal(extractYear('Published 1999 edition'), '1999');
+  assert.equal(extractYear('no year here'), null);
+  assert.equal(extractYear('version 3000 not a year'), null);
+});
+
+test('cleanBookTitle: drops "by Author" tail and trailing format/year parentheticals', () => {
+  assert.equal(cleanBookTitle('The Great Book by Jane Doe (2024, Penguin)'), 'The Great Book');
+  assert.equal(cleanBookTitle('Some Title - ePUB'), 'Some Title');
+  assert.equal(cleanBookTitle('Another Title (Retail EPUB)'), 'Another Title');
+  assert.equal(cleanBookTitle('Plain Title'), 'Plain Title');
+  // a colon subtitle is kept (unlike Amazon's cleanTitle)
+  assert.equal(cleanBookTitle('Main: A Subtitle'), 'Main: A Subtitle');
+});
+
+test('buildBookFilename: composes Title [Author] (Year) and keeps the served extension', () => {
+  assert.equal(
+    buildBookFilename({ title: 'The Great Book by Jane Doe (2024)', author: 'Jane Doe' }, 'rawfile.epub'),
+    'The Great Book [Jane Doe] (2024).epub'
+  );
+  // non-epub extension is preserved
+  assert.equal(
+    buildBookFilename({ title: 'Manual (2021)', author: 'Acme' }, 'host-name-123.pdf'),
+    'Manual [Acme] (2021).pdf'
+  );
+});
+
+test('buildBookFilename: omits author/year when absent', () => {
+  assert.equal(buildBookFilename({ title: 'Just A Title' }, 'x.epub'), 'Just A Title.epub');
+  assert.equal(
+    buildBookFilename({ title: 'Titled', author: 'Bob' }, 'x.mobi'),
+    'Titled [Bob].mobi'
+  );
+});
+
+test('buildBookFilename: falls back to the sanitized original name when title is empty', () => {
+  assert.equal(buildBookFilename({ title: '' }, 'fallback-name.epub'), 'fallback-name.epub');
+  assert.equal(buildBookFilename(null, ''), 'download.epub'); // nothing at all
+});
+
+// --- verifyBook: confirm it's the CORRECT book, not just a valid ZIP ---------
+test('verifyBook: embedded title matching the search → titleMatch true', () => {
+  const p = writeRealEpub('book.epub', 'The Great Book', 'Jane Doe');
+  const v = verifyBook(p, 'Great Book');
+  assert.equal(v.ok, true);
+  assert.equal(v.epub, true);
+  assert.equal(v.embeddedTitle, 'The Great Book');
+  assert.equal(v.embeddedAuthor, 'Jane Doe');
+  assert.equal(v.titleMatch, true);
+});
+
+test('verifyBook: embedded title NOT matching the search → titleMatch false', () => {
+  const p = writeRealEpub('book.epub', 'Some Other Novel', 'Bob');
+  const v = verifyBook(p, 'The Great Book');
+  assert.equal(v.ok, true);
+  assert.equal(v.embeddedTitle, 'Some Other Novel');
+  assert.equal(v.titleMatch, false);
+});
+
+test('verifyBook: no expected title → titleMatch null but embedded title still read', () => {
+  const p = writeRealEpub('book.epub', 'Standalone Title', 'A');
+  const v = verifyBook(p, '');
+  assert.equal(v.embeddedTitle, 'Standalone Title');
+  assert.equal(v.titleMatch, null);
+});
+
+test('verifyBook: a plain (non-ePUB) zip → no embedded title, titleMatch null', () => {
+  const zip = Buffer.concat([Buffer.from('PK\x03\x04', 'latin1'), Buffer.alloc(2000, 0)]);
+  const v = verifyBook(tmp('archive.zip', zip), 'Anything');
+  assert.equal(v.ok, true); // structurally a valid zip
+  assert.equal(v.epub, false);
+  assert.equal(v.embeddedTitle, '');
+  assert.equal(v.titleMatch, null);
 });

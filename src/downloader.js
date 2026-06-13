@@ -2,7 +2,8 @@
 
 const fs = require('fs');
 const path = require('path');
-const { getSession, ensureReady, enqueue, randomDelay, fetchDetail } = require('./searcher');
+const { getSession, ensureReady, enqueue, randomDelay, fetchDetail, fuzzyMatch } = require('./searcher');
+const { readEpubMetadata } = require('./epub');
 
 const DOWNLOAD_PATH = process.env.DOWNLOAD_PATH || 'C:\\temp';
 const PREMIUM_BASE =
@@ -61,6 +62,39 @@ function verifyEpub(filePath) {
   }
 }
 
+/**
+ * Verify a saved file is the *correct book*, not just a valid ZIP: run the
+ * structural check (verifyEpub), then dive into the ePUB and compare its
+ * embedded <dc:title> against the title we searched for.
+ *
+ * Returns { ok, size, epub, embeddedTitle, embeddedAuthor, titleMatch } where
+ * `titleMatch` is true / false / null (null = couldn't read the title, e.g. a
+ * non-ePUB format or an unreadable package — so there's nothing to compare).
+ */
+function verifyBook(filePath, expectedTitle) {
+  const v = verifyEpub(filePath);
+  const out = {
+    ok: v.ok,
+    size: v.size,
+    epub: v.epub,
+    embeddedTitle: '',
+    embeddedAuthor: '',
+    titleMatch: null,
+  };
+  if (!v.ok || !v.epub) return out; // not an ePUB → no embedded metadata to read
+  const meta = readEpubMetadata(filePath);
+  if (!meta.ok || !meta.title) return out; // couldn't read it — leave titleMatch null
+  out.embeddedTitle = meta.title;
+  out.embeddedAuthor = meta.author;
+  if (expectedTitle) {
+    // fuzzyMatch (from searcher) requires every query token to appear in the
+    // target; check both directions so a longer/shorter side still matches.
+    out.titleMatch =
+      fuzzyMatch(expectedTitle, meta.title) || fuzzyMatch(meta.title, expectedTitle);
+  }
+  return out;
+}
+
 function ensureDownloadDir() {
   try {
     fs.mkdirSync(DOWNLOAD_PATH, { recursive: true });
@@ -87,6 +121,13 @@ async function ensurePremiumLogin(page) {
     page.click('input[name="submit"], input[type="submit"], button[type="submit"]'),
   ]);
   await page.waitForTimeout(1000);
+  // If the password field is STILL present after submitting, the credentials were
+  // rejected. (Detecting this precisely — rather than scanning the page for words
+  // like "invalid"/"incorrect" — avoids false rejections, since downloader pages
+  // use those words for bad links/files too.) This is account-level, so fatal.
+  if (await page.$('input[name="password"]')) {
+    throw fatalError('Premium login was rejected — check MOBILISM_PREMIUM_USER / PREMIUM_PASS.');
+  }
 }
 
 /**
@@ -108,9 +149,8 @@ async function assertAccountActive(page) {
       `Premium account is expired${m ? ` (expired ${m[1]})` : ''}. Renew it on Mobilism to download.`
     );
   }
-  if (/incorrect|invalid|wrong (?:username|password)/i.test(body)) {
-    throw fatalError('Premium login was rejected — check MOBILISM_PREMIUM_USER / PREMIUM_PASS.');
-  }
+  // Login-rejection is detected precisely in ensurePremiumLogin (form persists),
+  // not by scanning page text here — too many false positives otherwise.
 }
 
 /** Trim stray quotes/encoded-quotes/brackets that some downloader markup leaves
@@ -122,6 +162,77 @@ function sanitizeUrl(u) {
 /** Tidy a downloader error string for display (e.g. `title>Not Found`). */
 function cleanError(t) {
   return String(t || '').replace(/\s+/g, ' ').replace(/^title>?\s*/i, '').trim() || 'download failed';
+}
+
+/** True if a buffer's start looks like an HTML document (a landing/error page,
+ *  not a real book file — real epubs are ZIPs, PDFs start with %PDF, etc.). */
+function looksLikeHtmlBuffer(buf) {
+  const head = (buf || Buffer.alloc(0)).slice(0, 256).toString('latin1').trimStart().toLowerCase();
+  return head.startsWith('<!doctype html') || head.startsWith('<html') || head.startsWith('<head');
+}
+
+/** True if a saved file is actually an HTML page (by extension or by content). */
+function isHtmlFile(filePath, filename) {
+  if (/\.html?$/i.test(filename || filePath || '')) return true;
+  try {
+    const fd = fs.openSync(filePath, 'r');
+    const b = Buffer.alloc(256);
+    const n = fs.readSync(fd, b, 0, 256, 0);
+    fs.closeSync(fd);
+    return looksLikeHtmlBuffer(b.slice(0, n));
+  } catch {
+    return false;
+  }
+}
+
+/** Strip characters illegal in Windows/Unix filenames, collapse whitespace, and
+ *  trim trailing dots/spaces (illegal as a Windows filename ending). */
+function fsSafe(s) {
+  return String(s || '')
+    .replace(/[\\/:*?"<>|\u0000-\u001f]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/[. ]+$/, '');
+}
+
+/** First standalone 4-digit year (19xx/20xx) in a string, or null. */
+function extractYear(text) {
+  const m = String(text || '').match(/\b(?:19|20)\d{2}\b/);
+  return m ? m[0] : null;
+}
+
+/** Reduce a forum topic title to just the work's title for a filename: drop the
+ *  trailing "by Author…" (author is bracketed separately) and any trailing
+ *  format/edition/year parenthetical or dash-delimited format tail. */
+function cleanBookTitle(t) {
+  let s = String(t || '');
+  s = s.replace(/\s+by\s+.+$/i, ''); // "… by Jane Doe (2024, Pub)"
+  s = s.replace(/\s*[-–—]\s*(?:retail|epub|pdf|mobi|azw3?|m4b|mp3|flac|cbr|cbz)\b.*$/i, '');
+  s = s.replace(
+    /\s*[([][^)\]]*\b(?:retail|epub|pdf|mobi|azw3?|edition|version|19\d{2}|20\d{2})\b[^)\]]*[)\]]\s*$/i,
+    ''
+  );
+  return s.replace(/\s+/g, ' ').trim();
+}
+
+/**
+ * Build a tidy "Title [Author] (Year).ext" filename from book metadata,
+ * preserving the served file's extension. Author and year are included only
+ * when present. Falls back to a sanitized form of the original name when there
+ * is no usable title.
+ */
+function buildBookFilename(meta, originalName) {
+  const m = meta || {};
+  const ext = (path.extname(originalName || '') || '.epub').toLowerCase();
+  const title = fsSafe(cleanBookTitle(m.title));
+  if (!title) return fsSafe(originalName) || `download${ext}`;
+  const author = fsSafe(m.author);
+  const year = extractYear(m.title);
+  let name = title;
+  if (author) name += ` [${author}]`;
+  if (year) name += ` (${year})`;
+  if (name.length > 200) name = name.slice(0, 200).trim(); // filesystem name limit
+  return name + ext;
 }
 
 /** True only for a real .epub path that resolves inside `root` (no traversal). */
@@ -137,14 +248,17 @@ function isSafeEpubPath(savePath, root) {
  * write it to disk. Used when navigating to the file didn't surface a Playwright
  * download event (some hosts serve inline rather than as an attachment).
  */
-async function saveViaRequest(page, fileUrl) {
+async function saveViaRequest(page, fileUrl, meta) {
   try {
     const resp = await page.context().request.get(fileUrl, { timeout: DOWNLOAD_TIMEOUT });
     if (!resp.ok()) return null;
     const buf = await resp.body();
     if (!buf || buf.length < 1024) return null; // too small to be a real file
+    if (looksLikeHtmlBuffer(buf)) return null; // an HTML landing/error page, not the file
     const base = (fileUrl.split('/').pop() || 'download').split('?')[0];
-    const filename = decodeURIComponent(base).replace(/[\r\n"]/g, '') || 'download';
+    const original = decodeURIComponent(base).replace(/[\r\n"]/g, '') || 'download';
+    if (/\.html?$/i.test(original)) return null; // page, not a file
+    const filename = buildBookFilename(meta, original); // tidy "Title [Author] (Year).ext"
     const savePath = path.join(DOWNLOAD_PATH, filename);
     fs.writeFileSync(savePath, buf);
     return { filename, savePath };
@@ -154,22 +268,24 @@ async function saveViaRequest(page, fileUrl) {
 }
 
 /**
- * Premium download path. Opens the topic, finds every postlink associated with
- * a Premium icon, and downloads each through the amember downloader, saving to
- * DOWNLOAD_PATH.
+ * Premium download path. Opens the topic, finds the postlinks associated with a
+ * Premium icon, and treats them as MIRRORS of one file: it tries each through
+ * the amember downloader in order and stops at the first that downloads
+ * successfully, saving to DOWNLOAD_PATH. Failed mirrors are recorded in `errors`.
  *
- * Returns { downloads: [{ filename, savePath, url, timestamp }], errors: [...] }
+ * Returns { downloads: [{ filename, savePath, url, timestamp, verified, size }], errors: [...] }
  */
-function premiumDownload(topicUrl) {
+function premiumDownload(topicUrl, onProgress) {
   // Queued: the browser page is shared with searches, so download runs must
   // wait their turn rather than interleave navigations.
-  return enqueue(() => runPremiumDownload(topicUrl));
+  return enqueue(() => runPremiumDownload(topicUrl, onProgress));
 }
 
-async function runPremiumDownload(topicUrl) {
+async function runPremiumDownload(topicUrl, onProgress = () => {}) {
   if (!premiumCreds) throw new Error('Premium credentials not set for this session');
   ensureDownloadDir();
 
+  onProgress({ step: 'reading-post' });
   const { page } = await getSession();
   await ensureReady(page); // forum login required to read the topic (throws needWarm if stale)
   const detail = await fetchDetail(page, topicUrl);
@@ -178,144 +294,194 @@ async function runPremiumDownload(topicUrl) {
     throw new Error('No Premium icon found on this post — use the standard links');
   }
 
-  const downloads = [];
-  const errors = [];
-
   // Only run links that have a premium icon next to them; if the adjacency
   // heuristic found none (markup variant), fall back to all postlinks. The
   // links themselves change between visits, so they're always scraped fresh
   // from the post above — never cached.
   const flagged = detail.postlinks.filter((l) => l.premium);
   const premiumLinks = flagged.length ? flagged : detail.postlinks;
+  onProgress({ step: 'mirrors-found', total: premiumLinks.length });
 
-  for (const link of premiumLinks) {
-    await randomDelay();
-    const target = `${PREMIUM_BASE}?dl=${encodeURIComponent(link.url)}`;
+  // Carried into each mirror so saved files get a tidy "Title [Author] (Year)"
+  // name instead of the host's raw filename, and so verification can confirm
+  // the embedded ePUB title matches what we searched for.
+  const meta = { title: detail.title, author: detail.author };
+  const { downloads, errors } = await runMirrors(
+    premiumLinks,
+    (link) => attemptLink(page, link, meta, onProgress),
+    onProgress
+  );
+  return { downloads, errors, title: detail.title };
+}
+
+/**
+ * Mirror orchestration — separated from Playwright so it can be unit-tested.
+ * Tries each link via `attempt(link)`, STOPS at the first that returns a saved
+ * file, collects failures in `errors`, and lets a fatal (account-level) error
+ * abort the whole run. `attempt` resolves to { filename, savePath, verified,
+ * size } on success, or throws on failure (set err.fatal = true to abort).
+ * `onProgress` (optional) is notified as each mirror is tried / fails.
+ */
+async function runMirrors(links, attempt, onProgress = () => {}) {
+  const downloads = [];
+  const errors = [];
+  for (let i = 0; i < links.length; i++) {
+    const link = links[i];
+    onProgress({ step: 'mirror', index: i + 1, total: links.length, host: link.host });
     try {
-      // The amember downloader ends in one of several terminal states:
-      //  (a) it streams the file immediately (download event fires);
-      //  (b) a transload progress page that finishes "Saved!" and meta-refreshes
-      //      to the finished file at .../app/files/... (can take minutes);
-      //  (c) a direct "Download: <a download href=.../app/files/...>" link;
-      //  (d) an error like "Not Found" (no download event ever fires).
-      // Listen for a download up front, then poll for whichever state appears.
-      const downloadPromise = page.waitForEvent('download', { timeout: DOWNLOAD_TIMEOUT }).catch(() => null);
-      await page.goto(target, { waitUntil: 'domcontentloaded' }).catch(() => {});
-
-      await ensurePremiumLogin(page);
-      await assertAccountActive(page); // throws fatal on expired/invalid account
-
-      let download = null;
-      let fileUrl = null;
-      let errText = '';
-      const startedAt = Date.now();
-      const deadline = startedAt + DOWNLOAD_TIMEOUT;
-      while (Date.now() < deadline) {
-        // A download may already be underway (direct stream, or the transload
-        // page's meta-refresh navigating to the finished file).
-        download = await Promise.race([downloadPromise, page.waitForTimeout(1000).then(() => null)]);
-        if (download) break;
-
-        // Host pages vary, so detect the served file generically: an explicit
-        // download link, a meta-refresh, a link into the downloader's files/
-        // dir, or any link whose URL ends in a known file extension.
-        const probe = await page.evaluate(({ extSrc, errSrc }) => {
-          const extRe = new RegExp(extSrc, 'i');
-          const errRe = new RegExp(errSrc, 'i');
-          const abs = (a) => (a && a.getAttribute('href') ? a.href : null);
-          let url = abs(document.querySelector('a[download][href]'));
-          if (!url) {
-            const m = document.querySelector('meta[http-equiv="refresh" i]');
-            const c = m ? m.getAttribute('content') || '' : '';
-            const i = c.toLowerCase().indexOf('url=');
-            if (i >= 0) url = c.slice(i + 4).trim();
-          }
-          if (!url) url = abs(document.querySelector('a[href*="/app/files/"]'));
-          if (!url) {
-            for (const a of document.querySelectorAll('a[href]')) {
-              if (extRe.test(a.getAttribute('href') || '') || extRe.test(a.href)) { url = a.href; break; }
-            }
-          }
-          const errEl = document.querySelector('.htmlerror, .error, .alert');
-          const body = (document.body && document.body.innerText) || '';
-          return {
-            url,
-            errEl: errEl ? errEl.textContent.trim() : '',
-            // Error words anywhere on the page — fallback for hosts that don't
-            // use a recognizable error element.
-            bodyErr: errRe.test(body),
-            // "complete" markers seen across hosts — keep waiting if present but
-            // the file link hasn't rendered yet.
-            saved: /saved!|download complete|100%\s*downloaded/i.test(body),
-          };
-        }, { extSrc: FILE_EXT_RE.source, errSrc: ERROR_RE.source })
-          .catch(() => ({ url: null, errEl: '', bodyErr: false, saved: false }));
-
-        if (probe.url) { fileUrl = sanitizeUrl(probe.url); break; }
-        // No file link, a "complete" marker absent, and an error showing (either
-        // in a panel or in the page text) → the host failed. Fail fast instead of
-        // waiting out the whole timeout. "Download:" appears in a SUCCESS panel,
-        // so never treat that as an error.
-        // Grace period: give the page a few seconds to start a download / render
-        // a link before believing an error, so transient initial states don't
-        // cause a false failure.
-        const panelErr = probe.errEl && !/download:/i.test(probe.errEl);
-        if (Date.now() - startedAt > 4000 && !probe.saved && (panelErr || probe.bodyErr)) {
-          errText = probe.errEl || 'download failed';
-          break;
-        }
-      }
-
-      // Found a file URL but no download yet — fetch it. Navigating in the headed
-      // browser carries the session + Cloudflare clearance; if that doesn't
-      // surface a download event, fall back to the context request API.
-      if (!download && fileUrl) {
-        const dl2 = page.waitForEvent('download', { timeout: DOWNLOAD_TIMEOUT }).catch(() => null);
-        await page.goto(fileUrl, { waitUntil: 'commit' }).catch(() => {});
-        download = await dl2;
-        if (!download) {
-          const saved = await saveViaRequest(page, fileUrl);
-          if (saved) {
-            const v = verifyEpub(saved.savePath);
-            downloads.push({
-              ...saved,
-              url: link.url,
-              timestamp: new Date().toISOString(),
-              verified: v.ok,
-              size: v.size,
-            });
-            continue;
-          }
-        }
-      }
-
-      if (!download) {
-        errors.push({
-          url: link.url,
-          error: errText ? `Downloader: ${cleanError(errText)}` : 'No download was triggered',
-        });
-        continue;
-      }
-
-      const filename = download.suggestedFilename();
-      const savePath = path.join(DOWNLOAD_PATH, filename);
-      await download.saveAs(savePath);
-      const v = verifyEpub(savePath);
-      downloads.push({
-        filename,
-        savePath,
-        url: link.url,
-        timestamp: new Date().toISOString(),
-        verified: v.ok,
-        size: v.size,
-      });
+      const saved = await attempt(link);
+      downloads.push({ ...saved, url: link.url, timestamp: new Date().toISOString() });
+      break; // mirrors: one good download is enough
     } catch (err) {
-      if (err.fatal) throw err; // account-level error — abort remaining links
+      if (err.fatal) throw err; // account-level — abort remaining mirrors
+      onProgress({ step: 'mirror-failed', host: link.host, error: err.message });
       errors.push({ url: link.url, error: err.message });
     }
   }
+  return { downloads, errors };
+}
 
-  return { downloads, errors, title: detail.title };
+/**
+ * Try a single mirror through the amember downloader, which ends in one of:
+ *   (a) it streams the file immediately (download event fires);
+ *   (b) a transload progress page that finishes "Saved!" and meta-refreshes to
+ *       the finished file at .../app/files/... (can take minutes);
+ *   (c) a direct "Download: <a download href=.../app/files/...>" link;
+ *   (d) an error like "Not Found" (no download event ever fires).
+ * Resolves to { filename, savePath, verified, size } on success, or throws
+ * (Error.fatal set for account-level failures).
+ */
+async function attemptLink(page, link, meta, onProgress = () => {}) {
+  await randomDelay();
+  const target = `${PREMIUM_BASE}?dl=${encodeURIComponent(link.url)}`;
+
+  // Listen for a download up front, then poll for whichever state appears.
+  const downloadPromise = page.waitForEvent('download', { timeout: DOWNLOAD_TIMEOUT }).catch(() => null);
+  await page.goto(target, { waitUntil: 'domcontentloaded' }).catch(() => {});
+
+  onProgress({ step: 'login' });
+  await ensurePremiumLogin(page);  // throws fatal if credentials are rejected
+  await assertAccountActive(page); // throws fatal on an expired account
+  onProgress({ step: 'downloading', host: link.host });
+
+  let download = null;
+  let fileUrl = null;
+  let errText = '';
+  const startedAt = Date.now();
+  const deadline = startedAt + DOWNLOAD_TIMEOUT;
+  while (Date.now() < deadline) {
+    // A download may already be underway (direct stream, or the transload
+    // page's meta-refresh navigating to the finished file).
+    download = await Promise.race([downloadPromise, page.waitForTimeout(1000).then(() => null)]);
+    if (download) break;
+
+    // Host pages vary, so detect the served file generically: an explicit
+    // download link, a meta-refresh, a link into the downloader's files/ dir,
+    // or any link whose URL ends in a known file extension.
+    const probe = await page.evaluate(({ extSrc, errSrc }) => {
+      const extRe = new RegExp(extSrc, 'i');
+      const errRe = new RegExp(errSrc, 'i');
+      const abs = (a) => (a && a.getAttribute('href') ? a.href : null);
+      let url = abs(document.querySelector('a[download][href]'));
+      if (!url) {
+        const m = document.querySelector('meta[http-equiv="refresh" i]');
+        const c = m ? m.getAttribute('content') || '' : '';
+        const i = c.toLowerCase().indexOf('url=');
+        if (i >= 0) url = c.slice(i + 4).trim();
+      }
+      if (!url) url = abs(document.querySelector('a[href*="/app/files/"]'));
+      if (!url) {
+        for (const a of document.querySelectorAll('a[href]')) {
+          if (extRe.test(a.getAttribute('href') || '') || extRe.test(a.href)) { url = a.href; break; }
+        }
+      }
+      const errEl = document.querySelector('.htmlerror, .error, .alert');
+      const body = (document.body && document.body.innerText) || '';
+      return {
+        url,
+        errEl: errEl ? errEl.textContent.trim() : '',
+        // Error words anywhere on the page — fallback for hosts that don't use
+        // a recognizable error element.
+        bodyErr: errRe.test(body),
+        // "complete" markers seen across hosts — keep waiting if present but the
+        // file link hasn't rendered yet.
+        saved: /saved!|download complete|100%\s*downloaded/i.test(body),
+      };
+    }, { extSrc: FILE_EXT_RE.source, errSrc: ERROR_RE.source })
+      .catch(() => ({ url: null, errEl: '', bodyErr: false, saved: false }));
+
+    if (probe.url) { fileUrl = sanitizeUrl(probe.url); break; }
+    // No file link, no "complete" marker, and an error showing → the host
+    // failed. Fail fast. "Download:" appears in a SUCCESS panel, so never treat
+    // that as an error. Grace period avoids false failure on transient states.
+    const panelErr = probe.errEl && !/download:/i.test(probe.errEl);
+    if (Date.now() - startedAt > 4000 && !probe.saved && (panelErr || probe.bodyErr)) {
+      errText = probe.errEl || 'download failed';
+      break;
+    }
+  }
+
+  // Found a file URL but no download yet — fetch it. Navigating in the headed
+  // browser carries the session + Cloudflare clearance; if that doesn't surface
+  // a download event, fall back to the context request API.
+  if (!download && fileUrl) {
+    const dl2 = page.waitForEvent('download', { timeout: DOWNLOAD_TIMEOUT }).catch(() => null);
+    await page.goto(fileUrl, { waitUntil: 'commit' }).catch(() => {});
+    download = await dl2;
+    if (!download) {
+      const saved = await saveViaRequest(page, fileUrl, meta);
+      if (saved) {
+        onProgress({ step: 'saved', filename: saved.filename });
+        return finalizeDownload(saved.savePath, saved.filename, meta, onProgress);
+      }
+    }
+  }
+
+  if (!download) {
+    throw new Error(errText ? `Downloader: ${cleanError(errText)}` : 'No download was triggered');
+  }
+
+  const original = download.suggestedFilename();
+  const filename = buildBookFilename(meta, original); // tidy "Title [Author] (Year).ext"
+  const savePath = path.join(DOWNLOAD_PATH, filename);
+  await download.saveAs(savePath);
+  console.error('[premium] saved %s (host name %s) from fileUrl=%s', filename, original, fileUrl || '(download event)');
+  // Some hosts serve an HTML landing/error page as the "download" — reject it so
+  // it counts as a failed mirror, not a bogus success.
+  if (isHtmlFile(savePath, original)) {
+    try { fs.unlinkSync(savePath); } catch {}
+    throw new Error('Got an HTML page, not a file');
+  }
+  onProgress({ step: 'saved', filename });
+  return finalizeDownload(savePath, filename, meta, onProgress);
+}
+
+/**
+ * Verify a freshly-saved file is the correct book and shape the success record.
+ * Emits `verifying` then `verified` progress so the UI can show exactly what was
+ * checked (structure + embedded title match).
+ */
+function finalizeDownload(savePath, filename, meta, onProgress = () => {}) {
+  onProgress({ step: 'verifying', filename });
+  const v = verifyBook(savePath, meta && meta.title);
+  onProgress({
+    step: 'verified',
+    filename,
+    verified: v.ok,
+    titleMatch: v.titleMatch,
+    embeddedTitle: v.embeddedTitle,
+    embeddedAuthor: v.embeddedAuthor,
+    size: v.size,
+  });
+  return {
+    filename,
+    savePath,
+    verified: v.ok,
+    size: v.size,
+    embeddedTitle: v.embeddedTitle,
+    embeddedAuthor: v.embeddedAuthor,
+    titleMatch: v.titleMatch,
+  };
 }
 
 module.exports = {
@@ -325,8 +491,18 @@ module.exports = {
   clearPremiumCreds,
   premiumDownload,
   verifyEpub,
+  verifyBook,
   // exported for unit tests
   sanitizeUrl,
   cleanError,
   isSafeEpubPath,
+  looksLikeHtmlBuffer,
+  isHtmlFile,
+  fsSafe,
+  extractYear,
+  cleanBookTitle,
+  buildBookFilename,
+  ensurePremiumLogin,
+  assertAccountActive,
+  runMirrors,
 };

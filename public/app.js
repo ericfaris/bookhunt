@@ -160,7 +160,7 @@ function renderCard(r) {
   const dlRow = el('div', { className: 'dl-row' });
   if (r.premium) {
     const btn = el('button', { className: 'dl-btn premium', type: 'button' }, 'Download (Premium)');
-    btn.addEventListener('click', () => premiumDownload(r, btn, dlRow));
+    btn.addEventListener('click', () => premiumDownload(r, btn));
     dlRow.append(btn);
   } else if (r.postlinks && r.postlinks.length) {
     for (const link of r.postlinks) {
@@ -205,18 +205,26 @@ function formatDate(d) {
 // ---------------------------------------------------------------------------
 // Downloads
 // ---------------------------------------------------------------------------
-async function premiumDownload(result, btn, dlRow) {
+// The ordered checklist shown in the download modal. Each backend progress
+// event advances one of these steps (pending → active → done / fail).
+const DL_STEPS = [
+  { id: 'read', label: 'Read the Mobilism post' },
+  { id: 'login', label: 'Sign in to the premium downloader' },
+  { id: 'fetch', label: 'Download from a mirror' },
+  { id: 'verify', label: "Open the ePUB & confirm it's the right book" },
+];
+
+async function premiumDownload(result, btn) {
   // Make sure credentials exist first.
   const status = await fetch('/api/premium/status').then((r) => r.json());
   if (!status.hasCreds) {
-    pendingPremium = { result, btn, dlRow };
+    pendingPremium = { result, btn };
     openCredModal();
     return;
   }
 
-  btn.disabled = true;
-  btn.textContent = 'Downloading…';
-  clearDlResult(dlRow);
+  if (btn) { btn.disabled = true; btn.textContent = 'Downloading…'; }
+  openDownloadModal(result);
 
   try {
     const res = await fetch('/api/download', {
@@ -224,64 +232,221 @@ async function premiumDownload(result, btn, dlRow) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ url: result.url, title: result.title }),
     });
-    const data = await res.json();
-    if (res.status === 401 && data.needCreds) {
-      pendingPremium = { result, btn, dlRow };
-      btn.disabled = false;
-      btn.textContent = 'Download (Premium)';
-      openCredModal();
-      return;
-    }
-    if (!res.ok) throw new Error(data.error || 'Download failed');
-
-    for (const d of data.downloads) {
-      dlRow.parentElement.append(
-        el('div', { className: 'dl-result' }, `✓ ${d.filename} → ${d.savePath}  (${formatTime(d.timestamp)})`)
-      );
-      if (d.id && d.verified) {
-        const sendBtn = el('button', { className: 'ghost-btn send-btn', type: 'button' }, '📧 Send to readers');
-        sendBtn.addEventListener('click', () =>
-          openSendModal({
-            downloadId: d.id,
-            book: {
-              title: result.title,
-              author: result.author,
-              cover: result.cover,
-              sourceUrl: result.url,
-              format: result.format,
-              size: result.size,
-              filename: d.filename,
-            },
-          })
-        );
-        dlRow.parentElement.append(sendBtn);
-      } else if (d.id && !d.verified) {
-        dlRow.parentElement.append(
-          el('div', { className: 'dl-result err' }, '⚠ File failed ePUB verification — not offered for sending.')
-        );
+    if (res.status === 401) {
+      const data = await res.json().catch(() => ({}));
+      if (data.needCreds) {
+        closeDownloadModal();
+        pendingPremium = { result, btn };
+        openCredModal();
+        return;
       }
     }
-    for (const e of data.errors || []) {
-      dlRow.parentElement.append(el('div', { className: 'dl-result err' }, `✕ ${e.error}`));
-    }
-    if (!data.downloads.length && !(data.errors || []).length) {
-      dlRow.parentElement.append(el('div', { className: 'dl-result err' }, 'Nothing was downloaded.'));
+    if (!res.ok || !res.body) throw new Error('Download request failed (HTTP ' + res.status + ')');
+
+    // Read the Server-Sent-Events stream framed as `data: {…}\n\n`.
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      let idx;
+      while ((idx = buffer.indexOf('\n\n')) >= 0) {
+        const frame = buffer.slice(0, idx);
+        buffer = buffer.slice(idx + 2);
+        const line = frame.split('\n').find((l) => l.startsWith('data:'));
+        if (!line) continue;
+        try {
+          handleDownloadEvent(JSON.parse(line.slice(5).trim()), result);
+        } catch { /* ignore a malformed frame */ }
+      }
     }
   } catch (err) {
-    dlRow.parentElement.append(el('div', { className: 'dl-result err' }, `✕ ${err.message}`));
+    renderDownloadError(err.message);
   } finally {
-    btn.disabled = false;
-    btn.textContent = 'Download (Premium)';
+    if (btn) { btn.disabled = false; btn.textContent = 'Download (Premium)'; }
+    $('#dlClose').hidden = false;
   }
 }
 
-function clearDlResult(dlRow) {
-  dlRow.parentElement.querySelectorAll('.dl-result').forEach((n) => n.remove());
+// --- Download modal -------------------------------------------------------
+const downloadModal = $('#downloadModal');
+$('#dlClose').addEventListener('click', closeDownloadModal);
+
+function openDownloadModal(result) {
+  $('#dlHeading').textContent = 'Downloading…';
+  $('#dlHeading').className = '';
+  $('#dlBook').textContent = `${result.title || ''}${result.author ? ' — ' + result.author : ''}`;
+  $('#dlResult').innerHTML = '';
+  $('#dlClose').hidden = true;
+  const list = $('#dlSteps');
+  list.innerHTML = '';
+  for (const s of DL_STEPS) {
+    list.append(
+      el('li', { className: 'dl-step pending', id: 'dlstep-' + s.id }, [
+        el('span', { className: 'dl-step-icon' }, '○'),
+        el('span', { className: 'dl-step-label' }, s.label),
+        el('span', { className: 'dl-step-note' }, ''),
+      ])
+    );
+  }
+  downloadModal.hidden = false;
+}
+function closeDownloadModal() { downloadModal.hidden = true; }
+
+function setStep(id, state, note) {
+  const li = $('#dlstep-' + id);
+  if (!li) return;
+  li.className = 'dl-step ' + state;
+  const icon = { pending: '○', active: '◌', done: '✓', fail: '✕', warn: '⚠' }[state] || '○';
+  li.querySelector('.dl-step-icon').textContent = icon;
+  if (note != null) li.querySelector('.dl-step-note').textContent = note;
 }
 
-function formatTime(t) {
-  const d = new Date(t);
-  return isNaN(d) ? t : d.toLocaleTimeString();
+function handleDownloadEvent(ev, result) {
+  switch (ev.step) {
+    case 'reading-post':
+      setStep('read', 'active');
+      break;
+    case 'mirrors-found':
+      setStep('read', 'done', `Found ${ev.total} mirror${ev.total === 1 ? '' : 's'}`);
+      break;
+    case 'mirror':
+      // A new mirror attempt begins — reset the per-mirror steps.
+      setStep('login', 'pending', '');
+      setStep('fetch', 'active', `Mirror ${ev.index} of ${ev.total}${ev.host ? ' · ' + ev.host : ''}`);
+      setStep('verify', 'pending', '');
+      break;
+    case 'login':
+      setStep('login', 'active');
+      break;
+    case 'downloading':
+      setStep('login', 'done');
+      setStep('fetch', 'active', ev.host ? `Downloading from ${ev.host}…` : 'Downloading…');
+      break;
+    case 'saved':
+      setStep('fetch', 'done', ev.filename || '');
+      break;
+    case 'verifying':
+      setStep('verify', 'active', 'Opening the ePUB…');
+      break;
+    case 'verified':
+      if (!ev.verified) setStep('verify', 'fail', 'Failed the ePUB structure check');
+      else if (ev.titleMatch === false) setStep('verify', 'warn', `Embedded title: “${ev.embeddedTitle}”`);
+      else if (ev.titleMatch === true) setStep('verify', 'done', `Title “${ev.embeddedTitle}” matches ✓`);
+      else setStep('verify', 'done', 'Valid ePUB (no embedded title to compare)');
+      break;
+    case 'mirror-failed':
+      setStep('fetch', 'fail', `${ev.host || 'mirror'}: ${ev.error}`);
+      break;
+    case 'done':
+      renderDownloadDone(ev, result);
+      break;
+    case 'error':
+      renderDownloadError(ev.error, ev.needWarm);
+      break;
+  }
+}
+
+function renderDownloadDone(data, result) {
+  const box = $('#dlResult');
+  box.innerHTML = '';
+  const d = (data.downloads || [])[0];
+
+  if (d && d.verified) {
+    const allGood = d.titleMatch !== false; // null or true → celebrate
+    $('#dlHeading').textContent = allGood ? '🎉 Downloaded & verified!' : 'Downloaded — please double-check';
+    $('#dlHeading').className = allGood ? 'dl-success' : 'dl-warn-head';
+    if (allGood) celebrate();
+
+    const lines = [
+      el('div', { className: 'dl-line' }, [el('strong', {}, '📗 '), d.filename]),
+      el('div', { className: 'dl-line hint' }, `Saved to ${d.savePath}`),
+    ];
+    if (d.size) lines.push(el('div', { className: 'dl-line hint' }, `Size: ${formatBytes(d.size)}`));
+    if (d.titleMatch === true) {
+      lines.push(el('div', { className: 'dl-check ok' }, `✓ Opened the ePUB — embedded title “${d.embeddedTitle}” matches your search.`));
+    } else if (d.titleMatch === false) {
+      lines.push(el('div', { className: 'dl-check warn' },
+        `⚠ The ePUB’s embedded title is “${d.embeddedTitle}”, which doesn’t match “${result.title}”. Send only if you’re sure it’s the right book.`));
+    } else {
+      lines.push(el('div', { className: 'dl-check ok' }, '✓ Valid ePUB (no embedded title was available to compare).'));
+    }
+    box.append(el('div', { className: 'dl-success-panel' }, lines));
+
+    if (d.id) {
+      const sendBtn = el('button', { className: 'primary-btn send-btn', type: 'button' }, '📧 Send to readers');
+      sendBtn.addEventListener('click', () =>
+        openSendModal({
+          downloadId: d.id,
+          book: {
+            title: result.title,
+            author: result.author,
+            cover: result.cover,
+            sourceUrl: result.url,
+            format: result.format,
+            size: result.size,
+            filename: d.filename,
+          },
+        })
+      );
+      box.append(sendBtn);
+    }
+  } else if (d && !d.verified) {
+    $('#dlHeading').textContent = 'Saved, but not verified';
+    $('#dlHeading').className = 'dl-warn-head';
+    box.append(el('div', { className: 'dl-check warn' },
+      `⚠ ${d.filename} was saved to ${d.savePath} but failed the ePUB check, so it isn’t offered for sending.`));
+  } else {
+    // Nothing downloaded — explain why, mirror by mirror.
+    $('#dlHeading').textContent = 'Download failed';
+    $('#dlHeading').className = 'dl-fail-head';
+    const errs = data.errors || [];
+    if (errs.length) {
+      box.append(el('p', { className: 'hint' }, 'Every mirror failed:'));
+      const ul = el('ul', { className: 'dl-errors' }, errs.map((e) => el('li', {}, `✕ ${e.error}`)));
+      box.append(ul);
+    } else {
+      box.append(el('div', { className: 'dl-check warn' }, 'Nothing was downloaded.'));
+    }
+  }
+}
+
+function renderDownloadError(message, needWarm) {
+  $('#dlHeading').textContent = 'Download failed';
+  $('#dlHeading').className = 'dl-fail-head';
+  const box = $('#dlResult');
+  box.innerHTML = '';
+  box.append(el('div', { className: 'dl-check warn' }, `✕ ${message}`));
+  if (needWarm) {
+    box.append(el('a', { className: 'warm-btn', href: '/warm', target: '_blank', rel: 'noopener' }, 'Re-warm session ↗'));
+  }
+  $('#dlClose').hidden = false;
+}
+
+// Lightweight dependency-free confetti burst.
+function celebrate() {
+  const colors = ['#ffd166', '#06d6a0', '#118ab2', '#ef476f', '#8338ec'];
+  const card = downloadModal.querySelector('.modal-card');
+  for (let i = 0; i < 80; i++) {
+    const c = el('span', { className: 'confetti' });
+    c.style.left = Math.random() * 100 + '%';
+    c.style.background = colors[i % colors.length];
+    c.style.animationDelay = Math.random() * 0.3 + 's';
+    c.style.animationDuration = 0.9 + Math.random() * 0.8 + 's';
+    card.append(c);
+    setTimeout(() => c.remove(), 2200);
+  }
+}
+
+function formatBytes(n) {
+  if (!n) return '';
+  const u = ['B', 'KB', 'MB', 'GB'];
+  let i = 0;
+  let v = n;
+  while (v >= 1024 && i < u.length - 1) { v /= 1024; i++; }
+  return `${v.toFixed(i ? 1 : 0)} ${u[i]}`;
 }
 
 function logStandard(link, title) {
@@ -310,9 +475,9 @@ $('#credForm').addEventListener('submit', async (e) => {
   closeCredModal();
   $('#premPass').value = '';
   if (pendingPremium) {
-    const { result, btn, dlRow } = pendingPremium;
+    const { result, btn } = pendingPremium;
     pendingPremium = null;
-    premiumDownload(result, btn, dlRow);
+    premiumDownload(result, btn);
   }
 });
 

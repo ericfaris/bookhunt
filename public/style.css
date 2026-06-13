@@ -329,3 +329,57 @@ input:focus, select:focus { border-color: var(--accent); }
   display: flex; align-items: center; justify-content: space-between; gap: 0.5rem;
   font-size: 0.85rem; padding: 0.3rem 0.4rem; border-radius: 6px; background: var(--surface-2);
 }
+
+/* --- Download progress modal --------------------------------------------- */
+.dl-modal { width: min(440px, 94vw); position: relative; overflow: hidden; }
+.dl-close {
+  position: absolute; top: 0.75rem; right: 0.85rem;
+  background: none; border: none; cursor: pointer;
+  font-size: 1rem; color: var(--text-dim); line-height: 1;
+}
+.dl-close:hover { color: var(--text); }
+#dlHeading.dl-success { color: var(--good); }
+#dlHeading.dl-warn-head { color: #c97a1f; }
+#dlHeading.dl-fail-head { color: #e74c3c; }
+
+.dl-steps { list-style: none; margin: 1rem 0 0; padding: 0; display: flex; flex-direction: column; gap: 0.55rem; }
+.dl-step { display: grid; grid-template-columns: 1.4rem 1fr; align-items: start; gap: 0.5rem; font-size: 0.9rem; }
+.dl-step-icon { text-align: center; font-weight: 700; }
+.dl-step-label { color: var(--text); }
+.dl-step-note { grid-column: 2; font-size: 0.76rem; color: var(--text-dim); margin-top: 1px; }
+
+.dl-step.pending .dl-step-icon,
+.dl-step.pending .dl-step-label { color: var(--text-dim); }
+.dl-step.active .dl-step-icon { color: var(--accent); animation: spin 1s linear infinite; display: inline-block; }
+.dl-step.active .dl-step-label { color: var(--text); font-weight: 600; }
+.dl-step.done .dl-step-icon { color: var(--good); }
+.dl-step.warn .dl-step-icon { color: #c97a1f; }
+.dl-step.fail .dl-step-icon { color: #e74c3c; }
+
+.dl-result-panel { margin-top: 1rem; }
+.dl-success-panel {
+  background: var(--surface-2); border: 1px solid var(--border);
+  border-radius: 10px; padding: 0.8rem 0.9rem; display: flex; flex-direction: column; gap: 0.35rem;
+}
+.dl-line { font-size: 0.9rem; word-break: break-word; }
+.dl-line.hint { font-size: 0.78rem; color: var(--text-dim); }
+.dl-check { font-size: 0.85rem; margin-top: 0.3rem; line-height: 1.35; }
+.dl-check.ok { color: var(--good); }
+.dl-check.warn { color: #c97a1f; }
+.dl-result-panel .send-btn { margin-top: 0.9rem; width: 100%; }
+.dl-errors { margin: 0.4rem 0 0; padding-left: 1.1rem; font-size: 0.84rem; color: #e74c3c; }
+.dl-errors li { margin: 0.15rem 0; }
+
+/* Celebration confetti */
+.confetti {
+  position: absolute; top: -12px; width: 8px; height: 14px; border-radius: 1px;
+  opacity: 0.9; animation: confetti-fall linear forwards; pointer-events: none;
+}
+@keyframes confetti-fall {
+  0%   { transform: translateY(-20px) rotate(0deg); opacity: 1; }
+  100% { transform: translateY(420px) rotate(540deg); opacity: 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .confetti { display: none; }
+  .dl-step.active .dl-step-icon { animation: none; }
+}

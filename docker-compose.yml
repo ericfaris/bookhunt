@@ -17,8 +17,8 @@ services:
       - ./history.json:/app/history.json
       # Notification recipients (name / email / kindle email / phone / carrier)
       - ./recipients.json:/app/recipients.json
-      # Downloads land in C:\temp on the Windows side (via WSL2 path)
-      - /mnt/c/temp:/downloads
+      # Downloads land in C:\epubs on the Windows side (via WSL2 path)
+      - /mnt/c/epubs:/downloads
     environment:
       # Forum login credentials — read from .env
       - MOBILISM_USER=${MOBILISM_USER}

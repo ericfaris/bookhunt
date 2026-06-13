@@ -44,7 +44,7 @@ Fill in:
 ```
 MOBILISM_USER=your_forum_username
 MOBILISM_PASS=your_forum_password
-DOWNLOAD_PATH=/mnt/c/temp        # WSL path to C:\temp
+DOWNLOAD_PATH=/mnt/c/epubs        # WSL path to C:\epubs
 PORT=3000
 
 # Optional: premium downloader login (loaded at startup; UI form overrides)
@@ -123,7 +123,7 @@ and Chromium profile locks on boot, so `docker compose up -d` just works.
 |---|---|---|
 | `./.browser-profile` | `/app/.browser-profile` | Playwright persistent session (Cloudflare clearance + forum login) |
 | `./history.json` | `/app/history.json` | Search + download log |
-| `/mnt/c/temp` | `/downloads` | Downloaded ePUBs |
+| `/mnt/c/epubs` | `/downloads` | Downloaded ePUBs |
 
 > The container runs as `user: "1000:1000"` so these bind-mounted files stay
 > owned by you, not root. If files ever end up root-owned (e.g. from an older
@@ -213,7 +213,7 @@ Notification channels live in `src/notify/` and share one contract (`isConfigure
 | `MOBILISM_PASS` | Yes | — | Mobilism forum password |
 | `MOBILISM_PREMIUM_USER` | No | — | Premium downloader username |
 | `MOBILISM_PREMIUM_PASS` | No | — | Premium downloader password |
-| `DOWNLOAD_PATH` | No | `C:\temp` | Where downloaded ePUBs are saved |
+| `DOWNLOAD_PATH` | No | `C:\epubs` | Where downloaded ePUBs are saved |
 | `PORT` | No | `3000` | HTTP port |
 | `HEADLESS` | No | `false` | Set `true` to run Chromium headless (only safe when the browser profile is warm and Cloudflare clearance is cached) |
 | `PROFILE_DIR` | No | `.browser-profile/` | Path to the Playwright persistent browser profile |

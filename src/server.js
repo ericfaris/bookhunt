@@ -103,14 +103,28 @@ app.post('/api/premium/creds', (req, res) => {
 });
 
 // --- Download (premium path) ------------------------------------------------
+// Streamed as Server-Sent Events: the download takes seconds-to-minutes and the
+// UI shows each step live (login → mirror → download → verify). The creds check
+// stays a normal 401 (the client checks /api/premium/status first); everything
+// after the stream opens — including needWarm and fatal errors — is delivered as
+// an SSE `error` event, since the HTTP status is already committed.
 app.post('/api/download', async (req, res) => {
   const { url, title } = req.body || {};
   if (!url) return res.status(400).json({ error: 'Missing post url.' });
   if (!downloader.hasPremiumCreds()) {
     return res.status(401).json({ error: 'Premium credentials required.', needCreds: true });
   }
+
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache',
+    Connection: 'keep-alive',
+    'X-Accel-Buffering': 'no', // disable proxy buffering so events flush promptly
+  });
+  const send = (event) => res.write(`data: ${JSON.stringify(event)}\n\n`);
+
   try {
-    const result = await downloader.premiumDownload(url);
+    const result = await downloader.premiumDownload(url, send);
     for (const d of result.downloads) {
       const stored = history.logDownload({
         title: title || result.title,
@@ -123,13 +137,12 @@ app.post('/api/download', async (req, res) => {
       });
       d.id = stored.id; // safe handle the client passes back to /api/send
     }
-    res.json(result);
+    send({ step: 'done', downloads: result.downloads, errors: result.errors, title: result.title });
   } catch (err) {
-    console.error('Download failed:', err);
-    if (err.needWarm) {
-      return res.status(409).json({ error: err.message, needWarm: true });
-    }
-    res.status(500).json({ error: err.message });
+    console.error('Download failed:', err.detail || err); // full text kept server-side
+    send({ step: 'error', error: err.message, needWarm: !!err.needWarm });
+  } finally {
+    res.end();
   }
 });
 

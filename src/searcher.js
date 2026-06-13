@@ -49,6 +49,20 @@ function enqueue(task) {
 const isLoggedIn = (page) =>
   page.evaluate(() => !!document.querySelector('a[href*="mode=logout"]'));
 
+// Playwright's browser-launch failures carry a multi-KB log (the full Chromium
+// command line + stderr). Collapse that into a short, actionable message for the
+// UI, keeping the raw text on `.detail` for server-side logging.
+function friendlyLaunchError(err) {
+  const raw = String((err && err.message) || err || '');
+  let msg = 'Could not start the browser. Try re-warming the session.';
+  if (/in use by another|ProcessSingleton|profile.*locked/i.test(raw)) {
+    msg = 'The browser profile is already in use by another session — only one can run at a time.';
+  }
+  const clean = new Error(msg);
+  clean.detail = raw;
+  return clean;
+}
+
 // Launch (or reuse) the shared browser. This NO LONGER logs in — the browser
 // now runs headed under a virtual display (Xvfb) in the container and stays
 // alive whether or not the Mobilism session is authenticated, so the live
@@ -59,30 +73,35 @@ async function getSession() {
   if (_loginPromise) return _loginPromise;
 
   _loginPromise = (async () => {
-    const context = await chromium.launchPersistentContext(PROFILE_DIR, {
-      headless: HEADLESS,
-      acceptDownloads: true,
-      viewport: { width: 1280, height: 900 },
-      // --disable-gpu* fixes the green/black screen Chromium shows under a
-      // virtual/WSLg display (GPU compositing bug). --disable-dev-shm-usage
-      // avoids /dev/shm crashes.
-      args: [
-        '--disable-blink-features=AutomationControlled',
-        '--disable-gpu',
-        '--disable-gpu-compositing',
-        '--disable-software-rasterizer',
-        '--disable-dev-shm-usage',
-        // Required in Docker — containers lack the kernel capabilities the
-        // Chromium sandbox needs, causing it to hang silently without these.
-        '--no-sandbox',
-        '--disable-setuid-sandbox',
-        // Open maximized so the noVNC view shows the full page.
-        '--start-maximized',
-      ],
-      userAgent:
-        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 ' +
-        '(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-    });
+    let context;
+    try {
+      context = await chromium.launchPersistentContext(PROFILE_DIR, {
+        headless: HEADLESS,
+        acceptDownloads: true,
+        viewport: { width: 1280, height: 900 },
+        // --disable-gpu* fixes the green/black screen Chromium shows under a
+        // virtual/WSLg display (GPU compositing bug). --disable-dev-shm-usage
+        // avoids /dev/shm crashes.
+        args: [
+          '--disable-blink-features=AutomationControlled',
+          '--disable-gpu',
+          '--disable-gpu-compositing',
+          '--disable-software-rasterizer',
+          '--disable-dev-shm-usage',
+          // Required in Docker — containers lack the kernel capabilities the
+          // Chromium sandbox needs, causing it to hang silently without these.
+          '--no-sandbox',
+          '--disable-setuid-sandbox',
+          // Open maximized so the noVNC view shows the full page.
+          '--start-maximized',
+        ],
+        userAgent:
+          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 ' +
+          '(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+      });
+    } catch (err) {
+      throw friendlyLaunchError(err); // Playwright's raw launch log is huge
+    }
     context.setDefaultTimeout(30000);
     context.setDefaultNavigationTimeout(30000);
     const page = context.pages()[0] || (await context.newPage());
