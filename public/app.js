@@ -1064,12 +1064,19 @@ async function loadCover(holder) {
     coverCache.set(key, url);
   }
   // The holder may have been re-rendered away by a filter change; only paint if
-  // it's still in the DOM.
+  // it's still in the DOM. Swap the placeholder div for a real cover <img> so it
+  // gets the same sizing as a stored cover (the div had centering styles that
+  // would otherwise let a natural-size image overflow the row).
   if (url && holder.isConnected) {
-    const img = el('img', { className: 'cover', src: url, alt: '', loading: 'lazy' });
-    holder.replaceChildren(img);
-    holder.classList.remove('placeholder');
+    const img = el('img', { className: 'lib-cover', src: url, alt: '', loading: 'lazy' });
+    img.addEventListener('error', () => img.replaceWith(makeCoverPlaceholder()));
+    holder.replaceWith(img);
   }
+}
+
+// A book-emoji placeholder sized exactly like a real cover.
+function makeCoverPlaceholder() {
+  return el('div', { className: 'lib-cover placeholder' }, '📖');
 }
 
 // Shimmer placeholders while the library loads — keeps the drawer from flashing
@@ -1114,9 +1121,11 @@ function renderLibraryCover(book) {
   const key = `${book.title || ''}|${book.author || ''}`.toLowerCase();
   const cached = book.cover || coverCache.get(key);
   if (cached) {
-    return el('img', { className: 'lib-cover', src: cached, alt: '', loading: 'lazy' });
+    const img = el('img', { className: 'lib-cover', src: cached, alt: '', loading: 'lazy' });
+    img.addEventListener('error', () => img.replaceWith(makeCoverPlaceholder()));
+    return img;
   }
-  const holder = el('div', { className: 'lib-cover placeholder' }, '📖');
+  const holder = makeCoverPlaceholder();
   holder.dataset.title = book.title || '';
   holder.dataset.author = book.author || '';
   if (coverObserver) coverObserver.observe(holder);

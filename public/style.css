@@ -310,12 +310,15 @@ input:focus, select:focus { border-color: var(--accent); }
 .lib-top { display: flex; gap: 0.85rem; align-items: flex-start; }
 .lib-main { min-width: 0; flex: 1; }
 .lib-cover {
+  display: block;
   width: 64px; height: 96px;
   flex: 0 0 auto;
-  object-fit: cover;
+  object-fit: cover; /* crop to the 2:3 box without distorting the artwork */
   border-radius: 7px;
   background: var(--surface-2);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.18);
 }
+img.lib-cover { overflow: hidden; }
 .lib-cover.placeholder {
   display: flex; align-items: center; justify-content: center;
   font-size: 1.5rem; color: var(--text-dim);

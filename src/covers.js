@@ -24,29 +24,50 @@
 
 const fs = require('fs');
 const path = require('path');
+const { normalize, similarity, matchScore } = require('./correct');
 
 const OPEN_LIBRARY_URL = 'https://openlibrary.org/search.json';
 const GOOGLE_BOOKS_URL = 'https://www.googleapis.com/books/v1/volumes';
 const LOOKUP_TIMEOUT_MS = 4000;
 const CACHE_FILE = path.join(__dirname, '..', 'covers-cache.json');
 
+// A candidate's title must match the query title at least this well (the same
+// variant-aware scorer the spell-corrector uses) before we'll trust its cover.
+// Gating on this is what stops "Whistler" grabbing Grisham's "The Whistler".
+const TITLE_THRESHOLD = 0.7;
+// When we know the author, the candidate's author must corroborate it. This is
+// the decisive guard for same-title-different-book collisions.
+const AUTHOR_THRESHOLD = 0.6;
+
 // Re-attempt a "no cover found" result after a week — books get covers added to
 // the catalogs over time, so a negative shouldn't be permanent.
 const NEGATIVE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
-/** Lowercase, fold punctuation to spaces, collapse runs, trim — a stable cache
- *  key that ignores case/punctuation differences in title/author. */
-function normalize(s) {
-  return String(s || '')
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
-}
+// `normalize` (lowercase, fold punctuation, collapse runs) is shared with the
+// spell-corrector — imported above so the cache key and the match scorer agree.
 
 /** Cache key for a book. */
 function cacheKey({ title, author }) {
   return normalize(title) + '|' + normalize(author);
+}
+
+/** Strip the noise a forum title carries that a catalog title never will — a
+ *  trailing "by Author…" (we look the author up separately) and a trailing
+ *  format/edition/year parenthetical ("(.ePUB)", "(2024 Edition)"). Improves the
+ *  match rate for messy stored titles; author gating still guards correctness.
+ *  Returns the original when cleaning would empty it. PURE. (A trimmed cousin of
+ *  downloader.cleanBookTitle, inlined to keep this module free of the browser
+ *  stack that downloader pulls in.) */
+function cleanTitle(t) {
+  const orig = String(t || '').trim();
+  let s = orig;
+  s = s.replace(/\s+by\s+.+$/i, '');
+  s = s.replace(
+    /\s*[([][^)\]]*\b(?:retail|epub|pdf|mobi|azw3?|edition|version|19\d{2}|20\d{2})\b[^)\]]*[)\]]\s*$/i,
+    ''
+  );
+  s = s.replace(/\s+/g, ' ').trim();
+  return s || orig;
 }
 
 /** Build the Open Library cover image URL from a cover id. `size` ∈ S|M|L. */
@@ -54,26 +75,72 @@ function openLibraryCoverUrl(coverId, size = 'M') {
   return `https://covers.openlibrary.org/b/id/${coverId}-${size}.jpg`;
 }
 
-/** PURE: pull a cover URL out of an Open Library search.json payload, or null. */
-function coverFromOpenLibrary(data) {
-  const docs = (data && Array.isArray(data.docs)) ? data.docs : [];
-  for (const doc of docs) {
-    if (doc && Number.isFinite(doc.cover_i)) return openLibraryCoverUrl(doc.cover_i);
+/** Does any of a candidate's authors corroborate the query author? With no query
+ *  author we can't gate on it (return true); otherwise require a close match OR
+ *  full token containment either way ("Patchett" ⊂ "Ann Patchett"). PURE. */
+function authorMatches(queryAuthor, candidateAuthors) {
+  const q = normalize(queryAuthor);
+  if (!q) return true; // nothing to check against — don't reject on author
+  const qTokens = q.split(' ').filter(Boolean);
+  for (const a of [].concat(candidateAuthors || [])) {
+    const na = normalize(a);
+    if (!na) continue;
+    if (similarity(q, na) >= AUTHOR_THRESHOLD) return true;
+    const aTokens = na.split(' ').filter(Boolean);
+    if (qTokens.every((t) => aTokens.includes(t))) return true; // query ⊆ candidate
+    if (aTokens.every((t) => qTokens.includes(t))) return true; // candidate ⊆ query
   }
-  return null;
+  return false;
 }
 
-/** PURE: pull a cover thumbnail out of a Google Books volumes payload, or null.
- *  Google serves thumbnails over http; upgrade to https so the CSP (img-src
- *  https:) and a secure origin don't block them. */
-function coverFromGoogleBooks(data) {
-  const items = (data && Array.isArray(data.items)) ? data.items : [];
-  for (const item of items) {
-    const links = item && item.volumeInfo && item.volumeInfo.imageLinks;
-    const url = links && (links.thumbnail || links.smallThumbnail);
-    if (url) return String(url).replace(/^http:/, 'https:');
+// PURE: from a list of catalog records, pick the cover of the record that best
+// matches { title, author } and clears both gates — or null if none does. Better
+// to show no cover than the wrong book's cover.
+function pickMatchingCover(query, records, getTitle, getAuthors, getCover) {
+  let bestCover = null;
+  let bestScore = -1;
+  for (const rec of records) {
+    const cover = getCover(rec);
+    if (!cover) continue;
+    const tScore = query.title ? matchScore(query.title, getTitle(rec) || '') : 1;
+    if (tScore < TITLE_THRESHOLD) continue;
+    if (!authorMatches(query.author, getAuthors(rec))) continue;
+    if (tScore > bestScore) {
+      bestScore = tScore;
+      bestCover = cover;
+    }
   }
-  return null;
+  return bestCover;
+}
+
+/** PURE: best title+author-matching cover from an Open Library payload, or null. */
+function coverFromOpenLibrary(query, data) {
+  const docs = (data && Array.isArray(data.docs)) ? data.docs : [];
+  return pickMatchingCover(
+    query || {},
+    docs,
+    (d) => d.title,
+    (d) => d.author_name,
+    (d) => (d && Number.isFinite(d.cover_i) ? openLibraryCoverUrl(d.cover_i) : null)
+  );
+}
+
+/** PURE: best title+author-matching cover thumbnail from a Google Books payload,
+ *  or null. Google serves thumbnails over http; upgrade to https so the CSP
+ *  (img-src https:) and a secure origin don't block them. */
+function coverFromGoogleBooks(query, data) {
+  const items = (data && Array.isArray(data.items)) ? data.items : [];
+  return pickMatchingCover(
+    query || {},
+    items,
+    (i) => i.volumeInfo && i.volumeInfo.title,
+    (i) => i.volumeInfo && i.volumeInfo.authors,
+    (i) => {
+      const links = i.volumeInfo && i.volumeInfo.imageLinks;
+      const url = links && (links.thumbnail || links.smallThumbnail);
+      return url ? String(url).replace(/^http:/, 'https:') : null;
+    }
+  );
 }
 
 /** GET + parse JSON with an abort timeout. Throws on any failure. */
@@ -98,29 +165,31 @@ async function fetchJson(url, { fetchImpl = fetch, timeoutMs = LOOKUP_TIMEOUT_MS
  * `opts.fetchImpl`/`opts.timeoutMs`/`opts.apiKey` are injectable for tests.
  */
 async function lookupCover({ title, author }, opts = {}) {
-  const t = String(title || '').trim();
+  const t = cleanTitle(title);
   const a = String(author || '').trim();
   if (!t && !a) return null;
 
-  // 1. Open Library: fielded title/author query, ask only for cover_i.
+  const query = { title: t, author: a };
+
+  // 1. Open Library: fielded title/author query; ask for the fields we verify on.
   try {
-    const params = new URLSearchParams({ limit: '3', fields: 'cover_i' });
+    const params = new URLSearchParams({ limit: '5', fields: 'title,author_name,cover_i' });
     if (t) params.set('title', t);
     if (a) params.set('author', a);
     const data = await fetchJson(`${OPEN_LIBRARY_URL}?${params.toString()}`, opts);
-    const cover = coverFromOpenLibrary(data);
+    const cover = coverFromOpenLibrary(query, data);
     if (cover) return cover;
   } catch {
     // fall through to Google Books
   }
 
-  // 2. Google Books: plain combined query; grab the first thumbnail.
+  // 2. Google Books: plain combined query; pick the best title+author match.
   try {
     const terms = [t, a].filter(Boolean).join(' ').trim();
     const key = opts.apiKey || process.env.GOOGLE_BOOKS_API_KEY;
-    const url = `${GOOGLE_BOOKS_URL}?q=${encodeURIComponent(terms)}&maxResults=3&country=US${key ? '&key=' + encodeURIComponent(key) : ''}`;
+    const url = `${GOOGLE_BOOKS_URL}?q=${encodeURIComponent(terms)}&maxResults=5&country=US${key ? '&key=' + encodeURIComponent(key) : ''}`;
     const data = await fetchJson(url, opts);
-    const cover = coverFromGoogleBooks(data);
+    const cover = coverFromGoogleBooks(query, data);
     if (cover) return cover;
   } catch {
     // fall through to null
@@ -216,6 +285,8 @@ module.exports = {
   resolveCover,
   coverFromOpenLibrary,
   coverFromGoogleBooks,
+  authorMatches,
+  cleanTitle,
   openLibraryCoverUrl,
   cacheKey,
   CACHE_FILE,

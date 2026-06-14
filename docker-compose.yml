@@ -20,6 +20,10 @@ services:
       - ./history.json:/app/history.json
       # Notification recipients (name / email / kindle email / phone / carrier)
       - ./recipients.json:/app/recipients.json
+      # Library cover-URL cache (so each book is looked up at most once,
+      # persisted across restarts; /app is root-owned, this isn't writable
+      # by the uid-1000 process otherwise)
+      - ./covers-cache.json:/app/covers-cache.json
       # Downloads land in C:\epubs on the Windows side (via WSL2 path)
       - /mnt/c/epubs:/downloads
     environment:

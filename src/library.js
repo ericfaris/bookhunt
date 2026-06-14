@@ -36,7 +36,7 @@ function buildLibrary(entries, fileExists = () => true) {
       book = {
         id: e.id,
         title: e.title || '',
-        author: e.author || '',
+        author: e.author || authorFromFilename(e.filename) || '',
         cover: e.cover || null,
         filename: e.filename || '',
         savePath: e.savePath,
@@ -82,6 +82,17 @@ function buildLibrary(entries, fileExists = () => true) {
     books.push(pub);
   }
   return books;
+}
+
+// Mobilism filenames embed the author in trailing brackets, e.g.
+// "Whistler [Ann Patchett].epub". Pull that out so legacy rows (downloaded
+// before author was stored) still get an author — which both shows in the UI and
+// disambiguates the cover lookup ("Whistler" → Patchett, not Grisham).
+function authorFromFilename(filename) {
+  if (!filename) return '';
+  const base = String(filename).replace(/\.(epub|pdf|mobi|azw3?|rar|zip)$/i, '');
+  const m = base.match(/\[([^\]]+)\]\s*$/);
+  return m ? m[1].trim() : '';
 }
 
 // Group books by their file. savePath is the natural identity; fall back to a

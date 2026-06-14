@@ -38,6 +38,21 @@ test('buildLibrary: defaults author to "" and cover to null when absent', () => 
   assert.equal(books[0].cover, null);
 });
 
+test('buildLibrary: derives author from a Mobilism "[Author]" filename when not stored', () => {
+  const books = buildLibrary([
+    dl({ id: 'd1', title: 'Whistler', filename: 'Whistler [Ann Patchett].epub', savePath: '/dl/w.epub' }),
+  ]);
+  assert.equal(books[0].author, 'Ann Patchett');
+});
+
+test('buildLibrary: a stored author wins over the filename-derived one', () => {
+  const books = buildLibrary([
+    dl({ id: 'd1', title: 'Whistler', author: 'Ann Patchett',
+         filename: 'Whistler [A. Patchett].epub', savePath: '/dl/w.epub' }),
+  ]);
+  assert.equal(books[0].author, 'Ann Patchett');
+});
+
 test('buildLibrary: backfills cover/author from an older re-download of the same file', () => {
   const books = buildLibrary([
     // newest is the representative but lacks a cover/author...

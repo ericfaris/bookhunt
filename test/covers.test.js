@@ -8,6 +8,8 @@ const {
   resolveCover,
   coverFromOpenLibrary,
   coverFromGoogleBooks,
+  authorMatches,
+  cleanTitle,
   openLibraryCoverUrl,
   cacheKey,
 } = require('../src/covers');
@@ -35,39 +37,73 @@ function memCache() {
   };
 }
 
-test('coverFromOpenLibrary: builds a covers.openlibrary.org URL from cover_i', () => {
-  const url = coverFromOpenLibrary({ docs: [{ cover_i: 8231856 }] });
+// A title-only query matches any title that scores well (no author to gate on).
+const Q = (title, author) => ({ title, author });
+
+test('coverFromOpenLibrary: builds a covers.openlibrary.org URL from a matching doc', () => {
+  const url = coverFromOpenLibrary(Q('Dune'), { docs: [{ title: 'Dune', cover_i: 8231856 }] });
   assert.equal(url, 'https://covers.openlibrary.org/b/id/8231856-M.jpg');
 });
 
 test('coverFromOpenLibrary: skips docs without a numeric cover_i, returns null when none', () => {
-  assert.equal(coverFromOpenLibrary({ docs: [{}, { cover_i: null }] }), null);
-  assert.equal(coverFromOpenLibrary({ docs: [{ title: 'x' }, { cover_i: 42 }] }),
+  assert.equal(coverFromOpenLibrary(Q('Dune'), { docs: [{ title: 'Dune' }, { title: 'Dune', cover_i: null }] }), null);
+  assert.equal(coverFromOpenLibrary(Q('Dune'), { docs: [{ title: 'Other' }, { title: 'Dune', cover_i: 42 }] }),
     openLibraryCoverUrl(42));
-  assert.equal(coverFromOpenLibrary({}), null);
-  assert.equal(coverFromOpenLibrary(null), null);
+  assert.equal(coverFromOpenLibrary(Q('Dune'), {}), null);
+  assert.equal(coverFromOpenLibrary(Q('Dune'), null), null);
+});
+
+test('coverFromOpenLibrary: author gate rejects a same-title different-book cover', () => {
+  // The "Whistler" collision: Grisham's has a cover, Patchett's does too. With
+  // author "Ann Patchett" we must take HERS, never Grisham's.
+  const data = { docs: [
+    { title: 'The Whistler', author_name: ['John Grisham'], cover_i: 111 },
+    { title: 'Whistler', author_name: ['Ann Patchett'], cover_i: 222 },
+  ] };
+  assert.equal(coverFromOpenLibrary(Q('Whistler', 'Ann Patchett'), data), openLibraryCoverUrl(222));
+  // And if only the wrong-author book is present, return null — no wrong cover.
+  const onlyGrisham = { docs: [{ title: 'The Whistler', author_name: ['John Grisham'], cover_i: 111 }] };
+  assert.equal(coverFromOpenLibrary(Q('Whistler', 'Ann Patchett'), onlyGrisham), null);
+});
+
+test('coverFromOpenLibrary: a title that does not match the query is rejected', () => {
+  const data = { docs: [{ title: 'A Completely Different Book', cover_i: 99 }] };
+  assert.equal(coverFromOpenLibrary(Q('Dune', 'Frank Herbert'), data), null);
 });
 
 test('coverFromGoogleBooks: prefers thumbnail and upgrades http→https', () => {
-  const url = coverFromGoogleBooks({
-    items: [{ volumeInfo: { imageLinks: { smallThumbnail: 'http://x/s.jpg', thumbnail: 'http://x/t.jpg' } } }],
+  const url = coverFromGoogleBooks(Q('Dune'), {
+    items: [{ volumeInfo: { title: 'Dune', imageLinks: { smallThumbnail: 'http://x/s.jpg', thumbnail: 'http://x/t.jpg' } } }],
   });
   assert.equal(url, 'https://x/t.jpg');
 });
 
 test('coverFromGoogleBooks: falls back to smallThumbnail, null when no images', () => {
   assert.equal(
-    coverFromGoogleBooks({ items: [{ volumeInfo: { imageLinks: { smallThumbnail: 'https://x/s.jpg' } } }] }),
+    coverFromGoogleBooks(Q('Dune'), { items: [{ volumeInfo: { title: 'Dune', imageLinks: { smallThumbnail: 'https://x/s.jpg' } } }] }),
     'https://x/s.jpg'
   );
-  assert.equal(coverFromGoogleBooks({ items: [{ volumeInfo: {} }] }), null);
-  assert.equal(coverFromGoogleBooks({}), null);
+  assert.equal(coverFromGoogleBooks(Q('Dune'), { items: [{ volumeInfo: { title: 'Dune' } }] }), null);
+  assert.equal(coverFromGoogleBooks(Q('Dune'), {}), null);
+});
+
+test('coverFromGoogleBooks: author gate rejects a wrong-author match', () => {
+  const data = { items: [{ volumeInfo: { title: 'Whistler', authors: ['John Grisham'], imageLinks: { thumbnail: 'https://g/t.jpg' } } }] };
+  assert.equal(coverFromGoogleBooks(Q('Whistler', 'Ann Patchett'), data), null);
+});
+
+test('authorMatches: handizes last-name containment and missing query author', () => {
+  assert.equal(authorMatches('', ['Anyone']), true); // no author to gate on
+  assert.equal(authorMatches('Ann Patchett', ['Ann Patchett']), true);
+  assert.equal(authorMatches('Patchett', ['Ann Patchett']), true); // query ⊆ candidate
+  assert.equal(authorMatches('Ann Patchett', ['Patchett']), true); // candidate ⊆ query
+  assert.equal(authorMatches('Ann Patchett', ['John Grisham']), false);
 });
 
 test('lookupCover: returns the Open Library cover when present (no Google call)', async () => {
   const cover = await lookupCover(
     { title: 'Dune', author: 'Herbert' },
-    { fetchImpl: stubFetch([['openlibrary.org', { docs: [{ cover_i: 11 }] }]]) }
+    { fetchImpl: stubFetch([['openlibrary.org', { docs: [{ title: 'Dune', author_name: ['Frank Herbert'], cover_i: 11 }] }]]) }
   );
   assert.equal(cover, openLibraryCoverUrl(11));
 });
@@ -77,8 +113,8 @@ test('lookupCover: falls through to Google Books when Open Library has no cover'
     { title: 'Dune', author: 'Herbert' },
     {
       fetchImpl: stubFetch([
-        ['openlibrary.org', { docs: [{}] }], // no cover_i
-        ['googleapis.com', { items: [{ volumeInfo: { imageLinks: { thumbnail: 'https://g/t.jpg' } } }] }],
+        ['openlibrary.org', { docs: [{ title: 'Dune' }] }], // matches title but no cover_i
+        ['googleapis.com', { items: [{ volumeInfo: { title: 'Dune', authors: ['Frank Herbert'], imageLinks: { thumbnail: 'https://g/t.jpg' } } }] }],
       ]),
     }
   );
@@ -91,11 +127,26 @@ test('lookupCover: Open Library error falls through to Google Books (fail-soft)'
     {
       fetchImpl: stubFetch([
         ['openlibrary.org', new Error('boom')],
-        ['googleapis.com', { items: [{ volumeInfo: { imageLinks: { thumbnail: 'https://g/t.jpg' } } }] }],
+        ['googleapis.com', { items: [{ volumeInfo: { title: 'Dune', imageLinks: { thumbnail: 'https://g/t.jpg' } } }] }],
       ]),
     }
   );
   assert.equal(cover, 'https://g/t.jpg');
+});
+
+test('lookupCover: a wrong-author Open Library hit is rejected, Google fallback used', async () => {
+  const cover = await lookupCover(
+    { title: 'Whistler', author: 'Ann Patchett' },
+    {
+      fetchImpl: stubFetch([
+        // Open Library returns Grisham's book — must be rejected on author...
+        ['openlibrary.org', { docs: [{ title: 'The Whistler', author_name: ['John Grisham'], cover_i: 1 }] }],
+        // ...and Google returns Patchett's, which is accepted.
+        ['googleapis.com', { items: [{ volumeInfo: { title: 'Whistler', authors: ['Ann Patchett'], imageLinks: { thumbnail: 'https://g/patchett.jpg' } } }] }],
+      ]),
+    }
+  );
+  assert.equal(cover, 'https://g/patchett.jpg');
 });
 
 test('lookupCover: returns null when both sources miss, never throws', async () => {
@@ -170,6 +221,31 @@ test('resolveCover: empty title+author returns null without consulting cache/loo
   const out = await resolveCover({ title: '', author: '' }, { cache, lookup: async () => 'x' });
   assert.equal(out, null);
   assert.equal(touched, false);
+});
+
+test('cleanTitle: drops a "by Author" tail and a format/year parenthetical', () => {
+  assert.equal(cleanTitle('No One’s Coming by Kevin Hazzard (.ePUB)'), 'No One’s Coming');
+  assert.equal(cleanTitle('Man: Sekret Machines Book 2 by Tom DeLonge (.ePUB)'), 'Man: Sekret Machines Book 2');
+  assert.equal(cleanTitle('Whistler'), 'Whistler'); // nothing to strip
+  assert.equal(cleanTitle('by Someone'), 'by Someone'); // would-be-empty → original kept
+});
+
+test('lookupCover: cleans a messy forum title before querying', async () => {
+  let askedTitle = null;
+  const cover = await lookupCover(
+    { title: 'No One’s Coming by Kevin Hazzard (.ePUB)', author: 'Kevin Hazzard' },
+    {
+      fetchImpl: async (url) => {
+        const u = new URL(url);
+        askedTitle = u.searchParams.get('title'); // Open Library fielded param
+        return { ok: true, status: 200, json: async () => ({
+          docs: [{ title: 'No One’s Coming', author_name: ['Kevin Hazzard'], cover_i: 7 }],
+        }) };
+      },
+    }
+  );
+  assert.equal(askedTitle, 'No One’s Coming', 'queried the cleaned title');
+  assert.equal(cover, openLibraryCoverUrl(7));
 });
 
 test('cacheKey: case- and punctuation-insensitive', () => {
