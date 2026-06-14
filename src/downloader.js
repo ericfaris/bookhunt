@@ -3,7 +3,8 @@
 const fs = require('fs');
 const path = require('path');
 const { getSession, ensureReady, enqueue, randomDelay, fetchDetail, fuzzyMatch } = require('./searcher');
-const { readEpubMetadata } = require('./epub');
+const { readEpubMetadata, parseEpubBuffer } = require('./epub');
+const { sniffArchive, extractEpubs } = require('./archive');
 
 const DOWNLOAD_PATH = process.env.DOWNLOAD_PATH || 'C:\\temp';
 const PREMIUM_BASE =
@@ -288,6 +289,29 @@ function sectionMatchesTitle(sectionHeader, title) {
 }
 
 /**
+ * Choose which postlinks to treat as mirrors of the wanted book.
+ *
+ * 1. Prefer links flagged with a Premium icon; if the adjacency heuristic found
+ *    none (markup variant), fall back to all postlinks.
+ * 2. For multi-book collection posts ("Books by Author"), each book has its own
+ *    section (a title or abbreviation like "W:" for *Whistler*, "TL:" …) with its
+ *    own mirror links — plus often a first "Download Instructions" link that is an
+ *    archive of ALL the books. Keep only links whose section header matches the
+ *    target book, so the per-book links win over the all-books archive. If the
+ *    post title itself matches the target, it's a single-book post and no
+ *    section filtering is applied.
+ */
+function selectPremiumLinks(postlinks, detailTitle, targetTitle) {
+  const flagged = postlinks.filter((l) => l.premium);
+  let links = flagged.length ? flagged : postlinks;
+  if (targetTitle && !fuzzyMatch(targetTitle, detailTitle)) {
+    const sectionFiltered = links.filter((l) => sectionMatchesTitle(l.sectionHeader, targetTitle));
+    if (sectionFiltered.length > 0) links = sectionFiltered;
+  }
+  return links;
+}
+
+/**
  * Premium download path. Opens the topic, finds the postlinks associated with a
  * Premium icon, and treats them as MIRRORS of one file: it tries each through
  * the amember downloader in order and stops at the first that downloads
@@ -317,20 +341,7 @@ async function runPremiumDownload(topicUrl, onProgress = () => {}, targetTitle) 
     throw new Error('No Premium icon found on this post — use the standard links');
   }
 
-  // Only run links that have a premium icon next to them; if the adjacency
-  // heuristic found none (markup variant), fall back to all postlinks.
-  const flagged = detail.postlinks.filter((l) => l.premium);
-  let premiumLinks = flagged.length ? flagged : detail.postlinks;
-
-  // For collection posts ("Books by Author"), multiple books share one post and
-  // each has its own section with its own mirror links. Filter to only the
-  // links whose section header matches (or abbreviates to) the target title.
-  // If the post title itself matches the target, we're on a single-book post
-  // and no filtering is needed.
-  if (targetTitle && !fuzzyMatch(targetTitle, detail.title)) {
-    const sectionFiltered = premiumLinks.filter((l) => sectionMatchesTitle(l.sectionHeader, targetTitle));
-    if (sectionFiltered.length > 0) premiumLinks = sectionFiltered;
-  }
+  const premiumLinks = selectPremiumLinks(detail.postlinks, detail.title, targetTitle);
 
   onProgress({ step: 'mirrors-found', total: premiumLinks.length });
 
@@ -489,11 +500,72 @@ async function attemptLink(page, link, meta, onProgress = () => {}) {
 }
 
 /**
- * Verify a freshly-saved file is the correct book and shape the success record.
- * Emits `verifying` then `verified` progress so the UI can show exactly what was
- * checked (structure + embedded title match).
+ * Choose which inner ePUB to keep when an archive holds more than one. Prefers
+ * the one whose embedded title matches what we searched for (so a multi-book
+ * bundle yields the right book); otherwise falls back to the largest entry.
  */
-function finalizeDownload(savePath, filename, meta, onProgress = () => {}) {
+function pickEpub(epubs, expectedTitle) {
+  if (epubs.length === 1) return epubs[0];
+  if (expectedTitle) {
+    for (const e of epubs) {
+      const m = parseEpubBuffer(e.data);
+      if (
+        m.ok &&
+        m.title &&
+        (fuzzyMatch(expectedTitle, m.title) || fuzzyMatch(m.title, expectedTitle))
+      ) {
+        return e;
+      }
+    }
+  }
+  return epubs.reduce((a, b) => (b.data.length > a.data.length ? b : a));
+}
+
+/**
+ * Releases are often the EPUB wrapped in a ZIP/RAR. If the saved file is such an
+ * archive, pull the inner ePUB out, write it to DOWNLOAD_PATH, delete the
+ * archive, and return the new { savePath, filename } so verification + send-to-
+ * reader operate on the real ePUB. A bare ePUB (or non-archive) passes through
+ * untouched. Throws (→ failed mirror) if a recognized archive has no usable ePUB.
+ */
+async function resolveArchive(savePath, filename, meta, onProgress = () => {}) {
+  const kind = sniffArchive(savePath);
+  if (kind !== 'zip' && kind !== 'rar') return { savePath, filename };
+
+  onProgress({ step: 'extracting', filename, archive: kind });
+  let epubs;
+  try {
+    epubs = await extractEpubs(savePath);
+  } catch (err) {
+    try { fs.unlinkSync(savePath); } catch {}
+    throw new Error(`Could not read the ${kind.toUpperCase()} archive: ${err.message}`);
+  }
+  if (!epubs.length) {
+    try { fs.unlinkSync(savePath); } catch {}
+    throw new Error(`No EPUB found inside the ${kind.toUpperCase()} archive`);
+  }
+
+  const chosen = pickEpub(epubs, meta && meta.title);
+  const newFilename = buildBookFilename(meta, chosen.name); // ".epub" extension
+  const epubPath = path.join(DOWNLOAD_PATH, newFilename);
+  fs.writeFileSync(epubPath, chosen.data);
+  // Remove the archive now that the ePUB is extracted (unless, improbably, the
+  // tidy name resolved to the archive's own path).
+  if (path.resolve(epubPath) !== path.resolve(savePath)) {
+    try { fs.unlinkSync(savePath); } catch {}
+  }
+  onProgress({ step: 'extracted', filename: newFilename, from: filename, count: epubs.length });
+  return { savePath: epubPath, filename: newFilename };
+}
+
+/**
+ * Verify a freshly-saved file is the correct book and shape the success record.
+ * First unwraps a ZIP/RAR archive to the inner ePUB if needed. Emits `verifying`
+ * then `verified` progress so the UI can show exactly what was checked
+ * (structure + embedded title match).
+ */
+async function finalizeDownload(savePath, filename, meta, onProgress = () => {}) {
+  ({ savePath, filename } = await resolveArchive(savePath, filename, meta, onProgress));
   onProgress({ step: 'verifying', filename });
   const v = verifyBook(savePath, meta && meta.title);
   onProgress({
@@ -539,4 +611,8 @@ module.exports = {
   runMirrors,
   makeAbbr,
   sectionMatchesTitle,
+  selectPremiumLinks,
+  pickEpub,
+  resolveArchive,
+  finalizeDownload,
 };

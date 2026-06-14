@@ -83,18 +83,13 @@ function tagText(xml, tag) {
 }
 
 /**
- * Read the embedded metadata from an ePUB file on disk.
+ * Read the embedded metadata from an in-memory ePUB (ZIP) buffer.
  * Returns { ok, title, author, opfPath }. `ok` is false for anything that
  * isn't a readable ZIP with a parseable OPF (truncated file, non-ePUB, etc.).
  */
-function readEpubMetadata(filePath) {
+function parseEpubBuffer(buf) {
   const fail = { ok: false, title: '', author: '', opfPath: '' };
-  let buf;
-  try {
-    buf = fs.readFileSync(filePath);
-  } catch {
-    return fail;
-  }
+  if (!Buffer.isBuffer(buf)) return fail;
   const eocd = findEOCD(buf);
   if (!eocd) return fail;
   const entries = parseCentralDirectory(buf, eocd.cdOffset, eocd.count);
@@ -122,8 +117,23 @@ function readEpubMetadata(filePath) {
   };
 }
 
+/**
+ * Read the embedded metadata from an ePUB file on disk. Thin wrapper over
+ * parseEpubBuffer that loads the file first.
+ */
+function readEpubMetadata(filePath) {
+  let buf;
+  try {
+    buf = fs.readFileSync(filePath);
+  } catch {
+    return { ok: false, title: '', author: '', opfPath: '' };
+  }
+  return parseEpubBuffer(buf);
+}
+
 module.exports = {
   readEpubMetadata,
+  parseEpubBuffer,
   // exported for unit tests
   findEOCD,
   parseCentralDirectory,

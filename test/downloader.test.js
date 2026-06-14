@@ -21,6 +21,8 @@ const {
   extractYear,
   cleanBookTitle,
   buildBookFilename,
+  sectionMatchesTitle,
+  selectPremiumLinks,
 } = downloader;
 
 // Build a buffer that looks like a real EPUB: ZIP magic at 0, and the
@@ -207,4 +209,65 @@ test('verifyBook: a plain (non-ePUB) zip → no embedded title, titleMatch null'
   assert.equal(v.epub, false);
   assert.equal(v.embeddedTitle, '');
   assert.equal(v.titleMatch, null);
+});
+
+// ---------------------------------------------------------------------------
+// Per-book section selection in "Books by Author" collection posts.
+// Scenario mirrors the real "Whistler — Ann Patchett" post: a first
+// "Download Instructions" link that is an archive of all 7 books, then a
+// per-book section "W:" (Whistler) with its own mirror links.
+// ---------------------------------------------------------------------------
+test('sectionMatchesTitle: single-letter abbreviation ("W:" → Whistler)', () => {
+  assert.equal(sectionMatchesTitle('W:', 'Whistler'), true);
+  assert.equal(sectionMatchesTitle('W', 'Whistler'), true);
+});
+
+test('sectionMatchesTitle: multi-letter abbreviation ("TL:" → The Lacuna)', () => {
+  assert.equal(sectionMatchesTitle('TL:', 'The Lacuna'), true);
+  assert.equal(sectionMatchesTitle('TCC', 'The Calamity Club'), true);
+});
+
+test('sectionMatchesTitle: full book name in the header matches', () => {
+  assert.equal(sectionMatchesTitle('Whistler (.ePUB)', 'Whistler'), true);
+});
+
+test('sectionMatchesTitle: the all-books archive header does NOT match a book', () => {
+  assert.equal(sectionMatchesTitle('Download Instructions:', 'Whistler'), false);
+  assert.equal(sectionMatchesTitle('Complete Collection', 'Whistler'), false);
+});
+
+test('selectPremiumLinks: picks the per-book section over the all-books archive', () => {
+  const detailTitle = 'Books by Ann Patchett (.ePUB)';
+  const postlinks = [
+    { url: 'https://filedot.to/archive7', premium: true, sectionHeader: 'Download Instructions:' },
+    { url: 'https://send.now/d/ajTF', premium: true, sectionHeader: 'TL:' },
+    { url: 'https://send.now/6lb2', premium: true, sectionHeader: 'W:' },
+    { url: 'https://filedot.to/ku6w', premium: true, sectionHeader: 'W:' },
+  ];
+  const chosen = selectPremiumLinks(postlinks, detailTitle, 'Whistler');
+  assert.deepEqual(
+    chosen.map((l) => l.url),
+    ['https://send.now/6lb2', 'https://filedot.to/ku6w'],
+    'only the two Whistler ("W:") mirror links, not the 7-book archive'
+  );
+});
+
+test('selectPremiumLinks: single-book post (title matches) uses all links, no filtering', () => {
+  const postlinks = [
+    { url: 'https://a/1', premium: true, sectionHeader: 'Download:' },
+    { url: 'https://a/2', premium: true, sectionHeader: '' },
+  ];
+  const chosen = selectPremiumLinks(postlinks, 'Whistler by Ann Patchett (.ePUB)', 'Whistler');
+  assert.equal(chosen.length, 2);
+});
+
+test('selectPremiumLinks: no section matches → falls back to all links (still tries)', () => {
+  const postlinks = [
+    { url: 'https://a/1', premium: true, sectionHeader: 'Download Instructions:' },
+    { url: 'https://a/2', premium: true, sectionHeader: 'Bel Canto:' },
+  ];
+  // Target not present as any section → don't drop everything; return all so the
+  // archive (which extraction can still unwrap) is at least attempted.
+  const chosen = selectPremiumLinks(postlinks, 'Books by Ann Patchett', 'Whistler');
+  assert.equal(chosen.length, 2);
 });

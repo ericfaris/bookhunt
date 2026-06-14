@@ -9,6 +9,8 @@ A self-hosted web app that searches the Mobilism ebook forum by title and/or aut
 ## Features
 
 - **ePUB-only** — all other formats filtered out
+- **Archive unwrapping** — releases posted as a `.zip`/`.rar` are extracted; the inner `.epub` is pulled out and used for verification + sending (ZIP handled natively, RAR via `node-unrar-js`)
+- **Per-book selection** — in "Books by Author" posts, the target book's own section (its name or an abbreviation like `W:` for *Whistler*) is preferred over the first link, which is usually an all-books archive
 - **Fuzzy matching** — `1984` matches `1984: Illustrated Edition`; tokens match at word starts (so short titles like *It Ends with Us* don't false-positive inside unrelated words)
 - **Collection crawling** — auto-scans up to 3 bundle/series/omnibus posts per search
 - **Author fallback** — title-only author search as a last resort, gated on the post's actual author so blurb name-drops don't leak in
@@ -196,7 +198,7 @@ Cloudflare Access is the front gate, but the origin no longer trusts it blindly.
 
 ### Downloads
 
-- **Premium** (`img.MobilismDownloaderIcon` found in post): each associated download link is fetched through the amember downloader and saved to `DOWNLOAD_PATH`. Credentials are entered in the UI once per session and never written to disk (or optionally set via `MOBILISM_PREMIUM_USER`/`MOBILISM_PREMIUM_PASS` in `.env`).
+- **Premium** (`img.MobilismDownloaderIcon` found in post): each associated download link is fetched through the amember downloader and saved to `DOWNLOAD_PATH`. Credentials are entered in the UI once per session and never written to disk (or optionally set via `MOBILISM_PREMIUM_USER`/`MOBILISM_PREMIUM_PASS` in `.env`). If a mirror serves the book wrapped in a **ZIP or RAR archive**, it's unpacked automatically: the inner `.epub` is extracted (the matching book is chosen when a bundle holds several), the archive is deleted, and verification + send-to-reader run on the real `.epub`.
 - **Standard** (no Premium icon): every `a.postlink` is shown as a button labeled by file host and opens in a new tab.
 
 ---
@@ -273,7 +275,9 @@ src/
   searcher.js     Playwright session, search + crawl logic
   correct.js      Spell-correction of title/author before search
   amazon.js       Scrape title/author from an Amazon product page (Paste + prefill)
-  downloader.js   Premium + standard download logic (+ ePUB verification)
+  downloader.js   Premium + standard download logic (+ ePUB verification, archive unwrap)
+  archive.js      Detect ZIP/RAR and extract the inner ePUB(s)
+  epub.js         Zero-dep ePUB (ZIP) metadata reader
   history.js      Read/write history.json
   recipients.js   CRUD over recipients.json
   smtp.js         Shared Gmail SMTP transport

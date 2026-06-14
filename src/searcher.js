@@ -368,11 +368,16 @@ async function fetchDetail(page, topicUrl) {
     // capture that context here so the downloader can filter by target book.
     const links = [];
     let currentSection = '';
+    // A header is normal-length text OR a short colon-terminated label. The
+    // colon clause is essential for single/double-letter book abbreviations like
+    // "W:" (Whistler) or "TL:" — without it, those links inherit the PREVIOUS
+    // section and a per-book download grabs the wrong book (or the all-books archive).
+    const isHeader = (t) => t.length > 2 || /[:：]$/.test(t);
     (function walk(node) {
       if (!node) return;
       if (node.nodeType === 3) { // Text node
         const t = node.textContent.trim();
-        if (t.length > 2) currentSection = t;
+        if (isHeader(t)) currentSection = t;
         return;
       }
       if (node.nodeType !== 1) return;
@@ -395,7 +400,7 @@ async function fetchDetail(page, topicUrl) {
       // Update section for header-like elements that don't themselves contain links
       if (['strong', 'b', 'em', 'h2', 'h3', 'h4'].includes(tag) && !node.querySelector('a.postlink')) {
         const t = node.textContent.trim();
-        if (t.length > 2) currentSection = t;
+        if (isHeader(t)) currentSection = t;
       }
       for (const child of node.childNodes) walk(child);
     })(content);

@@ -489,6 +489,7 @@ const DL_STEPS = [
   { id: 'read', label: 'Read the Mobilism post' },
   { id: 'login', label: 'Sign in to the premium downloader' },
   { id: 'fetch', label: 'Download from a mirror' },
+  { id: 'extract', label: 'Unpack the archive (if any)' },
   { id: 'verify', label: "Open the ePUB & confirm it's the right book" },
 ];
 
@@ -582,6 +583,10 @@ function setStep(id, state, note) {
   if (note != null) li.querySelector('.dl-step-note').textContent = note;
 }
 
+// Tracks whether the current mirror produced an archive, so the "Unpack" step
+// can resolve to "not an archive" instead of hanging when a bare ePUB arrives.
+let dlArchiveSeen = false;
+
 function handleDownloadEvent(ev, result) {
   switch (ev.step) {
     case 'reading-post':
@@ -593,8 +598,10 @@ function handleDownloadEvent(ev, result) {
     case 'mirror':
       // A new mirror attempt begins — reset the per-mirror steps.
       stopFetchTimer();
+      dlArchiveSeen = false;
       setStep('login', 'pending', '');
       setStep('fetch', 'active', `Mirror ${ev.index} of ${ev.total}${ev.host ? ' · ' + ev.host : ''}`);
+      setStep('extract', 'pending', '');
       setStep('verify', 'pending', '');
       break;
     case 'login':
@@ -611,7 +618,15 @@ function handleDownloadEvent(ev, result) {
       stopFetchTimer();
       setStep('fetch', 'done', ev.filename || '');
       break;
+    case 'extracting':
+      dlArchiveSeen = true;
+      setStep('extract', 'active', `Unpacking the ${(ev.archive || 'archive').toUpperCase()}…`);
+      break;
+    case 'extracted':
+      setStep('extract', 'done', ev.count > 1 ? `Picked the ePUB from ${ev.count} in the archive` : 'Found the ePUB inside');
+      break;
     case 'verifying':
+      if (!dlArchiveSeen) setStep('extract', 'done', 'Not an archive — direct ePUB');
       setStep('verify', 'active', 'Opening the ePUB…');
       break;
     case 'verified':
