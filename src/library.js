@@ -15,7 +15,7 @@ const path = require('path');
  * @param {Array} entries  history.readAll() — newest-first.
  * @param {(savePath:string)=>boolean} fileExists  whether the .epub is on disk.
  * @returns {Array} books, newest-acquired first:
- *   { id, title, filename, savePath, url, mode, verified, size,
+ *   { id, title, author, cover, filename, savePath, url, mode, verified, size,
  *     acquiredAt, filePresent, sends: [{ to, channels, kindlePushed, timestamp }] }
  */
 function buildLibrary(entries, fileExists = () => true) {
@@ -36,6 +36,8 @@ function buildLibrary(entries, fileExists = () => true) {
       book = {
         id: e.id,
         title: e.title || '',
+        author: e.author || '',
+        cover: e.cover || null,
         filename: e.filename || '',
         savePath: e.savePath,
         url: e.url || null,
@@ -51,6 +53,10 @@ function buildLibrary(entries, fileExists = () => true) {
     }
     if (e.id) book._ids.add(e.id);
     if (e.filename) book._filenames.add(e.filename);
+    // Backfill from an older re-download if the representative lacks the field —
+    // the newest entry is canonical, but covers/authors fill in where missing.
+    if (!book.author && e.author) book.author = e.author;
+    if (!book.cover && e.cover) book.cover = e.cover;
   }
 
   // 2. Attach sends. Prefer an exact downloadId match; fall back to filename for

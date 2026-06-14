@@ -362,6 +362,15 @@ function el(tag, props = {}, children = []) {
   return node;
 }
 
+// Trailing-edge debounce: coalesces rapid calls (e.g. keystrokes) into one.
+function debounce(fn, ms) {
+  let timer;
+  return (...args) => {
+    clearTimeout(timer);
+    timer = setTimeout(() => fn(...args), ms);
+  };
+}
+
 function renderCard(r) {
   const cover = r.cover
     ? el('img', { className: 'cover', src: r.cover, alt: 'cover', loading: 'lazy' })
@@ -389,7 +398,7 @@ function renderCard(r) {
       const btn = el('button', { className: 'dl-btn', type: 'button' }, link.host);
       btn.addEventListener('click', () => {
         window.open(link.url, '_blank', 'noopener');
-        logStandard(link, r.title);
+        logStandard(link, r.title, r.author, r.cover);
       });
       dlRow.append(btn);
     }
@@ -509,7 +518,13 @@ async function premiumDownload(result, btn) {
     const res = await fetch('/api/download', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ url: result.url, title: result.title, searchedTitle: $('#title').value.trim() }),
+      body: JSON.stringify({
+        url: result.url,
+        title: result.title,
+        searchedTitle: $('#title').value.trim(),
+        author: result.author || '',
+        cover: result.cover || null,
+      }),
     });
     if (res.status === 401) {
       const data = await res.json().catch(() => ({}));
@@ -769,11 +784,11 @@ function formatBytes(n) {
   return `${v.toFixed(i ? 1 : 0)} ${u[i]}`;
 }
 
-function logStandard(link, title) {
+function logStandard(link, title, author, cover) {
   fetch('/api/download/standard', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ url: link.url, host: link.host, title }),
+    body: JSON.stringify({ url: link.url, host: link.host, title, author: author || '', cover: cover || null }),
   }).catch(() => {});
 }
 
@@ -963,8 +978,17 @@ $('#sendGo').addEventListener('click', async () => {
 // ---------------------------------------------------------------------------
 const libraryPanel = $('#libraryPanel');
 const libraryList = $('#libraryList');
+const librarySearch = $('#librarySearch');
+const libraryCount = $('#libraryCount');
 $('#libraryToggle').addEventListener('click', openLibrary);
 $('#libraryClose').addEventListener('click', closeLibrary);
+// Live title/author filter — debounced so each keystroke doesn't thrash the DOM.
+librarySearch.addEventListener('input', debounce(applyLibraryFilter, 120));
+
+// Full set from the last /api/library load; the search box filters this in place
+// (no refetch). Covers resolved lazily are remembered across re-filters.
+let allLibraryBooks = [];
+const coverCache = new Map(); // 'title|author' (lowercased) -> url | null
 
 async function openLibrary() {
   libraryPanel.hidden = false;
@@ -972,8 +996,12 @@ async function openLibrary() {
   renderLibrarySkeleton();
   try {
     const data = await fetch('/api/library').then((r) => r.json());
-    renderLibrary(data.books || []);
+    allLibraryBooks = data.books || [];
+    librarySearch.value = '';
+    applyLibraryFilter();
   } catch {
+    allLibraryBooks = [];
+    libraryCount.textContent = '';
     libraryList.innerHTML = '';
     libraryList.append(
       el('div', { className: 'lib-empty' }, [
@@ -986,6 +1014,62 @@ async function openLibrary() {
 function closeLibrary() {
   libraryPanel.hidden = true;
   $('#overlay').hidden = true;
+}
+
+// Filter the loaded library by the search box (matches title, author, filename),
+// then render. Empty query shows everything.
+function applyLibraryFilter() {
+  const q = (librarySearch.value || '').trim().toLowerCase();
+  const matches = !q
+    ? allLibraryBooks
+    : allLibraryBooks.filter((b) => {
+        const hay = [b.title, b.author, b.filename].filter(Boolean).join(' ').toLowerCase();
+        return q.split(/\s+/).every((term) => hay.includes(term));
+      });
+  libraryCount.textContent = allLibraryBooks.length
+    ? `${matches.length} of ${allLibraryBooks.length}`
+    : '';
+  renderLibrary(matches, q);
+}
+
+// Lazy cover loading: only fetch a cover once its row scrolls into view. One
+// observer drives every placeholder; each carries its title/author on dataset.
+const coverObserver = ('IntersectionObserver' in window)
+  ? new IntersectionObserver((entries, obs) => {
+      for (const entry of entries) {
+        if (entry.isIntersecting) {
+          obs.unobserve(entry.target);
+          loadCover(entry.target);
+        }
+      }
+    }, { root: libraryList, rootMargin: '200px' })
+  : null;
+
+async function loadCover(holder) {
+  const title = holder.dataset.title || '';
+  const author = holder.dataset.author || '';
+  const key = `${title}|${author}`.toLowerCase();
+
+  let url = coverCache.get(key);
+  if (url === undefined) {
+    try {
+      const params = new URLSearchParams();
+      if (title) params.set('title', title);
+      if (author) params.set('author', author);
+      const data = await fetch(`/api/cover?${params.toString()}`).then((r) => r.json());
+      url = data.cover || null;
+    } catch {
+      url = null;
+    }
+    coverCache.set(key, url);
+  }
+  // The holder may have been re-rendered away by a filter change; only paint if
+  // it's still in the DOM.
+  if (url && holder.isConnected) {
+    const img = el('img', { className: 'cover', src: url, alt: '', loading: 'lazy' });
+    holder.replaceChildren(img);
+    holder.classList.remove('placeholder');
+  }
 }
 
 // Shimmer placeholders while the library loads — keeps the drawer from flashing
@@ -1003,19 +1087,41 @@ function renderLibrarySkeleton() {
   }
 }
 
-function renderLibrary(books) {
+function renderLibrary(books, query) {
   libraryList.innerHTML = '';
   if (!books.length) {
-    libraryList.append(
-      el('div', { className: 'lib-empty' }, [
-        el('div', { className: 'lib-empty-icon' }, '📭'),
-        el('p', {}, 'No books yet.'),
-        el('p', { className: 'hint' }, 'Download a book and it’ll show up here with its send history.'),
-      ])
-    );
+    const empty = query
+      ? el('div', { className: 'lib-empty' }, [
+          el('div', { className: 'lib-empty-icon' }, '🔍'),
+          el('p', {}, 'No matches.'),
+          el('p', { className: 'hint' }, `Nothing in your library matches “${query}”.`),
+        ])
+      : el('div', { className: 'lib-empty' }, [
+          el('div', { className: 'lib-empty-icon' }, '📭'),
+          el('p', {}, 'No books yet.'),
+          el('p', { className: 'hint' }, 'Download a book and it’ll show up here with its send history.'),
+        ]);
+    libraryList.append(empty);
     return;
   }
   for (const book of books) libraryList.append(renderLibraryBook(book));
+}
+
+// Build a book's cover element. A stored cover renders immediately; otherwise a
+// placeholder is returned and registered with the IntersectionObserver so its
+// cover is fetched only once it scrolls into view (lazy loading).
+function renderLibraryCover(book) {
+  const key = `${book.title || ''}|${book.author || ''}`.toLowerCase();
+  const cached = book.cover || coverCache.get(key);
+  if (cached) {
+    return el('img', { className: 'lib-cover', src: cached, alt: '', loading: 'lazy' });
+  }
+  const holder = el('div', { className: 'lib-cover placeholder' }, '📖');
+  holder.dataset.title = book.title || '';
+  holder.dataset.author = book.author || '';
+  if (coverObserver) coverObserver.observe(holder);
+  else loadCover(holder); // no IO support → just fetch now
+  return holder;
 }
 
 function renderLibraryBook(book) {
@@ -1057,13 +1163,18 @@ function renderLibraryBook(book) {
     );
   }
 
-  return el('div', { className: 'lib-book' }, [
+  const main = el('div', { className: 'lib-main' }, [
     el('h3', { className: 'lib-title' }, book.title || book.filename || 'Untitled'),
+    book.author ? el('div', { className: 'lib-author' }, book.author) : null,
     book.filename && book.filename !== book.title
       ? el('div', { className: 'lib-filename hint' }, book.filename)
       : null,
     badges,
     meta,
+  ]);
+
+  return el('div', { className: 'lib-book' }, [
+    el('div', { className: 'lib-top' }, [renderLibraryCover(book), main]),
     sendsWrap,
     actions,
   ]);

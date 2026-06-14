@@ -21,6 +21,37 @@ test('buildLibrary: one row per downloaded file with its metadata', () => {
   assert.equal(books[0].filePresent, true); // default fileExists → true
 });
 
+test('buildLibrary: carries author and cover through from the download entry', () => {
+  const books = buildLibrary([
+    dl({ id: 'd1', title: 'Dune', author: 'Frank Herbert', cover: 'https://c/dune.jpg',
+         filename: 'dune.epub', savePath: '/dl/dune.epub' }),
+  ]);
+  assert.equal(books[0].author, 'Frank Herbert');
+  assert.equal(books[0].cover, 'https://c/dune.jpg');
+});
+
+test('buildLibrary: defaults author to "" and cover to null when absent', () => {
+  const books = buildLibrary([
+    dl({ id: 'd1', title: 'Untitled', filename: 'x.epub', savePath: '/dl/x.epub' }),
+  ]);
+  assert.equal(books[0].author, '');
+  assert.equal(books[0].cover, null);
+});
+
+test('buildLibrary: backfills cover/author from an older re-download of the same file', () => {
+  const books = buildLibrary([
+    // newest is the representative but lacks a cover/author...
+    dl({ id: 'd2', filename: 'a.epub', savePath: '/dl/a.epub', timestamp: '2026-06-13T10:00:00Z' }),
+    // ...an older entry for the same file has them.
+    dl({ id: 'd1', author: 'Old Author', cover: 'https://c/a.jpg',
+         filename: 'a.epub', savePath: '/dl/a.epub', timestamp: '2026-06-12T10:00:00Z' }),
+  ]);
+  assert.equal(books.length, 1);
+  assert.equal(books[0].id, 'd2', 'newest stays the representative');
+  assert.equal(books[0].author, 'Old Author');
+  assert.equal(books[0].cover, 'https://c/a.jpg');
+});
+
 test('buildLibrary: excludes standard/external downloads (no savePath)', () => {
   const books = buildLibrary([
     dl({ id: 's1', mode: 'standard', filename: 'rapidgator', savePath: null }),

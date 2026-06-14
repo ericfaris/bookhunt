@@ -283,6 +283,21 @@ input:focus, select:focus { border-color: var(--accent); }
 }
 .library-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; }
 .library-head h2 { margin: 0; font-size: 1.1rem; }
+
+/* Search / filter bar */
+.library-search { display: flex; align-items: center; gap: 0.6rem; margin-bottom: 0.85rem; }
+.library-search input {
+  flex: 1; min-width: 0;
+  padding: 0.5rem 0.7rem;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--surface);
+  color: inherit;
+  font-size: 0.9rem;
+}
+.library-search input:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+.library-count { font-size: 0.76rem; color: var(--text-dim); white-space: nowrap; }
+
 .library-list { display: flex; flex-direction: column; gap: 0.85rem; }
 
 .lib-book {
@@ -291,6 +306,21 @@ input:focus, select:focus { border-color: var(--accent); }
   padding: 0.9rem 1rem;
   background: var(--surface);
 }
+/* Cover + metadata sit side by side at the top of each row. */
+.lib-top { display: flex; gap: 0.85rem; align-items: flex-start; }
+.lib-main { min-width: 0; flex: 1; }
+.lib-cover {
+  width: 64px; height: 96px;
+  flex: 0 0 auto;
+  object-fit: cover;
+  border-radius: 7px;
+  background: var(--surface-2);
+}
+.lib-cover.placeholder {
+  display: flex; align-items: center; justify-content: center;
+  font-size: 1.5rem; color: var(--text-dim);
+}
+.lib-author { font-size: 0.86rem; color: var(--text-dim); margin: 0 0 0.3rem; }
 .lib-title { margin: 0 0 0.15rem; font-size: 1rem; }
 .lib-filename { margin-bottom: 0.5rem; word-break: break-word; }
 .lib-book .badges { margin-bottom: 0.5rem; }

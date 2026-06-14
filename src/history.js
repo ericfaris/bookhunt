@@ -49,9 +49,10 @@ function logSearch({ title, author, sort, resultCount }) {
   return add({ type: 'search', title, author, sort, resultCount });
 }
 
-/** Record a completed download. */
-function logDownload({ title, filename, savePath, url, mode, verified, size }) {
-  return add({ type: 'download', title, filename, savePath, url, mode, verified, size });
+/** Record a completed download. `author`/`cover` (when known from the search
+ *  result) ride along so the Library can show a cover without a fresh lookup. */
+function logDownload({ title, author, filename, savePath, url, mode, verified, size, cover }) {
+  return add({ type: 'download', title, author, filename, savePath, url, mode, verified, size, cover });
 }
 
 /**

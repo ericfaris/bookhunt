@@ -17,6 +17,7 @@ const kindle = require('./kindle');
 const security = require('./security');
 const reupload = require('./reupload');
 const library = require('./library');
+const covers = require('./covers');
 const messages = require('./messages');
 const batch = require('./batch');
 const correct = require('./correct');
@@ -269,7 +270,7 @@ app.post('/api/premium/creds', (req, res) => {
 // after the stream opens — including needWarm and fatal errors — is delivered as
 // an SSE `error` event, since the HTTP status is already committed.
 app.post('/api/download', async (req, res) => {
-  const { url, title, searchedTitle } = req.body || {};
+  const { url, title, searchedTitle, author, cover } = req.body || {};
   if (!url) return res.status(400).json({ error: 'Missing post url.' });
   // The topic URL is navigated to in the authenticated browser session, so only
   // allow forum (mobilism.org) http(s) URLs — never an attacker-chosen origin.
@@ -293,6 +294,8 @@ app.post('/api/download', async (req, res) => {
     for (const d of result.downloads) {
       const stored = history.logDownload({
         title: searchedTitle || title || result.title,
+        author: author || '',
+        cover: cover || null,
         filename: d.filename,
         savePath: d.savePath,
         url: d.url,
@@ -314,8 +317,8 @@ app.post('/api/download', async (req, res) => {
 
 // --- Standard download logging (links opened client-side) -------------------
 app.post('/api/download/standard', (req, res) => {
-  const { url, host, title } = req.body || {};
-  history.logDownload({ title, filename: host || 'external link', savePath: null, url, mode: 'standard' });
+  const { url, host, title, author, cover } = req.body || {};
+  history.logDownload({ title, author: author || '', cover: cover || null, filename: host || 'external link', savePath: null, url, mode: 'standard' });
   res.json({ ok: true });
 });
 
@@ -367,6 +370,23 @@ app.get('/api/library', (_req, res) => {
     }
   });
   res.json({ books });
+});
+
+// --- Cover lookup: lazy per-book cover for Library rows lacking one ----------
+// The client calls this only for rows scrolled into view (IntersectionObserver),
+// so we never fan out lookups for the whole library at once. Results are cached
+// to disk (src/covers.js) so a given book is looked up at most once. Fails soft:
+// any miss/error returns { cover: null }.
+app.get('/api/cover', async (req, res) => {
+  const title = typeof req.query.title === 'string' ? req.query.title : '';
+  const author = typeof req.query.author === 'string' ? req.query.author : '';
+  if (!title.trim() && !author.trim()) return res.json({ cover: null });
+  try {
+    const cover = await covers.resolveCover({ title, author });
+    res.json({ cover: cover || null });
+  } catch {
+    res.json({ cover: null });
+  }
 });
 
 // --- Notification recipients ------------------------------------------------

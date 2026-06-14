@@ -2,6 +2,7 @@ node_modules/
 .env
 history.json
 recipients.json
+covers-cache.json
 .browser-profile/
 *.log
 .DS_Store
