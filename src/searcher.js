@@ -203,6 +203,90 @@ async function ensureLoggedIn(page) {
 }
 
 // ---------------------------------------------------------------------------
+// Hands-off (re)warming — see warmUp() below. The goal is that the app keeps
+// itself authenticated on its own: a headed browser usually passes Cloudflare's
+// JS/Turnstile challenge unattended, and the login form is just env creds, so a
+// human is only needed for an INTERACTIVE Cloudflare challenge.
+// ---------------------------------------------------------------------------
+
+// True when the current page is sitting on a Cloudflare interstitial/challenge
+// (the "Just a moment…" / Turnstile screen) rather than the real forum.
+async function isCloudflareChallenge(page) {
+  const title = (await page.title().catch(() => '')) || '';
+  if (/just a moment|attention required|checking your browser|security verification/i.test(title)) {
+    return true;
+  }
+  return await page
+    .evaluate(
+      () =>
+        !!document.querySelector(
+          '#challenge-form, #cf-challenge-running, iframe[src*="challenges.cloudflare.com"], .cf-turnstile'
+        )
+    )
+    .catch(() => false);
+}
+
+// Fill + submit the Mobilism login form on the LIVE page using env creds. Assumes
+// you're already on (or about to navigate to) the login page and that Cloudflare
+// is cleared. Returns true if the form was found and submitted.
+async function submitLoginForm(page) {
+  const user = process.env.MOBILISM_USER;
+  const pass = process.env.MOBILISM_PASS;
+  if (!user || !pass) throw new Error('MOBILISM_USER and MOBILISM_PASS must be set in .env');
+  if (!(await page.$('input[name="password"]'))) return false;
+  await page.fill('input[name="username"]', user).catch(() => {});
+  await page.fill('input[name="password"]', pass);
+  await page.check('input[name="autologin"]').catch(() => {});
+  await page.click('button[name="login"], input[name="login"]').catch(() => {});
+  await page.waitForSelector('a[href*="mode=logout"]', { timeout: 20000 }).catch(() => {});
+  return true;
+}
+
+/**
+ * Try to bring the session up WITHOUT a human. Runs on the shared queue so it
+ * never collides with a search. Sequence: if already logged in, done; otherwise
+ * navigate to the forum and let a headed browser auto-clear Cloudflare; if that
+ * works, fill the login form. The return value tells the caller what happened so
+ * it can decide whether to summon a human:
+ *   { ready, action, humanNeeded }
+ * `humanNeeded` is true ONLY for an interactive Cloudflare challenge that an
+ * unattended browser can't pass — that's the one case /warm still exists for.
+ */
+async function warmUp() {
+  return enqueue(async () => {
+    const { page } = await getSession();
+    if (await isLoggedIn(page)) return { ready: true, action: 'already', humanNeeded: false };
+
+    // Surface current Cloudflare/login state. A headed browser usually clears the
+    // JS challenge within a few seconds of landing on the page.
+    await page.goto(`${BASE_URL}/index.php`, { waitUntil: 'domcontentloaded' }).catch(() => {});
+    if (await isCloudflareChallenge(page)) {
+      await page.waitForTimeout(6000); // give Turnstile/JS a chance to auto-pass
+      if (await isLoggedIn(page)) return { ready: true, action: 'cf-auto', humanNeeded: false };
+      if (await isCloudflareChallenge(page)) {
+        // Still blocked → interactive challenge. This is the only path that needs
+        // a person (in /warm). Caller will notify + back off so they can solve it.
+        return { ready: false, action: 'cf-blocked', humanNeeded: true };
+      }
+    }
+    if (await isLoggedIn(page)) return { ready: true, action: 'cf-auto', humanNeeded: false };
+
+    // Cloudflare is clear but we're not logged in → submit the login form.
+    await page.goto(`${BASE_URL}/ucp.php?mode=login`, { waitUntil: 'domcontentloaded' }).catch(() => {});
+    await page.waitForTimeout(1500);
+    if (await isCloudflareChallenge(page)) {
+      return { ready: false, action: 'cf-blocked', humanNeeded: true };
+    }
+    const submitted = await submitLoginForm(page);
+    if (!submitted) return { ready: false, action: 'no-form', humanNeeded: true };
+    if (await isLoggedIn(page)) return { ready: true, action: 'logged-in', humanNeeded: false };
+    // Form submitted but session didn't come up — usually a wrong-creds or a
+    // post-login challenge; a human in /warm can sort it out.
+    return { ready: false, action: 'login-failed', humanNeeded: true };
+  });
+}
+
+// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 const randomDelay = () =>
@@ -635,6 +719,7 @@ module.exports = {
   closeSession,
   sessionStatus,
   ensureReady,
+  warmUp,
   enqueue,
   randomDelay,
   fetchDetail,

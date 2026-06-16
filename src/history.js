@@ -65,4 +65,4 @@ function logNotify({ downloadId, title, filename, to, kindlePushed, channels }) 
   return add({ type: 'notify', downloadId, title, filename, to, kindlePushed, channels });
 }
 
-module.exports = { readAll, add, logSearch, logDownload, logNotify };
+module.exports = { readAll, writeAll, add, logSearch, logDownload, logNotify };

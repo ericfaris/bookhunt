@@ -43,4 +43,23 @@ async function notify(recipient, book, channelIds) {
   return results;
 }
 
-module.exports = { listChannels, byId, notify };
+/**
+ * Send a one-off test email so the user can verify SMTP end-to-end from the
+ * Settings panel. Uses the email channel directly. Throws if email isn't
+ * configured or the send fails.
+ */
+async function sendTest(email) {
+  const ch = byId('email');
+  if (!ch || !ch.isConfigured()) {
+    throw new Error('Email is not configured — set SMTP_* in .env.');
+  }
+  await ch.send({
+    recipient: { email },
+    book: {
+      title: 'Mobilism Finder test email',
+      description: 'If you can read this, your SMTP settings are working. 🎉',
+    },
+  });
+}
+
+module.exports = { listChannels, byId, notify, sendTest };

@@ -2,6 +2,8 @@ node_modules/
 .env
 history.json
 recipients.json
+recipient-groups.json
+booktags.json
 covers-cache.json
 .browser-profile/
 *.log

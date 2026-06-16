@@ -20,6 +20,9 @@ services:
       - ./history.json:/app/history.json
       # Notification recipients (name / email / kindle email / phone / carrier)
       - ./recipients.json:/app/recipients.json
+      # Recipient groups (presets) + per-book tags/collections
+      - ./recipient-groups.json:/app/recipient-groups.json
+      - ./booktags.json:/app/booktags.json
       # Library cover-URL cache (so each book is looked up at most once,
       # persisted across restarts; /app is root-owned, this isn't writable
       # by the uid-1000 process otherwise)

@@ -10,6 +10,7 @@ const fs = require('fs');
 const path = require('path');
 
 const FILE = path.join(__dirname, '..', 'recipients.json');
+const GROUPS_FILE = path.join(__dirname, '..', 'recipient-groups.json');
 
 function readAll() {
   try {
@@ -21,14 +22,19 @@ function readAll() {
 }
 
 function writeAll(list) {
-  const data = JSON.stringify(list, null, 2);
-  const tmp = FILE + '.tmp';
+  writeJsonAtomic(FILE, list);
+}
+
+// Atomic-with-fallback JSON write, shared by recipients + groups. Atomic rename
+// can fail on Docker bind-mounted volumes (WSL2), so fall back to a direct write.
+function writeJsonAtomic(file, value) {
+  const data = JSON.stringify(value, null, 2);
+  const tmp = file + '.tmp';
   try {
     fs.writeFileSync(tmp, data, 'utf8');
-    fs.renameSync(tmp, FILE);
+    fs.renameSync(tmp, file);
   } catch {
-    // Atomic rename fails on Docker bind-mounted files (WSL2 filesystem).
-    fs.writeFileSync(FILE, data, 'utf8');
+    fs.writeFileSync(file, data, 'utf8');
     try { fs.unlinkSync(tmp); } catch {}
   }
 }
@@ -78,4 +84,56 @@ function byIds(ids) {
   return readAll().filter((r) => set.has(r.id));
 }
 
-module.exports = { readAll, add, remove, byIds };
+// --- Recipient groups (presets) --------------------------------------------
+// A group is a named set of recipient ids — { id, name, recipientIds: [] } — so
+// a common audience ("Family") can be selected in one click when sending.
+const MAX_GROUPS = 100;
+
+function readGroups() {
+  try {
+    const data = JSON.parse(fs.readFileSync(GROUPS_FILE, 'utf8'));
+    return Array.isArray(data) ? data : [];
+  } catch {
+    return [];
+  }
+}
+
+function writeGroups(list) {
+  writeJsonAtomic(GROUPS_FILE, list);
+}
+
+// PURE: validate + normalize group input. Throws on bad input. Dangling ids
+// (recipients later deleted) are tolerated here and filtered at expand time.
+function cleanGroupInput({ name, recipientIds }) {
+  const n = clean(name);
+  if (!n) throw new Error('Group name is required');
+  if (!Array.isArray(recipientIds)) throw new Error('recipientIds must be an array');
+  const ids = [...new Set(recipientIds.filter((x) => typeof x === 'string' && x))].slice(0, MAX_RECIPIENTS);
+  if (!ids.length) throw new Error('Pick at least one recipient for the group');
+  return { name: n, recipientIds: ids };
+}
+
+function addGroup({ name, recipientIds }) {
+  const cleaned = cleanGroupInput({ name, recipientIds });
+  const list = readGroups();
+  if (list.length >= MAX_GROUPS) throw new Error('Too many groups');
+  const entry = {
+    id: 'g_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+    ...cleaned,
+  };
+  list.push(entry);
+  writeGroups(list);
+  return entry;
+}
+
+function removeGroup(id) {
+  const list = readGroups();
+  const next = list.filter((g) => g.id !== id);
+  writeGroups(next);
+  return next.length !== list.length;
+}
+
+module.exports = {
+  readAll, add, remove, byIds,
+  readGroups, addGroup, removeGroup, cleanGroupInput,
+};

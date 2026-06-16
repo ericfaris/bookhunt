@@ -159,6 +159,34 @@ function showWarmBanner(show) {
   warmBanner.hidden = !show;
 }
 
+// Manual "Log into Mobilism" button — fills env creds + submits on the live
+// browser server-side, so the password never has to be typed into noVNC. Handy
+// right after clearing a Cloudflare challenge in /warm (the auto-warm watcher
+// would get to it within ~20s, but this triggers it instantly).
+const warmLoginBtn = $('#warmLoginBtn');
+if (warmLoginBtn) {
+  warmLoginBtn.addEventListener('click', async () => {
+    const label = warmLoginBtn.textContent;
+    warmLoginBtn.disabled = true;
+    warmLoginBtn.textContent = 'Logging in…';
+    try {
+      const r = await fetch('/api/session/login', { method: 'POST' }).then((res) => res.json());
+      if (r.ready || (r.session && r.session.ready)) {
+        showWarmBanner(false);
+      } else if (r.humanNeeded) {
+        warmLoginBtn.textContent = 'Clear Cloudflare in /warm ↗';
+        window.open('/warm', '_blank', 'noopener');
+      }
+    } catch {
+      /* leave the banner; the watcher will keep trying */
+    } finally {
+      warmLoginBtn.disabled = false;
+      if (warmLoginBtn.textContent === 'Logging in…') warmLoginBtn.textContent = label;
+      refreshSessionStatus();
+    }
+  });
+}
+
 async function refreshSessionStatus() {
   try {
     const s = await fetch('/api/session/status').then((r) => r.json());
@@ -236,7 +264,7 @@ async function runSearch({ title, author, sort }) {
           if (!ev.results.length) {
             renderNotFound(ev.fallbackLinks);
           } else {
-            ev.results.forEach(renderCard);
+            showResults(ev.results);
             // Brief success confirmation, then get out of the way.
             showStatus(`✓ Found ${ev.results.length} match${ev.results.length === 1 ? '' : 'es'}.`);
             setTimeout(hideStatus, 2500);
@@ -371,15 +399,18 @@ function debounce(fn, ms) {
   };
 }
 
-function renderCard(r) {
+// Build one result card node. (renderCard appends it — kept for compatibility.)
+function buildCard(r) {
   const cover = r.cover
-    ? el('img', { className: 'cover', src: r.cover, alt: 'cover', loading: 'lazy' })
+    ? el('img', { className: 'cover zoomable', src: r.cover, alt: 'cover', loading: 'lazy', title: 'Click to enlarge' })
     : el('div', { className: 'cover placeholder', title: 'No cover available' }, '📖');
+  if (r.cover) cover.addEventListener('click', () => openLightbox(r.cover, r.title));
 
   const badges = el('div', { className: 'badges' }, [
     el('span', { className: 'badge' }, r.format || 'ePUB'),
     el('span', { className: 'badge src' }, r.source),
     r.premium ? el('span', { className: 'badge prem' }, 'Premium') : null,
+    isInLibrary(r) ? el('span', { className: 'badge ok-badge', title: 'Already in your library' }, '✓ In library') : null,
   ]);
 
   const metaBits = [];
@@ -416,11 +447,173 @@ function renderCard(r) {
     r.author ? el('p', { className: 'author' }, r.author) : null,
     badges,
     meta,
+    r.description ? buildSynopsis(r.description) : null,
     dlRow,
     reupRow,
   ]);
 
-  resultsEl.append(el('div', { className: 'card' }, [cover, body]));
+  return el('div', { className: 'card' }, [cover, body]);
+}
+
+function renderCard(r) {
+  (document.getElementById('resultsList') || resultsEl).append(buildCard(r));
+}
+
+// Collapsible synopsis: clamp to a few lines with a more/less toggle when the
+// blurb is long enough to be worth hiding.
+function buildSynopsis(text) {
+  const wrap = el('div', { className: 'synopsis' });
+  const p = el('p', { className: 'synopsis-text clamped' }, text);
+  wrap.append(p);
+  if (String(text).length > 140) {
+    const toggle = el('button', { className: 'synopsis-toggle', type: 'button' }, 'more');
+    toggle.addEventListener('click', () => {
+      const clamped = p.classList.toggle('clamped');
+      toggle.textContent = clamped ? 'more' : 'less';
+    });
+    wrap.append(toggle);
+  } else {
+    p.classList.remove('clamped');
+  }
+  return wrap;
+}
+
+// --- Cover lightbox (click any cover to enlarge) ---------------------------
+function openLightbox(src, alt) {
+  let lb = $('#lightbox');
+  if (!lb) {
+    lb = el('div', { className: 'lightbox', id: 'lightbox' });
+    lb.addEventListener('click', closeLightbox);
+    document.body.append(lb);
+  }
+  lb.innerHTML = '';
+  lb.append(el('img', { src, alt: alt || '' }));
+  lb.hidden = false;
+}
+function closeLightbox() {
+  const lb = $('#lightbox');
+  if (lb) { lb.hidden = true; lb.innerHTML = ''; }
+}
+
+// ---------------------------------------------------------------------------
+// Result view: filter + sort the fetched results in the browser (no re-scrape).
+// Mirrors src/resultfilter.js (the unit-tested canonical spec).
+// ---------------------------------------------------------------------------
+let lastResults = [];
+let resultView = { format: 'all', minMB: null, maxMB: null, sort: 'relevance' };
+const UNIT_BYTES = { B: 1, KB: 1024, MB: 1024 ** 2, GB: 1024 ** 3 };
+
+function parseSizeToBytes(size) {
+  if (typeof size !== 'string') return null;
+  const m = size.trim().match(/^(\d+(?:\.\d+)?)\s*(B|KB|MB|GB)$/i);
+  return m ? Math.round(parseFloat(m[1]) * UNIT_BYTES[m[2].toUpperCase()]) : null;
+}
+function isEpubResult(r) { return String((r && r.format) || '').toLowerCase() === 'epub'; }
+
+function filterResults(results, opts) {
+  const min = Number.isFinite(opts.minMB) ? opts.minMB * UNIT_BYTES.MB : null;
+  const max = Number.isFinite(opts.maxMB) ? opts.maxMB * UNIT_BYTES.MB : null;
+  return results.filter((r) => {
+    if (opts.format === 'epub' && !isEpubResult(r)) return false;
+    if (opts.format === 'other' && isEpubResult(r)) return false;
+    const bytes = parseSizeToBytes(r && r.size);
+    if (bytes != null) {
+      if (min != null && bytes < min) return false;
+      if (max != null && bytes > max) return false;
+    }
+    return true;
+  });
+}
+function sortResults(results, sort) {
+  const arr = results.map((r, i) => ({ r, i }));
+  const dateMs = (r) => { const t = r.date ? Date.parse(r.date) : NaN; return Number.isNaN(t) ? null : t; };
+  const cmp = (get, dir) => (a, b) => {
+    const av = get(a.r); const bv = get(b.r);
+    if (av == null && bv == null) return a.i - b.i;
+    if (av == null) return 1;
+    if (bv == null) return -1;
+    return av === bv ? a.i - b.i : dir * (av - bv);
+  };
+  if (sort === 'newest') arr.sort(cmp(dateMs, -1));
+  else if (sort === 'oldest') arr.sort(cmp(dateMs, 1));
+  else if (sort === 'largest') arr.sort(cmp((r) => parseSizeToBytes(r.size), -1));
+  else if (sort === 'smallest') arr.sort(cmp((r) => parseSizeToBytes(r.size), 1));
+  return arr.map((x) => x.r);
+}
+
+function showResults(results) {
+  lastResults = results.slice();
+  resultView = { format: 'all', minMB: null, maxMB: null, sort: 'relevance' };
+  resultsEl.querySelector('.results-bar')?.remove();
+  resultsEl.querySelector('.results-list')?.remove();
+  resultsEl.append(buildResultsBar(), el('div', { className: 'results-list', id: 'resultsList' }));
+  applyResultView();
+  // Cross-reference the library so the "In library" badge can light up; re-render
+  // once it's known (fire-and-forget — never blocks showing results).
+  refreshLibraryIndex().then(applyResultView).catch(() => {});
+}
+
+function buildResultsBar() {
+  const opt = (v, l) => el('option', { value: v }, l);
+  const fmt = el('select', { className: 'rf-select', id: 'rfFormat' },
+    [opt('all', 'All formats'), opt('epub', 'ePUB only'), opt('other', 'Other')]);
+  fmt.addEventListener('change', () => { resultView.format = fmt.value; applyResultView(); });
+  const sort = el('select', { className: 'rf-select', id: 'rfSort' },
+    [opt('relevance', 'Best match'), opt('newest', 'Newest'), opt('oldest', 'Oldest'),
+     opt('largest', 'Largest'), opt('smallest', 'Smallest')]);
+  sort.addEventListener('change', () => { resultView.sort = sort.value; applyResultView(); });
+  const min = el('input', { className: 'rf-size', id: 'rfMin', type: 'number', min: '0', placeholder: 'min' });
+  const max = el('input', { className: 'rf-size', id: 'rfMax', type: 'number', min: '0', placeholder: 'max' });
+  const onSize = () => {
+    resultView.minMB = min.value !== '' ? Number(min.value) : null;
+    resultView.maxMB = max.value !== '' ? Number(max.value) : null;
+    applyResultView();
+  };
+  min.addEventListener('input', debounce(onSize, 200));
+  max.addEventListener('input', debounce(onSize, 200));
+
+  const ctrl = (label, ...nodes) => el('label', { className: 'rf-field' }, [el('span', { className: 'rf-label' }, label), ...nodes]);
+  return el('div', { className: 'results-bar' }, [
+    el('span', { className: 'results-count', id: 'resultsCount' }, ''),
+    el('div', { className: 'results-controls' }, [
+      ctrl('Format', fmt),
+      ctrl('Sort', sort),
+      ctrl('Size (MB)', el('span', { className: 'rf-size-pair' }, [min, el('span', { className: 'rf-dash' }, '–'), max])),
+    ]),
+  ]);
+}
+
+function applyResultView() {
+  const list = $('#resultsList');
+  if (!list) return;
+  const view = sortResults(filterResults(lastResults, resultView), resultView.sort);
+  list.innerHTML = '';
+  if (!view.length) {
+    list.append(el('p', { className: 'hint results-none' }, 'No results match the current filters.'));
+  } else {
+    for (const r of view) list.append(buildCard(r));
+  }
+  const cnt = $('#resultsCount');
+  if (cnt) cnt.textContent = view.length === lastResults.length
+    ? `${lastResults.length} result${lastResults.length === 1 ? '' : 's'}`
+    : `${view.length} of ${lastResults.length}`;
+}
+
+// --- "Already in your library" index ---------------------------------------
+// Soft match: same normalized title, and authors agree (or one is unknown).
+let libraryIndex = [];
+function libNorm(s) { return String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim(); }
+async function refreshLibraryIndex() {
+  try {
+    const data = await fetch('/api/library').then((r) => r.json());
+    libraryIndex = (data.books || []).map((b) => ({ t: libNorm(b.title), a: libNorm(b.author) }));
+  } catch { /* leave the previous index */ }
+}
+function isInLibrary(r) {
+  const t = libNorm(r.title);
+  if (!t) return false;
+  const a = libNorm(r.author);
+  return libraryIndex.some((b) => b.t === t && (!a || !b.a || b.a === a));
 }
 
 // A small row under each result: a "Request re-upload" button plus an inline
@@ -809,6 +1002,7 @@ $('#credForm').addEventListener('submit', async (e) => {
   if (!res.ok) return;
   closeCredModal();
   $('#premPass').value = '';
+  if (settingsModal && !settingsModal.hidden) loadSettings();
   if (pendingPremium) {
     const { result, btn } = pendingPremium;
     pendingPremium = null;
@@ -840,6 +1034,7 @@ async function openSendModal(ctx) {
   $('#managePanel').hidden = true;
   await loadChannels();
   await loadRecipients();
+  await loadGroups();
   sendModal.hidden = false;
 }
 function closeSendModal() { sendModal.hidden = true; sendCtx = null; }
@@ -950,18 +1145,20 @@ $('#sendGo').addEventListener('click', async () => {
   go.disabled = true;
   go.textContent = 'Sending…';
   try {
-    const res = await fetch('/api/send', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        downloadId: sendCtx.downloadId,
-        recipientIds: ids,
-        book: sendCtx.book,
-      }),
-    });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error || 'Send failed');
-    renderSendResults(data.results);
+    // One book (downloadId) or several (downloadIds, from a Library multi-select).
+    const targets = sendCtx.downloadIds && sendCtx.downloadIds.length ? sendCtx.downloadIds : [sendCtx.downloadId];
+    const all = [];
+    for (const downloadId of targets) {
+      const res = await fetch('/api/send', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ downloadId, recipientIds: ids, book: sendCtx.book }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Send failed');
+      all.push(...data.results);
+    }
+    renderSendResults(all);
     // Let an opener (e.g. the Library view) refresh its inline send history.
     if (sendCtx && typeof sendCtx.onSent === 'function') sendCtx.onSent();
   } catch (err) {
@@ -972,6 +1169,205 @@ $('#sendGo').addEventListener('click', async () => {
     go.textContent = 'Send';
   }
 });
+
+// ---------------------------------------------------------------------------
+// Recipient groups (presets) — pick a whole audience in one click
+// ---------------------------------------------------------------------------
+let groupsCache = [];
+const groupBar = $('#groupBar');
+
+async function loadGroups() {
+  try {
+    const data = await fetch('/api/recipient-groups').then((r) => r.json());
+    groupsCache = data.groups || [];
+  } catch {
+    groupsCache = [];
+  }
+  renderGroupBar();
+  renderGroupManageList();
+}
+
+function renderGroupBar() {
+  groupBar.innerHTML = '';
+  if (!groupsCache.length) { groupBar.hidden = true; return; }
+  groupBar.hidden = false;
+  groupBar.append(el('span', { className: 'group-bar-label' }, 'Groups'));
+  for (const g of groupsCache) {
+    const chip = el('button', { className: 'group-chip', type: 'button' }, `${g.name} · ${g.recipientIds.length}`);
+    chip.addEventListener('click', () => selectGroup(g));
+    groupBar.append(chip);
+  }
+}
+
+// Check exactly the members of a group (uncheck everyone else).
+function selectGroup(g) {
+  const ids = new Set(g.recipientIds);
+  for (const r of recipientsCache) {
+    const cb = $('#rc_' + r.id);
+    if (cb) cb.checked = ids.has(r.id);
+  }
+}
+
+function renderGroupManageList() {
+  const ml = $('#groupManageList');
+  if (!ml) return;
+  ml.innerHTML = '';
+  if (!groupsCache.length) {
+    ml.append(el('p', { className: 'hint' }, 'No groups yet.'));
+    return;
+  }
+  for (const g of groupsCache) {
+    const del = el('button', { className: 'ghost-btn', type: 'button' }, 'Delete');
+    del.addEventListener('click', async () => {
+      await fetch('/api/recipient-groups/' + g.id, { method: 'DELETE' });
+      await loadGroups();
+    });
+    ml.append(el('div', { className: 'manage-row' }, [
+      el('span', {}, `${g.name} · ${g.recipientIds.length} recipient${g.recipientIds.length === 1 ? '' : 's'}`),
+      del,
+    ]));
+  }
+}
+
+$('#groupForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const name = $('#groupName').value.trim();
+  const recipientIds = recipientsCache.filter((r) => $('#rc_' + r.id) && $('#rc_' + r.id).checked).map((r) => r.id);
+  if (!name) { alert('Name the group first.'); return; }
+  if (!recipientIds.length) { alert('Check the recipients to include, then save the group.'); return; }
+  const res = await fetch('/api/recipient-groups', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name, recipientIds }),
+  });
+  const data = await res.json();
+  if (!res.ok) { alert(data.error || 'Could not save group'); return; }
+  $('#groupName').value = '';
+  await loadGroups();
+});
+
+// ---------------------------------------------------------------------------
+// Settings — premium creds, notification channels, test email
+// ---------------------------------------------------------------------------
+const settingsModal = $('#settingsModal');
+$('#settingsToggle').addEventListener('click', openSettings);
+$('#settingsClose').addEventListener('click', closeSettings);
+$('#setPremUpdate').addEventListener('click', () => openCredModal());
+$('#setTestBtn').addEventListener('click', sendTestEmail);
+
+function closeSettings() { settingsModal.hidden = true; }
+async function openSettings() {
+  settingsModal.hidden = false;
+  $('#setTestResult').textContent = '';
+  $('#setTestResult').className = 'set-test-result';
+  await loadSettings();
+}
+
+async function loadSettings() {
+  try {
+    const s = await fetch('/api/status').then((r) => r.json());
+    $('#setPremStatus').textContent = s.premium && s.premium.hasCreds
+      ? '✓ Credentials are set for this session.'
+      : 'No credentials set yet — required for premium downloads.';
+    const box = $('#setChannels');
+    box.innerHTML = '';
+    for (const c of (s.channels || [])) {
+      box.append(el('div', { className: 'set-channel ' + (c.configured ? 'on' : 'off') },
+        `${c.configured ? '✓' : '✕'} ${c.label}${c.configured ? '' : ' — not configured'}`));
+    }
+    box.append(el('div', { className: 'set-channel ' + (s.kindle ? 'on' : 'off') },
+      `${s.kindle ? '✓' : '✕'} Send-to-Kindle${s.kindle ? '' : ' — needs SMTP'}`));
+  } catch {
+    $('#setPremStatus').textContent = 'Could not load settings.';
+  }
+}
+
+async function sendTestEmail() {
+  const email = $('#setTestEmail').value.trim();
+  const out = $('#setTestResult');
+  out.className = 'set-test-result';
+  if (!email) { out.classList.add('err'); out.textContent = 'Enter an email address.'; return; }
+  const btn = $('#setTestBtn');
+  btn.disabled = true;
+  const label = btn.textContent;
+  btn.textContent = 'Sending…';
+  try {
+    const res = await fetch('/api/notify/test', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Send failed');
+    out.classList.add('ok');
+    out.textContent = '✓ Sent — check that inbox.';
+  } catch (err) {
+    out.classList.add('err');
+    out.textContent = '✕ ' + err.message;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = label;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Status / health — session warmth, downloads, channels
+// ---------------------------------------------------------------------------
+const statusModal = $('#statusModal');
+$('#statusToggle').addEventListener('click', openStatus);
+$('#statusClose').addEventListener('click', closeStatus);
+$('#statusRefresh').addEventListener('click', loadStatus);
+
+function closeStatus() { statusModal.hidden = true; }
+async function openStatus() { statusModal.hidden = false; await loadStatus(); }
+
+function statusItem(label, value, ok) {
+  const cls = 'status-item' + (ok === true ? ' ok' : ok === false ? ' warn' : '');
+  return el('div', { className: cls }, [
+    el('span', { className: 'status-k' }, label),
+    el('span', { className: 'status-v' }, value),
+  ]);
+}
+
+async function loadStatus() {
+  const body = $('#statusBody');
+  body.innerHTML = '<p class="hint">Loading…</p>';
+  try {
+    const s = await fetch('/api/status').then((r) => r.json());
+    body.innerHTML = '';
+
+    const sess = el('div', { className: 'status-section' }, [el('h3', {}, 'Mobilism session')]);
+    if (!s.session.browser) {
+      sess.append(statusItem('Browser', 'Not started', false));
+    } else {
+      sess.append(statusItem('Logged in', s.session.loggedIn ? 'Yes' : 'No', s.session.loggedIn));
+      sess.append(statusItem('Cloudflare clearance', s.session.cfOk ? 'OK' : 'Missing/expired', s.session.cfOk));
+      sess.append(statusItem('Ready to search', s.session.ready ? 'Yes' : 'No — re-warm', s.session.ready));
+      if (!s.session.ready) {
+        sess.append(el('a', { className: 'warm-btn', href: '/warm', target: '_blank', rel: 'noopener' }, 'Re-warm ↗'));
+      }
+    }
+    body.append(sess);
+
+    const d = s.download || {};
+    const dl = el('div', { className: 'status-section' }, [el('h3', {}, 'Downloads')]);
+    dl.append(statusItem('Folder', d.path || '—'));
+    dl.append(statusItem('ePUBs saved', String(d.count || 0)));
+    dl.append(statusItem('Total size', formatBytes(d.totalBytes || 0) || '0 B'));
+    if (d.disk) dl.append(statusItem('Disk free', `${formatBytes(d.disk.freeBytes)} of ${formatBytes(d.disk.totalBytes)}`));
+    if (!d.exists) dl.append(statusItem('Folder', 'Not created yet', false));
+    body.append(dl);
+
+    const ch = el('div', { className: 'status-section' }, [el('h3', {}, 'Channels & credentials')]);
+    for (const c of (s.channels || [])) ch.append(statusItem(c.label, c.configured ? 'Configured' : 'Not configured', c.configured));
+    ch.append(statusItem('Send-to-Kindle', s.kindle ? 'Configured' : 'Needs SMTP', s.kindle));
+    ch.append(statusItem('Premium creds', s.premium && s.premium.hasCreds ? 'Set' : 'Not set', s.premium && s.premium.hasCreds));
+    body.append(ch);
+  } catch {
+    body.innerHTML = '';
+    body.append(el('p', { className: 'hint' }, 'Could not load status.'));
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Library — every downloaded book with its send history inline + resend
@@ -997,7 +1393,12 @@ async function openLibrary() {
   try {
     const data = await fetch('/api/library').then((r) => r.json());
     allLibraryBooks = data.books || [];
+    libraryAllTags = data.allTags || [];
+    libraryTagFilter = '';
+    librarySelection.clear();
     librarySearch.value = '';
+    renderLibTagBar();
+    updateLibActionBar();
     applyLibraryFilter();
   } catch {
     allLibraryBooks = [];
@@ -1014,22 +1415,104 @@ async function openLibrary() {
 function closeLibrary() {
   libraryPanel.hidden = true;
   $('#overlay').hidden = true;
+  librarySelection.clear();
+  updateLibActionBar();
 }
 
 // Filter the loaded library by the search box (matches title, author, filename),
 // then render. Empty query shows everything.
 function applyLibraryFilter() {
   const q = (librarySearch.value || '').trim().toLowerCase();
-  const matches = !q
+  let matches = !q
     ? allLibraryBooks
     : allLibraryBooks.filter((b) => {
         const hay = [b.title, b.author, b.filename].filter(Boolean).join(' ').toLowerCase();
         return q.split(/\s+/).every((term) => hay.includes(term));
       });
+  if (libraryTagFilter) matches = matches.filter((b) => (b.tags || []).includes(libraryTagFilter));
   libraryCount.textContent = allLibraryBooks.length
     ? `${matches.length} of ${allLibraryBooks.length}`
     : '';
   renderLibrary(matches, q);
+}
+
+// --- Library management: tag filter, multi-select, delete, re-download ------
+let libraryAllTags = [];
+let libraryTagFilter = '';
+const librarySelection = new Set();
+
+function renderLibTagBar() {
+  const bar = $('#libTagBar');
+  if (!bar) return;
+  bar.innerHTML = '';
+  if (!libraryAllTags.length) { bar.hidden = true; return; }
+  bar.hidden = false;
+  const chip = (label, val) => {
+    const c = el('button', { className: 'lib-tag-chip' + (libraryTagFilter === val ? ' active' : ''), type: 'button' }, label);
+    c.addEventListener('click', () => {
+      libraryTagFilter = libraryTagFilter === val ? '' : val;
+      renderLibTagBar();
+      applyLibraryFilter();
+    });
+    return c;
+  };
+  bar.append(chip('All', ''));
+  for (const t of libraryAllTags) bar.append(chip(t, t));
+}
+
+function updateLibActionBar() {
+  const bar = $('#libActionBar');
+  if (!bar) return;
+  const n = librarySelection.size;
+  bar.innerHTML = '';
+  if (!n) { bar.hidden = true; return; }
+  bar.hidden = false;
+  bar.append(el('span', { className: 'lib-sel-count' }, `${n} selected`));
+  const sendBtn = el('button', { className: 'primary-btn', type: 'button' }, '📧 Send');
+  sendBtn.addEventListener('click', sendSelectedLibrary);
+  const delBtn = el('button', { className: 'ghost-btn lib-del-btn', type: 'button' }, '🗑 Delete');
+  delBtn.addEventListener('click', deleteSelectedLibrary);
+  bar.append(sendBtn, delBtn);
+}
+
+function sendSelectedLibrary() {
+  const ids = [...librarySelection];
+  if (!ids.length) return;
+  openSendModal({
+    downloadIds: ids,
+    book: { title: `${ids.length} selected book${ids.length === 1 ? '' : 's'}` },
+    onSent: openLibrary,
+  });
+}
+
+async function deleteSelectedLibrary() {
+  const ids = [...librarySelection];
+  if (!ids.length) return;
+  if (!window.confirm(`Delete ${ids.length} book${ids.length === 1 ? '' : 's'}? This removes the file from disk and clears its send history.`)) return;
+  for (const id of ids) {
+    try { await fetch('/api/library/' + id, { method: 'DELETE' }); } catch { /* keep going */ }
+  }
+  librarySelection.clear();
+  await openLibrary();
+}
+
+async function editBookTags(book) {
+  const input = window.prompt('Tags for this book (comma-separated):', (book.tags || []).join(', '));
+  if (input === null) return;
+  const tags = input.split(',').map((s) => s.trim()).filter(Boolean);
+  try {
+    await fetch('/api/library/' + book.id + '/tags', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tags }),
+    });
+  } catch { /* best effort */ }
+  await openLibrary();
+}
+
+function redownloadBook(book) {
+  closeLibrary();
+  premiumDownload({ url: book.url, title: book.title, author: book.author || '', cover: book.cover || null }, null);
 }
 
 // Lazy cover loading: only fetch a cover once its row scrolls into view. One
@@ -1167,10 +1650,31 @@ function renderLibraryBook(book) {
     );
     actions.append(resend);
   } else {
-    actions.append(
-      el('div', { className: 'lib-missing' }, '⚠ File removed from disk — re-download to send again.')
-    );
+    actions.append(el('div', { className: 'lib-missing' }, '⚠ File removed from disk.'));
+    // Premium books can be fetched again from their forum thread.
+    if (book.url && book.mode !== 'standard') {
+      const rd = el('button', { className: 'ghost-btn lib-redownload', type: 'button' }, '⬇ Re-download');
+      rd.addEventListener('click', () => redownloadBook(book));
+      actions.append(rd);
+    }
   }
+
+  // Tags / collections row.
+  const tagsRow = el('div', { className: 'lib-tags' });
+  for (const t of (book.tags || [])) tagsRow.append(el('span', { className: 'lib-tag' }, t));
+  const editTags = el('button', { className: 'lib-tag-edit', type: 'button', title: 'Edit tags' },
+    (book.tags && book.tags.length) ? '✎ Tags' : '＋ Tag');
+  editTags.addEventListener('click', () => editBookTags(book));
+  tagsRow.append(editTags);
+
+  // Multi-select checkbox.
+  const select = el('input', { type: 'checkbox', className: 'lib-select', 'aria-label': `Select ${book.title || book.filename}` });
+  select.checked = librarySelection.has(book.id);
+  select.addEventListener('change', () => {
+    if (select.checked) librarySelection.add(book.id);
+    else librarySelection.delete(book.id);
+    updateLibActionBar();
+  });
 
   const main = el('div', { className: 'lib-main' }, [
     el('h3', { className: 'lib-title' }, book.title || book.filename || 'Untitled'),
@@ -1180,10 +1684,11 @@ function renderLibraryBook(book) {
       : null,
     badges,
     meta,
+    tagsRow,
   ]);
 
   return el('div', { className: 'lib-book' }, [
-    el('div', { className: 'lib-top' }, [renderLibraryCover(book), main]),
+    el('div', { className: 'lib-top' }, [select, renderLibraryCover(book), main]),
     sendsWrap,
     actions,
   ]);
@@ -1217,7 +1722,13 @@ async function openHistory() {
   const list = $('#historyList');
   list.innerHTML = '';
   if (!data.entries.length) {
-    list.append(el('p', { className: 'hint' }, 'No history yet.'));
+    list.append(
+      el('div', { className: 'lib-empty' }, [
+        el('div', { className: 'lib-empty-icon' }, '🕓'),
+        el('p', {}, 'No history yet.'),
+        el('p', { className: 'hint' }, 'Searches, downloads, and re-upload requests will show up here.'),
+      ])
+    );
   }
   for (const entry of data.entries) {
     list.append(renderHistoryItem(entry));
@@ -1624,12 +2135,79 @@ function showStatusHTML(html) {
 function hideStatus() { statusEl.hidden = true; }
 
 // ---------------------------------------------------------------------------
+// Focus management for modals/drawers (a11y): trap Tab within the top-most open
+// surface, focus the first control when one opens, and restore focus to whatever
+// opened it on close. Surfaces are listed in dismissal priority (top-most first).
+// ---------------------------------------------------------------------------
+const FOCUS_SURFACES = ['#settingsModal', '#statusModal', '#sendModal', '#credModal', '#batchModal', '#downloadModal', '#libraryPanel', '#historyPanel'];
+let focusReturnEl = null;
+
+function focusablesIn(container) {
+  const sel = 'a[href],button:not([disabled]),input:not([disabled]):not([type="hidden"]),select:not([disabled]),textarea:not([disabled]),[tabindex]:not([tabindex="-1"])';
+  return Array.from(container.querySelectorAll(sel))
+    .filter((e) => e.offsetWidth > 0 || e.offsetHeight > 0 || e === document.activeElement);
+}
+
+function topOpenSurface() {
+  for (const s of FOCUS_SURFACES) {
+    const n = $(s);
+    if (n && !n.hidden) return n;
+  }
+  return null;
+}
+
+document.addEventListener('keydown', (e) => {
+  if (e.key !== 'Tab') return;
+  const surface = topOpenSurface();
+  if (!surface) return;
+  const f = focusablesIn(surface);
+  if (!f.length) { e.preventDefault(); return; }
+  const first = f[0];
+  const last = f[f.length - 1];
+  if (!surface.contains(document.activeElement)) {
+    e.preventDefault();
+    first.focus();
+  } else if (e.shiftKey && document.activeElement === first) {
+    e.preventDefault();
+    last.focus();
+  } else if (!e.shiftKey && document.activeElement === last) {
+    e.preventDefault();
+    first.focus();
+  }
+});
+
+// Watch each surface's `hidden` attribute: on open, remember the opener and focus
+// the first control; on close, hand focus back to the opener.
+const surfaceObserver = new MutationObserver((mutations) => {
+  for (const m of mutations) {
+    if (m.attributeName !== 'hidden') continue;
+    const node = m.target;
+    if (!node.hidden) {
+      if (!node.contains(document.activeElement)) focusReturnEl = document.activeElement;
+      const f = focusablesIn(node);
+      if (f.length) f[0].focus();
+    } else if (focusReturnEl && typeof focusReturnEl.focus === 'function' && !topOpenSurface()) {
+      focusReturnEl.focus();
+      focusReturnEl = null;
+    }
+  }
+});
+FOCUS_SURFACES.forEach((s) => {
+  const n = $(s);
+  if (n) surfaceObserver.observe(n, { attributes: true, attributeFilter: ['hidden'] });
+});
+
+// ---------------------------------------------------------------------------
 // Global keyboard: Escape dismisses the top-most open surface. The download
 // modal is only dismissible once its close button is shown (i.e. the download
 // has settled), matching the existing click-to-close affordance.
 // ---------------------------------------------------------------------------
 document.addEventListener('keydown', (e) => {
   if (e.key !== 'Escape') return;
+  const lb = $('#lightbox');
+  if (lb && !lb.hidden) return closeLightbox();
+  if (!$('#settingsModal').hidden) return closeSettings();
+  if (!$('#statusModal').hidden) return closeStatus();
   if (!sendModal.hidden) return closeSendModal();
   if (!credModal.hidden) return closeCredModal();
   if (!batchModal.hidden) { batchModal.hidden = true; return; }

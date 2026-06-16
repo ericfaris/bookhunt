@@ -3,7 +3,7 @@
 const { test } = require('node:test');
 const assert = require('node:assert');
 
-const { buildLibrary } = require('../src/library');
+const { buildLibrary, removeBook } = require('../src/library');
 
 // Helper: history entries are newest-first in real life, so list them that way.
 const dl = (over) => ({ type: 'download', mode: 'premium', verified: true, ...over });
@@ -144,4 +144,52 @@ test('buildLibrary: empty / non-array input yields []', () => {
   assert.deepEqual(buildLibrary([]), []);
   assert.deepEqual(buildLibrary(undefined), []);
   assert.deepEqual(buildLibrary(null), []);
+});
+
+// --- removeBook -------------------------------------------------------------
+test('removeBook: drops the download and its sends, returns the file path', () => {
+  const entries = [
+    notif({ downloadId: 'd1', to: ['Alice'] }),
+    dl({ id: 'd1', filename: 'a.epub', savePath: '/dl/a.epub' }),
+    dl({ id: 'd2', filename: 'b.epub', savePath: '/dl/b.epub' }),
+  ];
+  const out = removeBook(entries, 'd1');
+  assert.equal(out.removed, true);
+  assert.equal(out.savePath, '/dl/a.epub');
+  // only d2's download survives; d1 + its notify are gone.
+  assert.equal(out.entries.length, 1);
+  assert.equal(out.entries[0].id, 'd2');
+});
+
+test('removeBook: removes every re-download of the same file + legacy sends', () => {
+  const entries = [
+    dl({ id: 'd2', filename: 'a.epub', savePath: '/dl/a.epub' }),
+    dl({ id: 'd1', filename: 'a.epub', savePath: '/dl/a.epub' }),
+    notif({ filename: 'a.epub', to: ['Bob'] }), // legacy: no downloadId
+    dl({ id: 'd3', filename: 'c.epub', savePath: '/dl/c.epub' }),
+  ];
+  const out = removeBook(entries, 'd2');
+  assert.equal(out.removed, true);
+  // d1, d2 (same file) and Bob's legacy send are gone; only d3 survives.
+  assert.equal(out.entries.length, 1);
+  assert.equal(out.entries[0].id, 'd3');
+});
+
+test('removeBook: unknown id is a no-op', () => {
+  const entries = [dl({ id: 'd1', filename: 'a.epub', savePath: '/dl/a.epub' })];
+  const out = removeBook(entries, 'ghost');
+  assert.equal(out.removed, false);
+  assert.equal(out.savePath, null);
+  assert.equal(out.entries.length, 1);
+});
+
+test('removeBook: preserves unrelated search/reupload entries', () => {
+  const entries = [
+    { type: 'search', title: 'x' },
+    dl({ id: 'd1', filename: 'a.epub', savePath: '/dl/a.epub' }),
+    { type: 'reupload', title: 'y' },
+  ];
+  const out = removeBook(entries, 'd1');
+  assert.equal(out.entries.length, 2);
+  assert.deepEqual(out.entries.map((e) => e.type), ['search', 'reupload']);
 });

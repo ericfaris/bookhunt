@@ -8,16 +8,19 @@
 </head>
 <body>
   <header class="topbar">
-    <h1>📚 Mobilism Ebook Finder</h1>
+    <h1><span class="brand-icon">📚</span> <span class="brand-full">Mobilism </span>Ebook Finder</h1>
     <div class="topbar-actions">
       <button id="libraryToggle" class="ghost-btn" type="button">Library</button>
       <button id="historyToggle" class="ghost-btn" type="button">History</button>
+      <button id="statusToggle" class="ghost-btn" type="button" title="Session, downloads & channels">Status</button>
+      <button id="settingsToggle" class="ghost-btn" type="button" title="Settings" aria-label="Settings">⚙</button>
     </div>
   </header>
 
   <div id="warmBanner" class="warm-banner" hidden>
-    <span class="warm-msg">⚠️ Mobilism session expired — searches won’t work until you re-warm.</span>
-    <a id="warmLink" class="warm-btn" href="/warm" target="_blank" rel="noopener">Re-warm ↗</a>
+    <span class="warm-msg">⚠️ Mobilism session isn’t ready. It re-warms itself automatically — if a Cloudflare challenge is blocking it, clear that once in /warm.</span>
+    <button id="warmLoginBtn" class="warm-btn" type="button">Log into Mobilism</button>
+    <a id="warmLink" class="warm-btn" href="/warm" target="_blank" rel="noopener">Open /warm ↗</a>
   </div>
 
   <main>
@@ -72,7 +75,9 @@
              autocomplete="off" aria-label="Search library by title or author" />
       <span id="libraryCount" class="library-count" aria-live="polite"></span>
     </div>
+    <div id="libTagBar" class="lib-tagbar" hidden></div>
     <div id="libraryList" class="library-list"></div>
+    <div id="libActionBar" class="lib-actionbar" hidden></div>
   </aside>
 
   <!-- History drawer -->
@@ -151,6 +156,8 @@
       <p class="hint" id="sendBookLabel"></p>
       <p class="hint" id="sendChannels"></p>
 
+      <div id="groupBar" class="group-bar" hidden></div>
+
       <div id="recipientList" class="recipient-list"></div>
 
       <div id="sendResults" class="send-results"></div>
@@ -173,6 +180,52 @@
           <button type="submit" class="primary-btn">Add</button>
         </form>
         <div id="manageList" class="manage-list"></div>
+
+        <h3>Groups</h3>
+        <p class="hint">Check recipients above, then save them as a reusable group.</p>
+        <form id="groupForm" class="group-form">
+          <input id="groupName" placeholder="Group name (e.g. Family)" autocomplete="off" />
+          <button type="submit" class="primary-btn">Save selected as group</button>
+        </form>
+        <div id="groupManageList" class="manage-list"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Settings modal -->
+  <div id="settingsModal" class="modal" role="dialog" aria-modal="true" aria-label="Settings" hidden>
+    <div class="modal-card settings-card">
+      <button id="settingsClose" class="dl-close" type="button" aria-label="Close">✕</button>
+      <h2>Settings</h2>
+
+      <section class="set-section">
+        <h3>Premium downloader</h3>
+        <p class="hint" id="setPremStatus">Checking…</p>
+        <button id="setPremUpdate" class="ghost-btn" type="button">Update credentials</button>
+      </section>
+
+      <section class="set-section">
+        <h3>Notifications</h3>
+        <div id="setChannels" class="set-channels"></div>
+        <p class="hint">Send yourself a test email to confirm SMTP works:</p>
+        <div class="set-test">
+          <input id="setTestEmail" type="email" placeholder="you@example.com" autocomplete="off" />
+          <button id="setTestBtn" class="primary-btn" type="button">Send test</button>
+        </div>
+        <div id="setTestResult" class="set-test-result"></div>
+      </section>
+    </div>
+  </div>
+
+  <!-- Status / health modal -->
+  <div id="statusModal" class="modal" role="dialog" aria-modal="true" aria-label="Status" hidden>
+    <div class="modal-card status-card">
+      <button id="statusClose" class="dl-close" type="button" aria-label="Close">✕</button>
+      <h2>Status</h2>
+      <div id="statusBody" class="status-body"><p class="hint">Loading…</p></div>
+      <div class="modal-actions">
+        <span class="spacer"></span>
+        <button id="statusRefresh" class="ghost-btn" type="button">↻ Refresh</button>
       </div>
     </div>
   </div>

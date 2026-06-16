@@ -17,10 +17,13 @@ const kindle = require('./kindle');
 const security = require('./security');
 const reupload = require('./reupload');
 const library = require('./library');
+const booktags = require('./booktags');
 const covers = require('./covers');
 const messages = require('./messages');
 const batch = require('./batch');
 const correct = require('./correct');
+const health = require('./health');
+const autowarm = require('./autowarm');
 
 const PORT = process.env.PORT || 3000;
 const app = express();
@@ -90,6 +93,20 @@ app.use(
 app.get('/api/session/status', async (_req, res) => {
   try {
     res.json(await searcher.sessionStatus());
+  } catch (err) {
+    res.status(500).json({ error: err.message, ready: false });
+  }
+});
+
+// Manual fallback for the "Log into Mobilism" button: fill + submit the login on
+// the LIVE browser using env creds (the same thing the auto-warm watcher does on
+// its own). Used after a human has cleared an interactive Cloudflare challenge in
+// /warm so they never have to type the password into noVNC. Returns the result of
+// the attempt plus the resulting session status.
+app.post('/api/session/login', async (_req, res) => {
+  try {
+    const result = await searcher.warmUp();
+    res.json({ ...result, session: await searcher.sessionStatus() });
   } catch (err) {
     res.status(500).json({ error: err.message, ready: false });
   }
@@ -369,7 +386,36 @@ app.get('/api/library', (_req, res) => {
       return false;
     }
   });
-  res.json({ books });
+  const store = booktags.readStore();
+  res.json({ books: booktags.attachTags(books, store), allTags: booktags.allTags(store) });
+});
+
+// Delete a library book: remove its file from disk (when safe + present) and
+// drop its download + correlated send entries from history. Tags for that file
+// are dropped too. Idempotent-ish: a missing file still clears the history rows.
+app.delete('/api/library/:id', (req, res) => {
+  const { entries, savePath, removed } = library.removeBook(history.readAll(), req.params.id);
+  if (!removed) return res.status(404).json({ error: 'Library book not found.' });
+  let fileDeleted = false;
+  if (savePath && downloader.isSafeEpubPath(savePath, downloader.DOWNLOAD_PATH)) {
+    try {
+      const abs = path.resolve(savePath);
+      if (fs.existsSync(abs)) { fs.unlinkSync(abs); fileDeleted = true; }
+    } catch (err) {
+      console.error('Library delete: file removal failed:', err.message);
+    }
+  }
+  history.writeAll(entries);
+  try { booktags.setTags(savePath, []); } catch { /* best effort */ }
+  res.json({ ok: true, fileDeleted });
+});
+
+// Set the tags for a library book (identified by its download id).
+app.put('/api/library/:id/tags', (req, res) => {
+  const entry = history.readAll().find((e) => e.id === req.params.id && e.type === 'download' && e.savePath);
+  if (!entry) return res.status(404).json({ error: 'Library book not found.' });
+  const tags = booktags.setTags(entry.savePath, (req.body && req.body.tags) || []);
+  res.json({ ok: true, tags });
 });
 
 // --- Cover lookup: lazy per-book cover for Library rows lacking one ----------
@@ -409,9 +455,62 @@ app.delete('/api/recipients/:id', (req, res) => {
   res.json({ ok: true });
 });
 
+// --- Recipient groups (presets) ---------------------------------------------
+app.get('/api/recipient-groups', (_req, res) => {
+  res.json({ groups: recipients.readGroups() });
+});
+
+app.post('/api/recipient-groups', (req, res) => {
+  try {
+    const group = recipients.addGroup(req.body || {});
+    res.json({ group });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.delete('/api/recipient-groups/:id', (req, res) => {
+  const removed = recipients.removeGroup(req.params.id);
+  if (!removed) return res.status(404).json({ error: 'Group not found.' });
+  res.json({ ok: true });
+});
+
 // --- Notification channel status (drives the Send UI) -----------------------
 app.get('/api/notify/status', (_req, res) => {
   res.json({ channels: notify.listChannels(), kindle: kindle.isConfigured() });
+});
+
+// --- Send a test email (Settings panel: verify SMTP end-to-end) -------------
+app.post('/api/notify/test', async (req, res) => {
+  const email = typeof (req.body && req.body.email) === 'string' ? req.body.email.trim() : '';
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    return res.status(400).json({ error: 'Enter a valid email address.' });
+  }
+  try {
+    await notify.sendTest(email);
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(502).json({ error: err.message || 'Test send failed.' });
+  }
+});
+
+// --- Operational status (drives the Status/health view) ---------------------
+app.get('/api/status', async (_req, res) => {
+  let session = { browser: false, ready: false, loggedIn: false, cfOk: false };
+  try {
+    session = await searcher.sessionStatus();
+  } catch {
+    /* leave defaults on a transient error */
+  }
+  const dir = downloader.DOWNLOAD_PATH;
+  const downloads = health.readDownloadStats(dir);
+  res.json({
+    session,
+    download: { path: dir, ...downloads, disk: health.freeSpace(dir) },
+    channels: notify.listChannels(),
+    kindle: kindle.isConfigured(),
+    premium: { hasCreds: downloader.hasPremiumCreds() },
+  });
 });
 
 // --- Send: notify recipients (+ optional Kindle push) -----------------------
@@ -492,7 +591,10 @@ const server = app.listen(PORT, HOST, () => {
     .getSession()
     .then(({ page }) => page.goto(searcher.BASE_URL, { waitUntil: 'domcontentloaded' }))
     .then(() => console.log('Browser ready (headed under Xvfb) — warm at /warm if needed'))
-    .catch((err) => console.error('Startup browser launch failed:', err.message));
+    .catch((err) => console.error('Startup browser launch failed:', err.message))
+    // Keep the session authenticated on its own — auto-clears Cloudflare + logs in
+    // unattended, and only summons a human (via email) for interactive challenges.
+    .finally(() => autowarm.start());
 });
 
 // noVNC's WebSocket doesn't pass through Express — bridge upgrades on /warm/* to

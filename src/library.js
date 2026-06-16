@@ -102,6 +102,41 @@ function bookKey(entry) {
   return 'f:' + (entry.filename || '');
 }
 
+/**
+ * PURE: remove a downloaded book (and everything correlated to its file) from a
+ * flat history list. Identifies the book by a download entry id, then drops ALL
+ * download entries sharing that file (re-downloads) plus their sends (by
+ * downloadId, or filename for legacy notifies). Returns the surviving entries and
+ * the file to delete from disk.
+ *
+ * @returns {{ entries: Array, savePath: string|null, removed: boolean }}
+ */
+function removeBook(entries, id) {
+  const list = Array.isArray(entries) ? entries : [];
+  const target = list.find((e) => e.type === 'download' && e.id === id && e.savePath);
+  if (!target) return { entries: list, savePath: null, removed: false };
+
+  const keyPath = path.resolve(target.savePath);
+  const ids = new Set();
+  const filenames = new Set();
+  for (const e of list) {
+    if (e.type === 'download' && e.savePath && path.resolve(e.savePath) === keyPath) {
+      if (e.id) ids.add(e.id);
+      if (e.filename) filenames.add(e.filename);
+    }
+  }
+
+  const keep = list.filter((e) => {
+    if (e.type === 'download' && e.savePath && path.resolve(e.savePath) === keyPath) return false;
+    if (e.type === 'notify') {
+      if (e.downloadId && ids.has(e.downloadId)) return false;
+      if (!e.downloadId && e.filename && filenames.has(e.filename)) return false;
+    }
+    return true;
+  });
+  return { entries: keep, savePath: target.savePath, removed: true };
+}
+
 // Correlate a notify entry to a book: exact downloadId first, then filename.
 function matchSendToBook(notifyEntry, byKey) {
   if (notifyEntry.downloadId) {
@@ -117,4 +152,4 @@ function matchSendToBook(notifyEntry, byKey) {
   return null;
 }
 
-module.exports = { buildLibrary };
+module.exports = { buildLibrary, removeBook };
