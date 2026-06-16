@@ -165,11 +165,38 @@ function cleanError(t) {
   return String(t || '').replace(/\s+/g, ' ').replace(/^title>?\s*/i, '').trim() || 'download failed';
 }
 
-/** True if a buffer's start looks like an HTML document (a landing/error page,
- *  not a real book file — real epubs are ZIPs, PDFs start with %PDF, etc.). */
+/** True if a buffer's start looks like an HTML/XML document (a landing/error
+ *  page, not a real book file — real epubs are ZIPs, PDFs start with %PDF, etc.).
+ *  Tolerates a leading BOM/whitespace and matches bare error fragments like
+ *  `<title>Not Found</title>` that some hosts return without a full <html> wrap. */
 function looksLikeHtmlBuffer(buf) {
-  const head = (buf || Buffer.alloc(0)).slice(0, 256).toString('latin1').trimStart().toLowerCase();
-  return head.startsWith('<!doctype html') || head.startsWith('<html') || head.startsWith('<head');
+  const head = (buf || Buffer.alloc(0))
+    .slice(0, 512)
+    .toString('latin1')
+    .replace(/^[\s﻿ï»¿]+/, '') // strip leading BOM + whitespace
+    .toLowerCase();
+  return /^(<!doctype|<\?xml|<html|<head|<body|<title|<meta|<script|<!--)/.test(head);
+}
+
+/** Pull a short, human-readable reason out of an HTML/error page that a mirror
+ *  served instead of a file — e.g. `<title>Not Found</title>` → "Not Found", or
+ *  a bare "Not Found" body → "Not Found". Returns '' when nothing useful is
+ *  found, so callers can fall back to a generic message. */
+function describeErrorPage(buf) {
+  const text = (buf || Buffer.alloc(0)).slice(0, 2048).toString('latin1');
+  const title = text.match(/<title[^>]*>([^<]+)<\/title>/i);
+  if (title && title[1].trim()) return cleanError(title[1]);
+  const err = text.match(ERROR_RE);
+  if (err) return cleanError(err[0]);
+  return '';
+}
+
+/** Build the user-facing "this mirror gave us junk, not a book" message,
+ *  naming the concrete reason when we can read one off the error page. */
+function notABookFileError(reason) {
+  return reason
+    ? `The premium download isn’t available anymore — the downloader returned “${reason}”.`
+    : 'The mirror returned an error page, not a book file.';
 }
 
 /** True if a saved file is actually an HTML page (by extension or by content). */
@@ -254,11 +281,19 @@ async function saveViaRequest(page, fileUrl, meta) {
     const resp = await page.context().request.get(fileUrl, { timeout: DOWNLOAD_TIMEOUT });
     if (!resp.ok()) return null;
     const buf = await resp.body();
-    if (!buf || buf.length < 1024) return null; // too small to be a real file
-    if (looksLikeHtmlBuffer(buf)) return null; // an HTML landing/error page, not the file
+    // Reject anything that isn't a real book file BEFORE writing it to disk, and
+    // surface a concrete reason so the user learns *why* (e.g. "Not Found").
+    if (!buf || buf.length < 1024) {
+      // A tiny response is never a real book — usually a bare error string.
+      const reason = describeErrorPage(buf);
+      return reason ? { error: notABookFileError(reason) } : null;
+    }
+    if (looksLikeHtmlBuffer(buf)) {
+      return { error: notABookFileError(describeErrorPage(buf)) }; // HTML landing/error page
+    }
     const base = (fileUrl.split('/').pop() || 'download').split('?')[0];
     const original = decodeURIComponent(base).replace(/[\r\n"]/g, '') || 'download';
-    if (/\.html?$/i.test(original)) return null; // page, not a file
+    if (/\.html?$/i.test(original)) return { error: notABookFileError('') }; // page, not a file
     const filename = buildBookFilename(meta, original); // tidy "Title [Author] (Year).ext"
     const savePath = path.join(DOWNLOAD_PATH, filename);
     fs.writeFileSync(savePath, buf);
@@ -473,6 +508,7 @@ async function attemptLink(page, link, meta, onProgress = () => {}) {
     download = await dl2;
     if (!download) {
       const saved = await saveViaRequest(page, fileUrl, meta);
+      if (saved && saved.error) throw new Error(saved.error); // error page, not a file
       if (saved) {
         onProgress({ step: 'saved', filename: saved.filename });
         return finalizeDownload(saved.savePath, saved.filename, meta, onProgress);
@@ -481,7 +517,8 @@ async function attemptLink(page, link, meta, onProgress = () => {}) {
   }
 
   if (!download) {
-    throw new Error(errText ? `Downloader: ${cleanError(errText)}` : 'No download was triggered');
+    if (errText) throw new Error(notABookFileError(cleanError(errText)));
+    throw new Error('No download was triggered by this mirror.');
   }
 
   const original = download.suggestedFilename();
@@ -490,10 +527,12 @@ async function attemptLink(page, link, meta, onProgress = () => {}) {
   await download.saveAs(savePath);
   console.error('[premium] saved %s (host name %s) from fileUrl=%s', filename, original, fileUrl || '(download event)');
   // Some hosts serve an HTML landing/error page as the "download" — reject it so
-  // it counts as a failed mirror, not a bogus success.
+  // it counts as a failed mirror, not a bogus success, and tell the user why.
   if (isHtmlFile(savePath, original)) {
+    let reason = '';
+    try { reason = describeErrorPage(fs.readFileSync(savePath)); } catch {}
     try { fs.unlinkSync(savePath); } catch {}
-    throw new Error('Got an HTML page, not a file');
+    throw new Error(notABookFileError(reason));
   }
   onProgress({ step: 'saved', filename });
   return finalizeDownload(savePath, filename, meta, onProgress);
@@ -566,6 +605,14 @@ async function resolveArchive(savePath, filename, meta, onProgress = () => {}) {
  */
 async function finalizeDownload(savePath, filename, meta, onProgress = () => {}) {
   ({ savePath, filename } = await resolveArchive(savePath, filename, meta, onProgress));
+  // Final backstop: never keep an HTML/error page that slipped through every
+  // earlier guard as a "book". Delete it and fail the mirror with a clear reason.
+  if (isHtmlFile(savePath, filename)) {
+    let reason = '';
+    try { reason = describeErrorPage(fs.readFileSync(savePath)); } catch {}
+    try { fs.unlinkSync(savePath); } catch {}
+    throw new Error(notABookFileError(reason));
+  }
   onProgress({ step: 'verifying', filename });
   const v = verifyBook(savePath, meta && meta.title);
   onProgress({
@@ -599,6 +646,8 @@ module.exports = {
   // exported for unit tests
   sanitizeUrl,
   cleanError,
+  describeErrorPage,
+  notABookFileError,
   isSafeEpubPath,
   looksLikeHtmlBuffer,
   isHtmlFile,

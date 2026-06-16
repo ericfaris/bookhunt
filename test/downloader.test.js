@@ -14,6 +14,8 @@ const {
   verifyBook,
   sanitizeUrl,
   cleanError,
+  describeErrorPage,
+  notABookFileError,
   isSafeEpubPath,
   looksLikeHtmlBuffer,
   isHtmlFile,
@@ -124,6 +126,28 @@ test('isHtmlFile: flags .html/.htm by name and HTML by content', () => {
 test('isHtmlFile: passes a real epub through', () => {
   const real = tmp('real.epub', epubBuffer());
   assert.equal(isHtmlFile(real, 'real.epub'), false);
+});
+
+// --- Issue #24: error pages (e.g. "title>Not Found") must never become books --
+test('looksLikeHtmlBuffer: catches a bare <title> error fragment (issue #24)', () => {
+  // The reported case: the downloader returned `<title>Not Found</title>` with no
+  // surrounding <html> wrapper, which the old strict-prefix check let through.
+  assert.equal(looksLikeHtmlBuffer(Buffer.from('<title>Not Found</title>')), true);
+  assert.equal(looksLikeHtmlBuffer(Buffer.from('﻿<title>Not Found</title>')), true);
+  assert.equal(looksLikeHtmlBuffer(Buffer.from('<?xml version="1.0"?><error/>')), true);
+  assert.equal(looksLikeHtmlBuffer(Buffer.from('<body>error</body>')), true);
+});
+
+test('describeErrorPage: pulls a human reason out of the error body', () => {
+  assert.equal(describeErrorPage(Buffer.from('<title>Not Found</title>')), 'Not Found');
+  assert.equal(describeErrorPage(Buffer.from('<html><body>File deleted</body></html>')), 'deleted');
+  assert.equal(describeErrorPage(Buffer.from('PK\x03\x04realbook', 'latin1')), '');
+});
+
+test('notABookFileError: names the reason, with a sensible fallback', () => {
+  assert.match(notABookFileError('Not Found'), /isn’t available anymore/);
+  assert.match(notABookFileError('Not Found'), /“Not Found”/);
+  assert.equal(notABookFileError(''), 'The mirror returned an error page, not a book file.');
 });
 
 // --- Filename building: "Title [Author] (Year).ext" --------------------------

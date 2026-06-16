@@ -927,16 +927,19 @@ function renderDownloadDone(data, result) {
     box.append(el('div', { className: 'dl-check warn' },
       `⚠ ${d.filename} was saved to ${d.savePath} but failed the ePUB check, so it isn’t offered for sending.`));
   } else {
-    // Nothing downloaded — explain why, mirror by mirror.
+    // Nothing downloaded — explain why in plain language.
     $('#dlHeading').textContent = 'Download failed';
     $('#dlHeading').className = 'dl-fail-head';
     const errs = data.errors || [];
-    if (errs.length) {
-      box.append(el('p', { className: 'hint' }, 'Every mirror failed:'));
+    if (errs.length === 1) {
+      // One mirror → lead with its (already human-readable) reason.
+      box.append(el('div', { className: 'dl-check warn' }, errs[0].error));
+    } else if (errs.length) {
+      box.append(el('p', { className: 'hint' }, 'None of the mirrors returned a valid book file:'));
       const ul = el('ul', { className: 'dl-errors' }, errs.map((e) => el('li', {}, `✕ ${e.error}`)));
       box.append(ul);
     } else {
-      box.append(el('div', { className: 'dl-check warn' }, 'Nothing was downloaded.'));
+      box.append(el('div', { className: 'dl-check warn' }, 'Couldn’t download this book — no mirror returned a file.'));
     }
   }
 }
