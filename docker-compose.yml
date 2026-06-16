@@ -33,6 +33,9 @@ services:
       # persisted across restarts; /app is root-owned, this isn't writable
       # by the uid-1000 process otherwise)
       - ./covers-cache.json:/app/covers-cache.json
+      # Watchlist (saved searches the background watcher re-checks) — same
+      # single-file bind so the uid-1000 process can write it under root-owned /app
+      - ./watchlist.json:/app/watchlist.json
       # Downloads land in C:\epubs on the Windows side (via WSL2 path)
       - /mnt/c/epubs:/downloads
     environment:
