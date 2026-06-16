@@ -23,6 +23,7 @@ const messages = require('./messages');
 const batch = require('./batch');
 const correct = require('./correct');
 const health = require('./health');
+const version = require('./version');
 const autowarm = require('./autowarm');
 
 const PORT = process.env.PORT || 3000;
@@ -505,6 +506,7 @@ app.get('/api/status', async (_req, res) => {
   const dir = downloader.DOWNLOAD_PATH;
   const downloads = health.readDownloadStats(dir);
   res.json({
+    version: version.info(),
     session,
     download: { path: dir, ...downloads, disk: health.freeSpace(dir) },
     channels: notify.listChannels(),

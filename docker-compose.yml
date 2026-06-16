@@ -1,6 +1,12 @@
 services:
   app:
-    build: .
+    build:
+      context: .
+      args:
+        # Stamp the running build's commit + time (see the `docker:up` npm
+        # script, which exports these). Default blank when built directly.
+        GIT_SHA: ${GIT_SHA:-}
+        BUILD_TIME: ${BUILD_TIME:-}
     image: ericfaris/mobilism-search:latest
     restart: unless-stopped
     # Run as the host user (uid:gid 1000) so the bind-mounted browser profile,

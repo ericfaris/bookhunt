@@ -1283,8 +1283,28 @@ async function loadSettings() {
     }
     box.append(el('div', { className: 'set-channel ' + (s.kindle ? 'on' : 'off') },
       `${s.kindle ? '✓' : '✕'} Send-to-Kindle${s.kindle ? '' : ' — needs SMTP'}`));
+    renderVersion(s.version);
   } catch {
     $('#setPremStatus').textContent = 'Could not load settings.';
+    $('#setVersion').textContent = 'Unknown';
+  }
+}
+
+// Show the running build: version (from package.json) + the commit & build time
+// baked into the Docker image (blank when run outside the stamped image).
+function renderVersion(v) {
+  const box = $('#setVersion');
+  if (!box) return;
+  box.innerHTML = '';
+  v = v || {};
+  box.append(el('div', { className: 'set-version-line' }, [
+    el('span', { className: 'set-version-num' }, `v${v.version || '?'}`),
+    v.commit ? el('span', { className: 'set-version-meta' }, ` · ${v.commit}`) : null,
+  ]));
+  if (v.builtAt) {
+    const when = new Date(v.builtAt);
+    const built = isNaN(when) ? v.builtAt : when.toLocaleString();
+    box.append(el('div', { className: 'set-version-built hint' }, `Built ${built}`));
   }
 }
 

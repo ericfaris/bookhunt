@@ -769,6 +769,11 @@ img.lib-cover { overflow: hidden; }
 .set-test-result.ok { color: var(--good); }
 .set-test-result.err { color: var(--danger); }
 
+.set-version-line { font-size: 0.95rem; }
+.set-version-num { font-weight: 700; color: var(--text); }
+.set-version-meta { color: var(--text-dim); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.85rem; }
+.set-version-built { margin-top: 0.2rem; }
+
 /* --- Status / health (#14) ------------------------------------------------ */
 .status-card { width: min(460px, 94vw); position: relative; }
 .status-body { display: flex; flex-direction: column; gap: 1rem; margin-top: 0.5rem; }

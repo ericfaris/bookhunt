@@ -30,6 +30,14 @@ COPY public/ ./public/
 COPY entrypoint.sh ./entrypoint.sh
 RUN chmod +x ./entrypoint.sh
 
+# Stamp the build identity into the image (version comes from package.json at
+# runtime; these pin the exact commit + build time the image was built from).
+# Passed by docker-compose build args / the `docker:up` npm script.
+ARG GIT_SHA=""
+ARG BUILD_TIME=""
+ENV GIT_SHA=$GIT_SHA \
+    BUILD_TIME=$BUILD_TIME
+
 ENV PORT=3000 \
     HOST=0.0.0.0 \
     DOWNLOAD_PATH=/downloads \
