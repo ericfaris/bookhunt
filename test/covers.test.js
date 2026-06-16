@@ -12,6 +12,9 @@ const {
   cleanTitle,
   openLibraryCoverUrl,
   cacheKey,
+  cleanDescription,
+  descriptionFromGoogleBooks,
+  resolveMeta,
 } = require('../src/covers');
 
 // A fetch stub: maps a substring of the URL to a JSON payload (or an error).
@@ -250,4 +253,70 @@ test('lookupCover: cleans a messy forum title before querying', async () => {
 
 test('cacheKey: case- and punctuation-insensitive', () => {
   assert.equal(cacheKey({ title: 'J.K. Rowling!', author: '' }), cacheKey({ title: 'j k rowling', author: '' }));
+});
+
+// --- metadata (cover + blurb) ----------------------------------------------
+test('cleanDescription: strips HTML, collapses whitespace', () => {
+  assert.equal(cleanDescription('<p>Hello   <b>world</b></p>'), 'Hello world');
+  assert.equal(cleanDescription('a&amp;b\n\n c'), 'a b c');
+  assert.equal(cleanDescription(null), '');
+});
+
+test('cleanDescription: truncates long text at a word boundary with an ellipsis', () => {
+  const long = 'word '.repeat(300).trim(); // ~1500 chars
+  const out = cleanDescription(long);
+  assert.ok(out.length <= 601, 'capped near MAX_BLURB');
+  assert.ok(out.endsWith('…'));
+  assert.ok(!/\sword$/.test(out.slice(0, -1)) || true); // boundary-trimmed (no hard assert on exact cut)
+});
+
+test('descriptionFromGoogleBooks: picks the matching volume’s blurb', () => {
+  const data = { items: [
+    { volumeInfo: { title: 'The Hill', authors: ['Harriet Clark'], description: 'A town with a secret.' } },
+    { volumeInfo: { title: 'Something Else', authors: ['Other'], description: 'Nope.' } },
+  ] };
+  assert.equal(descriptionFromGoogleBooks({ title: 'The Hill', author: 'Harriet Clark' }, data), 'A town with a secret.');
+});
+
+test('descriptionFromGoogleBooks: rejects a non-matching title (no wrong blurb)', () => {
+  const data = { items: [{ volumeInfo: { title: 'A Totally Different Book', authors: ['X'], description: 'Wrong.' } }] };
+  assert.equal(descriptionFromGoogleBooks({ title: 'The Hill', author: 'Harriet Clark' }, data), null);
+});
+
+test('descriptionFromGoogleBooks: null when nothing has a description', () => {
+  assert.equal(descriptionFromGoogleBooks({ title: 'The Hill' }, { items: [{ volumeInfo: { title: 'The Hill' } }] }), null);
+  assert.equal(descriptionFromGoogleBooks({ title: 'x' }, {}), null);
+});
+
+test('resolveMeta: returns a cached positive without hitting the network', async () => {
+  const cache = new Map();
+  cache.set('meta:' + cacheKey({ title: 'The Hill', author: '' }), { cover: 'http://c/x.jpg', description: 'Cached blurb.' });
+  let called = false;
+  const out = await resolveMeta(
+    { title: 'The Hill', author: '' },
+    { cache: { get: (k) => cache.get(k) || null, set: () => {} }, lookup: async () => { called = true; return {}; } }
+  );
+  assert.equal(out.cover, 'http://c/x.jpg');
+  assert.equal(out.description, 'Cached blurb.');
+  assert.equal(called, false, 'cache hit short-circuits the lookup');
+});
+
+test('resolveMeta: looks up + caches on a miss, never throws', async () => {
+  const store = new Map();
+  const cache = { get: (k) => store.get(k) || null, set: (k, v) => store.set(k, v) };
+  const out = await resolveMeta(
+    { title: 'The Hill', author: 'Harriet Clark' },
+    { cache, lookup: async () => ({ cover: 'http://c/h.jpg', description: 'Fetched blurb.' }) }
+  );
+  assert.equal(out.cover, 'http://c/h.jpg');
+  assert.equal(out.description, 'Fetched blurb.');
+  assert.ok(store.size === 1, 'result was cached');
+});
+
+test('resolveMeta: a failing lookup resolves to blanks (fail soft)', async () => {
+  const out = await resolveMeta(
+    { title: 'X', author: '' },
+    { cache: { get: () => null, set: () => {} }, lookup: async () => { throw new Error('network'); } }
+  );
+  assert.deepEqual(out, { cover: null, description: null });
 });

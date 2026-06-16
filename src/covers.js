@@ -143,6 +143,44 @@ function coverFromGoogleBooks(query, data) {
   );
 }
 
+// Longest blurb we'll put in an email — Google descriptions can run long, so
+// trim to a clean sentence/word boundary and add an ellipsis.
+const MAX_BLURB = 600;
+
+/** PURE: strip HTML tags/entities Google sometimes returns, collapse whitespace,
+ *  and truncate to MAX_BLURB at a word boundary. Returns '' for empty input. */
+function cleanDescription(text) {
+  let s = String(text || '')
+    .replace(/<[^>]+>/g, ' ')                 // drop any HTML tags
+    .replace(/&[a-z]+;|&#\d+;/gi, ' ')        // drop entities
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (s.length <= MAX_BLURB) return s;
+  s = s.slice(0, MAX_BLURB);
+  const cut = s.lastIndexOf(' ');
+  if (cut > MAX_BLURB * 0.6) s = s.slice(0, cut);
+  return s.replace(/[\s.,;:!?-]+$/, '') + '…';
+}
+
+/** PURE: description of the best title+author-matching Google Books volume, or
+ *  null. Same match gates as the cover picker so we never grab the wrong book's
+ *  blurb. */
+function descriptionFromGoogleBooks(query, data) {
+  const q = query || {};
+  const items = (data && Array.isArray(data.items)) ? data.items : [];
+  let best = null;
+  let bestScore = -1;
+  for (const i of items) {
+    const vi = (i && i.volumeInfo) || {};
+    if (!vi.description) continue;
+    const tScore = q.title ? matchScore(q.title, vi.title || '') : 1;
+    if (tScore < TITLE_THRESHOLD) continue;
+    if (!authorMatches(q.author, vi.authors)) continue;
+    if (tScore > bestScore) { bestScore = tScore; best = vi.description; }
+  }
+  return best ? cleanDescription(best) : null;
+}
+
 /** GET + parse JSON with an abort timeout. Throws on any failure. */
 async function fetchJson(url, { fetchImpl = fetch, timeoutMs = LOOKUP_TIMEOUT_MS } = {}) {
   const ac = new AbortController();
@@ -196,6 +234,50 @@ async function lookupCover({ title, author }, opts = {}) {
   }
 
   return null;
+}
+
+/**
+ * Look up BOTH a cover and a blurb for { title, author }. Open Library supplies
+ * a cover; Google Books supplies a cover (fallback) AND the description. Returns
+ * `{ cover, description }` (either may be null). NEVER throws. Used to enrich a
+ * Send so the notification email always has artwork + a blurb, even when the
+ * download record stored neither.
+ *
+ * `opts.fetchImpl`/`opts.timeoutMs`/`opts.apiKey` are injectable for tests.
+ */
+async function lookupMeta({ title, author }, opts = {}) {
+  const t = cleanTitle(title);
+  const a = String(author || '').trim();
+  if (!t && !a) return { cover: null, description: null };
+
+  const query = { title: t, author: a };
+  let cover = null;
+  let description = null;
+
+  // 1. Open Library — cover only (search.json has no reliable description).
+  try {
+    const params = new URLSearchParams({ limit: '5', fields: 'title,author_name,cover_i' });
+    if (t) params.set('title', t);
+    if (a) params.set('author', a);
+    const data = await fetchJson(`${OPEN_LIBRARY_URL}?${params.toString()}`, opts);
+    cover = coverFromOpenLibrary(query, data);
+  } catch {
+    // fall through to Google Books
+  }
+
+  // 2. Google Books — cover (if still missing) + description.
+  try {
+    const terms = [t, a].filter(Boolean).join(' ').trim();
+    const key = opts.apiKey || process.env.GOOGLE_BOOKS_API_KEY;
+    const url = `${GOOGLE_BOOKS_URL}?q=${encodeURIComponent(terms)}&maxResults=5&country=US${key ? '&key=' + encodeURIComponent(key) : ''}`;
+    const data = await fetchJson(url, opts);
+    if (!cover) cover = coverFromGoogleBooks(query, data);
+    description = descriptionFromGoogleBooks(query, data);
+  } catch {
+    // fall through with whatever we have
+  }
+
+  return { cover: cover || null, description: description || null };
 }
 
 // --- Persistent cache -------------------------------------------------------
@@ -280,11 +362,56 @@ async function resolveCover({ title, author }, opts = {}) {
   return cover || null;
 }
 
+/**
+ * Resolve BOTH a cover and a blurb for { title, author }, cache-first. Stored
+ * under a separate `meta:` key namespace so it never clobbers the cover-only
+ * records `resolveCover` writes. Returns `{ cover, description }` (either may be
+ * null). NEVER throws.
+ *
+ * `opts.lookup` (→ lookupMeta) / `opts.cache` are injectable for tests.
+ */
+async function resolveMeta({ title, author }, opts = {}) {
+  const t = String(title || '').trim();
+  const a = String(author || '').trim();
+  if (!t && !a) return { cover: null, description: null };
+
+  const cache = opts.cache || fileCache;
+  const lookup = opts.lookup || lookupMeta;
+  const key = 'meta:' + cacheKey({ title: t, author: a });
+  const now = opts.now || Date.now();
+
+  const cached = cache.get(key);
+  if (cached) {
+    if (cached.cover || cached.description) {
+      return { cover: cached.cover || null, description: cached.description || null };
+    }
+    if (negativeIsFresh(cached, now)) return { cover: null, description: null };
+    // stale empty record falls through to a fresh lookup
+  }
+
+  let meta = { cover: null, description: null };
+  try {
+    meta = (await lookup({ title: t, author: a }, opts)) || meta;
+  } catch {
+    meta = { cover: null, description: null };
+  }
+  try {
+    cache.set(key, { cover: meta.cover || null, description: meta.description || null, ts: now });
+  } catch {
+    // a cache write failure must not break the resolve
+  }
+  return { cover: meta.cover || null, description: meta.description || null };
+}
+
 module.exports = {
   lookupCover,
   resolveCover,
+  lookupMeta,
+  resolveMeta,
   coverFromOpenLibrary,
   coverFromGoogleBooks,
+  descriptionFromGoogleBooks,
+  cleanDescription,
   authorMatches,
   cleanTitle,
   openLibraryCoverUrl,

@@ -537,7 +537,26 @@ app.post('/api/send', async (req, res) => {
   const recips = recipients.byIds(recipientIds);
   if (!recips.length) return res.status(404).json({ error: 'No matching recipients.' });
 
-  const bookInfo = { ...(book || {}), filename: entry.filename };
+  // Build the book info for the email, preferring what the client passed, then
+  // the stored download entry. A resend from the Library/batch carries only a
+  // title, so cover/author/blurb are often missing here.
+  const bookInfo = {
+    title: (book && book.title) || entry.title || '',
+    author: (book && book.author) || entry.author || '',
+    cover: (book && book.cover) || entry.cover || null,
+    description: (book && book.description) || '',
+    filename: entry.filename,
+  };
+  // Fill any missing cover/blurb from Google Books (Open Library for cover) so
+  // the notification email always has artwork + a synopsis, even when neither
+  // was stored at download time. Fails soft — a lookup miss just leaves it blank.
+  if (!bookInfo.cover || !bookInfo.description) {
+    try {
+      const meta = await covers.resolveMeta({ title: bookInfo.title, author: bookInfo.author });
+      if (!bookInfo.cover && meta.cover) bookInfo.cover = meta.cover;
+      if (!bookInfo.description && meta.description) bookInfo.description = meta.description;
+    } catch { /* leave blanks — never block a send on metadata */ }
+  }
   const results = [];
   for (const r of recips) {
     const out = { id: r.id, name: r.name, kindle: null, channels: [] };
