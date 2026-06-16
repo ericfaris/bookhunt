@@ -9,3 +9,4 @@ watchlist.json
 .browser-profile/
 *.log
 .DS_Store
+settings.json

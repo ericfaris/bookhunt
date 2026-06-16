@@ -36,6 +36,8 @@ services:
       # Watchlist (saved searches the background watcher re-checks) — same
       # single-file bind so the uid-1000 process can write it under root-owned /app
       - ./watchlist.json:/app/watchlist.json
+      # User-tunable settings (e.g. watchlist re-check cadence)
+      - ./settings.json:/app/settings.json
       # Downloads land in C:\epubs on the Windows side (via WSL2 path)
       - /mnt/c/epubs:/downloads
     environment:

@@ -18,9 +18,13 @@ const watchlist = require('./watchlist');
 const notify = require('./notify');
 const recipients = require('./recipients');
 const history = require('./history');
+const settings = require('./settings');
+const downloader = require('./downloader');
+const kindle = require('./kindle');
 
 const TICK_MS = Number(process.env.WATCH_TICK_MS) || 300000; // wake every 5 min
-const CHECK_INTERVAL_MS = Number(process.env.WATCH_CHECK_INTERVAL_MS) || 1800000; // re-check a watch every 30 min
+// The per-watch re-check cadence is user-configurable in Settings (settings.js);
+// read it fresh each tick so changes take effect without a restart.
 
 // Who to notify by default — the operator who set the watch. Mirrors
 // autowarm's alertEmail(): explicit override, else first CF-Access email, else
@@ -40,29 +44,100 @@ function operatorEmail() {
   );
 }
 
-// Notify the operator (always, if configured) plus any recipients the watch
-// targeted. Email-only — a watch hit is "go grab it", not a file push.
-async function notifyMatch(watch, book) {
-  const results = [];
-  const op = operatorEmail();
-  if (op) {
+// The watch's delivery audience: the recipients explicitly related to it. With
+// none related, we deliver to nobody automatically (the operator is always
+// emailed separately) — auto-pushing a book to every saved reader would be
+// surprising, so recipients must be opted in per watch.
+function deliveryRecipients(watch) {
+  return watch.recipientIds && watch.recipientIds.length ? recipients.byIds(watch.recipientIds) : [];
+}
+
+/**
+ * Autonomously deliver a matched book (issue #7 follow-up): when the match is a
+ * premium ePUB and credentials are set, download + verify it, push it to each
+ * recipient's Kindle, and email everyone. If a download isn't possible (no
+ * premium / no creds / unverified / wrong-book), gracefully fall back to a
+ * notify-only email with the thread link so nothing is ever silently dropped.
+ * Always emails the operator. Never throws.
+ *
+ * Returns { downloaded, delivered, kindlePushed }.
+ */
+async function autoDeliver(watch, top) {
+  const book = {
+    title: top.title || watch.title,
+    author: top.author || watch.author,
+    cover: top.cover || null,
+    description: top.description || '',
+    link: top.url || null,
+    watch: true,
+  };
+  const targets = deliveryRecipients(watch);
+
+  // 1) Try an autonomous, verified premium download.
+  let download = null;
+  if (top.premium && top.url && downloader.hasPremiumCreds()) {
     try {
-      results.push(...(await notify.notify({ email: op, name: '' }, book, ['email'])));
+      const r = await downloader.premiumDownload(top.url, () => {}, watch.title || top.title);
+      download = (r.downloads || []).find((d) => d.verified) || null;
+      // Safety: never auto-send a book whose embedded title clearly mismatches.
+      if (download && download.titleMatch === false) {
+        console.warn('[watcher] downloaded "%s" but embedded title mismatched — not auto-sending', book.title);
+        download = null;
+      }
     } catch (err) {
-      results.push({ channel: 'email', ok: false, error: err.message });
+      console.warn('[watcher] auto-download failed for "%s": %s', book.title, err.message);
     }
   }
-  if (watch.recipientIds && watch.recipientIds.length) {
-    const recips = recipients.byIds(watch.recipientIds);
-    for (const r of recips) {
+
+  // 2) Log a real download to history/Library so it behaves like a manual one.
+  if (download) {
+    try {
+      history.logDownload({
+        title: book.title, author: book.author, cover: book.cover,
+        filename: download.filename, savePath: download.savePath, url: top.url,
+        mode: 'premium', verified: download.verified, size: download.size,
+      });
+    } catch { /* best effort */ }
+  }
+
+  // 3) Deliver to recipients: push the file to Kindle (when we have it + an
+  // address), then email them. Dedup emails so the operator isn't doubled up.
+  let delivered = 0;
+  let kindlePushed = 0;
+  const emailed = new Set();
+  for (const r of targets) {
+    let pushed = false;
+    if (download && r.kindleEmail) {
       try {
-        results.push(...(await notify.notify(r, book, ['email'])));
+        await kindle.pushToKindle({ kindleEmail: r.kindleEmail, filePath: download.savePath, filename: download.filename });
+        pushed = true;
+        kindlePushed++;
       } catch (err) {
-        results.push({ channel: 'email', ok: false, error: err.message });
+        console.warn('[watcher] Kindle push failed for %s: %s', r.kindleEmail, err.message);
+      }
+    }
+    if (r.email) {
+      try {
+        await notify.notify(r, { ...book, pushedToKindle: pushed }, ['email']);
+        emailed.add(String(r.email).toLowerCase());
+        delivered++;
+      } catch (err) {
+        console.warn('[watcher] notify failed for %s: %s', r.email, err.message);
       }
     }
   }
-  return results;
+
+  // 4) Always tell the operator (unless they were already emailed as a recipient).
+  const op = operatorEmail();
+  if (op && !emailed.has(op.toLowerCase())) {
+    try {
+      await notify.notify({ email: op, name: '' }, { ...book, pushedToKindle: false }, ['email']);
+    } catch (err) {
+      console.warn('[watcher] operator notify failed: %s', err.message);
+    }
+  }
+
+  return { downloaded: !!download, delivered, kindlePushed };
 }
 
 /**
@@ -81,26 +156,38 @@ async function checkWatch(watch) {
 
   if (results && results.length) {
     const top = results[0];
-    const book = {
-      title: top.title || watch.title,
-      author: top.author || watch.author,
-      cover: top.cover || null,
-      description: top.description || '',
-      link: top.url || null,
-      watch: true,
-    };
-    let notifyResults = [];
+    let delivery = { downloaded: false, delivered: 0, kindlePushed: 0 };
     try {
-      notifyResults = await notifyMatch(watch, book);
+      delivery = await autoDeliver(watch, top);
     } catch (err) {
-      console.warn('[watcher] notify failed for %s: %s', watch.id, err.message);
+      console.warn('[watcher] delivery failed for %s: %s', watch.id, err.message);
     }
-    watchlist.update(watch.id, { ...base, status: 'fulfilled', foundUrl: top.url || null, foundAt: new Date().toISOString() });
+    watchlist.update(watch.id, {
+      ...base,
+      status: 'fulfilled',
+      foundUrl: top.url || null,
+      foundAt: new Date().toISOString(),
+      delivered: delivery.delivered,
+      kindlePushed: delivery.kindlePushed,
+      downloaded: delivery.downloaded,
+    });
     try {
-      history.add({ type: 'watch-hit', title: book.title, author: book.author, url: book.link, status: 'fulfilled' });
+      history.add({
+        type: 'watch-hit',
+        title: top.title || watch.title,
+        author: top.author || watch.author,
+        url: top.url || null,
+        status: 'fulfilled',
+      });
     } catch { /* best effort */ }
-    console.log('[watcher] match for "%s" — notified + fulfilled', watch.title || watch.author);
-    return { matched: true, notifyResults };
+    console.log(
+      '[watcher] match for "%s" — %s, emailed %d, kindle %d',
+      watch.title || watch.author,
+      delivery.downloaded ? 'downloaded' : 'notify-only',
+      delivery.delivered,
+      delivery.kindlePushed
+    );
+    return { matched: true, delivery };
   }
 
   watchlist.update(watch.id, base);
@@ -112,7 +199,7 @@ async function tick() {
   if (_inFlight) return; // don't stack ticks
   _inFlight = true;
   try {
-    const due = watchlist.dueWatches(watchlist.readAll(), Date.now(), CHECK_INTERVAL_MS);
+    const due = watchlist.dueWatches(watchlist.readAll(), Date.now(), settings.getWatchIntervalMs());
     if (!due.length) return;
     const st = await searcher.sessionStatus(); // passive — no navigation
     if (!st.ready) return; // wait for autowarm to restore the session
@@ -151,8 +238,8 @@ function start() {
   _timer = setInterval(tick, TICK_MS);
   if (_timer.unref) _timer.unref(); // don't keep the process alive just for this
   console.log(
-    `[watcher] watchlist scheduler on — tick ${TICK_MS / 1000}s, re-check each watch every ${CHECK_INTERVAL_MS / 60000}min`
+    `[watcher] watchlist scheduler on — tick ${TICK_MS / 1000}s, re-check each watch every ${settings.getWatchIntervalMin()}min (configurable in Settings)`
   );
 }
 
-module.exports = { start, tick, checkWatch, checkNow, notifyMatch, operatorEmail };
+module.exports = { start, tick, checkWatch, checkNow, autoDeliver, operatorEmail };

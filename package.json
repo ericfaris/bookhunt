@@ -1,6 +1,6 @@
 {
   "name": "mobilism-finder",
-  "version": "1.8.3",
+  "version": "1.9.0",
   "private": true,
   "description": "Local web app to search the Mobilism ebook forum and download ePUBs",
   "main": "src/server.js",

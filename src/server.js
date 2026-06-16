@@ -29,6 +29,7 @@ const version = require('./version');
 const autowarm = require('./autowarm');
 const watchlist = require('./watchlist');
 const watcher = require('./watcher');
+const settings = require('./settings');
 
 const PORT = process.env.PORT || 3000;
 const app = express();
@@ -435,6 +436,8 @@ app.get('/api/watchlist', (_req, res) => {
     watches: watchlist.readAll(),
     emailReady: notify.listChannels().some((c) => c.id === 'email' && c.configured),
     notifyTo: watcher.operatorEmail() || null,
+    // For relating recipients to a watch (id, name, whether they have a Kindle).
+    recipients: recipients.readAll().map((r) => ({ id: r.id, name: r.name, hasKindle: !!r.kindleEmail })),
   });
 });
 
@@ -461,6 +464,14 @@ app.post('/api/watchlist/:id/status', (req, res) => {
   } catch (err) {
     res.status(400).json({ error: err.message });
   }
+});
+
+// Relate recipients to a watch — who gets the book on Kindle + a notification
+// when it's found (issue #7 follow-up).
+app.post('/api/watchlist/:id/recipients', (req, res) => {
+  const updated = watchlist.setRecipients(req.params.id, (req.body || {}).recipientIds);
+  if (!updated) return res.status(404).json({ error: 'Watch not found.' });
+  res.json(updated);
 });
 
 // "Check now" — run this watch immediately instead of waiting for the scheduler.
@@ -616,7 +627,22 @@ app.get('/api/status', async (_req, res) => {
     channels: notify.listChannels(),
     kindle: kindle.isConfigured(),
     premium: { hasCreds: downloader.hasPremiumCreds() },
+    settings: {
+      watchCheckIntervalMin: settings.getWatchIntervalMin(),
+      watchMinMin: settings.MIN_WATCH_MIN,
+      watchMaxMin: settings.MAX_WATCH_MIN,
+    },
   });
+});
+
+// Update user-tunable settings (currently the watchlist re-check cadence).
+app.post('/api/settings', (req, res) => {
+  const body = req.body || {};
+  const out = {};
+  if (body.watchCheckIntervalMin !== undefined) {
+    out.watchCheckIntervalMin = settings.setWatchIntervalMin(body.watchCheckIntervalMin);
+  }
+  res.json({ ok: true, settings: { watchCheckIntervalMin: settings.getWatchIntervalMin(), ...out } });
 });
 
 // --- Send: notify recipients (+ optional Kindle push) -----------------------

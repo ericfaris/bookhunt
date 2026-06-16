@@ -383,7 +383,7 @@ a.reupreq-name { color: var(--accent); }
 
 /* Watchlist modal (issue #7) */
 .watchlist-card { width: min(560px, 94vw); position: relative; }
-.watch-form { display: grid; grid-template-columns: 1fr 1fr auto; gap: 0.5rem; margin: 0.75rem 0; }
+.watch-form { margin: 0.75rem 0; }
 .watch-form input { min-width: 0; }
 .watch-form .primary-btn { white-space: nowrap; }
 .watchlist-body { display: flex; flex-direction: column; gap: 0.6rem; max-height: 56vh; overflow-y: auto; }
@@ -398,6 +398,21 @@ a.reupreq-name { color: var(--accent); }
 .watch-cta { font-weight: 600; }
 .rf-watch { justify-content: flex-end; }
 .rf-watch .watch-cta { white-space: nowrap; }
+
+/* Watch ↔ recipient relation */
+.watch-form-row { display: grid; grid-template-columns: 1fr 1fr auto; gap: 0.5rem; }
+.watch-recipients { display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem 0.8rem; margin-top: 0.5rem; }
+.watch-recip-label { font-size: 0.8rem; font-weight: 600; color: var(--text-dim); }
+.watch-recip { display: inline-flex; align-items: center; gap: 0.3rem; font-size: 0.85rem; cursor: pointer; }
+.watch-recip input { margin: 0; }
+.watch-recip-line { margin: 0.3rem 0; display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem; }
+.watch-recip-edit { background: none; border: none; padding: 0; color: var(--accent); font-size: 0.8rem; font-weight: 600; cursor: pointer; }
+.watch-recip-edit:hover { text-decoration: underline; }
+.watch-recip-editor { display: flex; flex-wrap: wrap; gap: 0.4rem 0.8rem; align-items: center; margin: 0.3rem 0 0.5rem; padding: 0.5rem 0.6rem; background: var(--surface-2); border-radius: 8px; }
+.watch-recip-save { flex: 1 0 100%; }
+@media (max-width: 520px) {
+  .watch-form-row { grid-template-columns: 1fr; }
+}
 @media (max-width: 520px) {
   .watch-form { grid-template-columns: 1fr; }
 }
@@ -850,6 +865,9 @@ img.lib-cover { overflow: hidden; }
 .set-channel { font-size: 0.88rem; }
 .set-channel.on { color: var(--good); }
 .set-channel.off { color: var(--text-dim); }
+.set-cadence { display: flex; align-items: center; gap: 0.6rem; margin-top: 0.4rem; }
+.set-cadence label { font-size: 0.88rem; color: var(--text-dim); }
+.set-cadence select { flex: 0 1 auto; }
 .set-test { display: flex; gap: 0.5rem; margin-top: 0.4rem; }
 .set-test input { flex: 1; min-width: 0; }
 .set-test-result { font-size: 0.85rem; margin-top: 0.5rem; min-height: 1.1em; }

@@ -104,6 +104,17 @@ function update(id, patch) {
   return updated;
 }
 
+// PURE: normalize a recipientIds array (de-dupe, strings only, capped).
+function cleanRecipientIds(recipientIds) {
+  return Array.isArray(recipientIds)
+    ? [...new Set(recipientIds.filter((x) => typeof x === 'string' && x))].slice(0, 500)
+    : [];
+}
+
+function setRecipients(id, recipientIds) {
+  return update(id, { recipientIds: cleanRecipientIds(recipientIds) });
+}
+
 function setStatus(id, status) {
   if (!['active', 'paused', 'fulfilled'].includes(status)) throw new Error('Invalid status');
   // Re-activating a fulfilled/paused watch clears the previous "found" state so
@@ -133,8 +144,10 @@ module.exports = {
   remove,
   update,
   setStatus,
+  setRecipients,
   // exported for unit tests
   cleanWatchInput,
+  cleanRecipientIds,
   dueWatches,
   queryKey,
 };

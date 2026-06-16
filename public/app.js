@@ -1370,6 +1370,38 @@ $('#settingsToggle').addEventListener('click', openSettings);
 $('#settingsClose').addEventListener('click', closeSettings);
 $('#setPremUpdate').addEventListener('click', () => openCredModal());
 $('#setTestBtn').addEventListener('click', sendTestEmail);
+$('#setWatchCadence').addEventListener('change', saveWatchCadence);
+
+// Reflect the saved cadence in the dropdown; add a one-off option if the stored
+// value isn't one of the presets (e.g. an env-set custom value).
+function setWatchCadenceSelect(minutes) {
+  const sel = $('#setWatchCadence');
+  if (!sel) return;
+  const v = String(minutes);
+  if (![...sel.options].some((o) => o.value === v)) {
+    sel.append(el('option', { value: v }, `${minutes} minutes`));
+  }
+  sel.value = v;
+}
+
+async function saveWatchCadence() {
+  const sel = $('#setWatchCadence');
+  const out = $('#setWatchResult');
+  out.className = 'set-test-result';
+  try {
+    const res = await fetch('/api/settings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ watchCheckIntervalMin: Number(sel.value) }),
+    });
+    if (!res.ok) throw new Error('Could not save');
+    out.classList.add('ok');
+    out.textContent = '✓ Saved — takes effect on the next check.';
+  } catch {
+    out.classList.add('err');
+    out.textContent = 'Could not save the cadence.';
+  }
+}
 
 function closeSettings() { settingsModal.hidden = true; }
 async function openSettings() {
@@ -1393,6 +1425,7 @@ async function loadSettings() {
     }
     box.append(el('div', { className: 'set-channel ' + (s.kindle ? 'on' : 'off') },
       `${s.kindle ? '✓' : '✕'} Send-to-Kindle${s.kindle ? '' : ' — needs SMTP'}`));
+    setWatchCadenceSelect((s.settings && s.settings.watchCheckIntervalMin) || 30);
     renderVersion(s.version);
   } catch {
     $('#setPremStatus').textContent = 'Could not load settings.';
@@ -1997,6 +2030,7 @@ function renderReupRequests(data) {
 
 // --- Watchlist (issue #7) ---------------------------------------------------
 const watchlistModal = $('#watchlistModal');
+let watchRecipientsList = []; // [{id, name, hasKindle}] for relating to a watch
 $('#watchlistToggle').addEventListener('click', openWatchlist);
 $('#watchlistClose').addEventListener('click', () => { watchlistModal.hidden = true; });
 $('#watchForm').addEventListener('submit', async (e) => {
@@ -2004,11 +2038,12 @@ $('#watchForm').addEventListener('submit', async (e) => {
   const title = $('#watchTitle').value.trim();
   const author = $('#watchAuthor').value.trim();
   if (!title && !author) return;
+  const recipientIds = [...$('#watchAddRecipients').querySelectorAll('input:checked')].map((c) => c.value);
   try {
     const res = await fetch('/api/watchlist', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ title, author, sort: 'newest' }),
+      body: JSON.stringify({ title, author, sort: 'newest', recipientIds }),
     });
     if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || 'Could not add watch');
     $('#watchTitle').value = '';
@@ -2019,6 +2054,21 @@ $('#watchForm').addEventListener('submit', async (e) => {
     n.hidden = false; n.textContent = err.message;
   }
 });
+
+// Render the recipient checkboxes used both in the add-form and the per-row
+// editor. `selected` is a Set of pre-checked ids.
+function recipientCheckboxes(selected) {
+  if (!watchRecipientsList.length) {
+    return [el('span', { className: 'hint' }, 'No recipients yet — add them from a download’s “Send” dialog.')];
+  }
+  return watchRecipientsList.map((r) => {
+    const cb = el('input', { type: 'checkbox', value: r.id });
+    cb.checked = selected.has(r.id);
+    return el('label', { className: 'watch-recip' }, [
+      cb, `${r.name}${r.hasKindle ? ' 📖' : ''}`,
+    ]);
+  });
+}
 
 async function openWatchlist() {
   watchlistModal.hidden = false;
@@ -2040,6 +2090,14 @@ async function loadWatchlist() {
       notice.textContent = `Notifications go to ${data.notifyTo}.`;
     } else {
       notice.hidden = true;
+    }
+    watchRecipientsList = data.recipients || [];
+    // (Re)render the add-form recipient chooser.
+    const addBox = $('#watchAddRecipients');
+    addBox.innerHTML = '';
+    if (watchRecipientsList.length) {
+      addBox.append(el('span', { className: 'watch-recip-label' }, 'Send to:'));
+      for (const node of recipientCheckboxes(new Set())) addBox.append(node);
     }
     renderWatchlist(data.watches || []);
   } catch (err) {
@@ -2084,7 +2142,38 @@ function renderWatchlist(watches) {
     }
     const checked = w.lastCheckedAt ? `checked ${formatDate(w.lastCheckedAt)} · ${w.checkCount || 0}×` : 'not checked yet';
     bits.push(el('span', { className: 'hint' }, w.lastError ? `⚠ ${w.lastError}` : checked));
+    if (w.status === 'fulfilled' && (w.delivered || w.kindlePushed)) {
+      bits.push(el('span', { className: 'hint' }, `· sent to ${w.delivered || 0}${w.kindlePushed ? `, ${w.kindlePushed} to Kindle` : ''}`));
+    }
     const meta = el('div', { className: 'watch-meta' }, bits);
+
+    // Recipients this watch auto-delivers to (Kindle + notification on a match).
+    const ids = Array.isArray(w.recipientIds) ? w.recipientIds : [];
+    const names = ids
+      .map((id) => (watchRecipientsList.find((r) => r.id === id) || {}).name)
+      .filter(Boolean);
+    const recipLine = el('div', { className: 'watch-recip-line hint' },
+      names.length ? `→ ${names.join(', ')}` : '→ no recipients (operator notified only)');
+    const editLink = el('button', { className: 'watch-recip-edit', type: 'button' }, 'Recipients');
+    const editor = el('div', { className: 'watch-recip-editor', hidden: true });
+    editLink.addEventListener('click', () => {
+      if (editor.children.length === 0) {
+        for (const node of recipientCheckboxes(new Set(ids))) editor.append(node);
+        const save = el('button', { className: 'ghost-btn', type: 'button' }, 'Save recipients');
+        save.addEventListener('click', async () => {
+          const recipientIds = [...editor.querySelectorAll('input:checked')].map((c) => c.value);
+          save.disabled = true; save.textContent = 'Saving…';
+          await fetch(`/api/watchlist/${w.id}/recipients`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ recipientIds }),
+          });
+          await loadWatchlist();
+        });
+        editor.append(el('div', { className: 'watch-recip-save' }, [save]));
+      }
+      editor.hidden = !editor.hidden;
+    });
+    recipLine.append(el('span', {}, ' '), editLink);
 
     // Actions: pause/resume, check now, remove.
     const actions = el('div', { className: 'watch-actions' });
@@ -2131,7 +2220,7 @@ function renderWatchlist(watches) {
     });
     actions.append(del);
 
-    body.append(el('div', { className: 'watch-row' }, [head, meta, actions]));
+    body.append(el('div', { className: 'watch-row' }, [head, meta, recipLine, editor, actions]));
   }
 }
 

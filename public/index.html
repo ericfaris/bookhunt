@@ -162,9 +162,12 @@
       <div id="watchlistNotice" class="reup-msg warn" hidden></div>
 
       <form id="watchForm" class="watch-form">
-        <input id="watchTitle" type="text" placeholder="Title" autocomplete="off" />
-        <input id="watchAuthor" type="text" placeholder="Author (optional)" autocomplete="off" />
-        <button type="submit" class="primary-btn">Add watch</button>
+        <div class="watch-form-row">
+          <input id="watchTitle" type="text" placeholder="Title" autocomplete="off" />
+          <input id="watchAuthor" type="text" placeholder="Author (optional)" autocomplete="off" />
+          <button type="submit" class="primary-btn">Add watch</button>
+        </div>
+        <div id="watchAddRecipients" class="watch-recipients"></div>
       </form>
 
       <div id="watchlistBody" class="watchlist-body"><p class="hint">Loading…</p></div>
@@ -294,6 +297,24 @@
           <button id="setTestBtn" class="primary-btn" type="button">Send test</button>
         </div>
         <div id="setTestResult" class="set-test-result"></div>
+      </section>
+
+      <section class="set-section">
+        <h3>Watchlist</h3>
+        <p class="hint">How often each saved search is re-checked on Mobilism in the background.</p>
+        <div class="set-cadence">
+          <label for="setWatchCadence">Re-check every</label>
+          <select id="setWatchCadence">
+            <option value="15">15 minutes</option>
+            <option value="30">30 minutes</option>
+            <option value="60">1 hour</option>
+            <option value="180">3 hours</option>
+            <option value="360">6 hours</option>
+            <option value="720">12 hours</option>
+            <option value="1440">Daily</option>
+          </select>
+        </div>
+        <div id="setWatchResult" class="set-test-result"></div>
       </section>
 
       <section class="set-section">
