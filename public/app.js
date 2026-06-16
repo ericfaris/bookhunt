@@ -1,5 +1,13 @@
 'use strict';
 
+// Register the PWA service worker (issue #18). Inline scripts are blocked by our
+// CSP, so registration lives here in app.js (an allowed 'self' script).
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('/sw.js').catch(() => { /* non-fatal */ });
+  });
+}
+
 const $ = (sel) => document.querySelector(sel);
 
 const searchForm = $('#searchForm');
@@ -283,7 +291,7 @@ async function runSearch({ title, author, sort }) {
           finished = true;
           stopSearchTimer();
           if (!ev.results.length) {
-            renderNotFound(ev.fallbackLinks);
+            renderNotFound(ev.fallbackLinks, ev.externalSources);
           } else {
             showResults(ev.results);
             // Brief success confirmation, then get out of the way.
@@ -697,7 +705,7 @@ function buildReuploadRow(r) {
   return el('div', { className: 'reup-row' }, [btn, msg]);
 }
 
-function renderNotFound(links) {
+function renderNotFound(links, externalSources) {
   const linkBits = [];
   if (links?.title) linkBits.push(el('a', { href: links.title, target: '_blank', rel: 'noopener' }, 'Open title search on Mobilism ↗'));
   if (links?.author) linkBits.push(el('a', { href: links.author, target: '_blank', rel: 'noopener' }, 'Open author search on Mobilism ↗'));
@@ -705,6 +713,15 @@ function renderNotFound(links) {
   statusEl.className = 'status';
   statusEl.innerHTML = '<strong>Not found.</strong> No ePUB matches turned up. Try the manual searches:';
   statusEl.append(el('div', { className: 'links' }, linkBits));
+
+  // Fallback to other sources (issue #19) — link-out only, opens a new tab.
+  if (Array.isArray(externalSources) && externalSources.length) {
+    const otherBits = externalSources.map((s) =>
+      el('a', { href: s.url, target: '_blank', rel: 'noopener' }, `${s.name} ↗`)
+    );
+    statusEl.append(el('p', { className: 'hint', style: 'margin:0.6rem 0 0' }, 'Or search another source:'));
+    statusEl.append(el('div', { className: 'links' }, otherBits));
+  }
 }
 
 function formatDate(d) {
@@ -1829,6 +1846,109 @@ async function openHistory() {
 function closeHistory() {
   historyPanel.hidden = true;
   overlay.hidden = true;
+}
+
+// --- Re-upload request management (issue #27) -------------------------------
+// Lists the user's authoritative Mobilism requests and lets them cancel some.
+const reupReqModal = $('#reupReqModal');
+$('#reupReqOpen').addEventListener('click', openReupRequests);
+$('#reupReqClose').addEventListener('click', () => { reupReqModal.hidden = true; });
+$('#reupReqRefresh').addEventListener('click', loadReupRequests);
+
+// Normalize a release name the same way the server does, for history matching.
+const normReup = (s) => String(s || '').replace(/\s+/g, ' ').trim().toLowerCase();
+
+async function openReupRequests() {
+  reupReqModal.hidden = false;
+  await loadReupRequests();
+}
+
+async function loadReupRequests() {
+  const body = $('#reupReqBody');
+  const cancelBtn = $('#reupReqCancelSel');
+  cancelBtn.hidden = true;
+  body.innerHTML = '<p class="hint">Loading your requests…</p>';
+  try {
+    const res = await fetch('/api/reupload/requests');
+    if (res.status === 409) {
+      const d = await res.json().catch(() => ({}));
+      body.innerHTML = '';
+      body.append(el('p', { className: 'reup-msg warn' }, d.error || 'Session needs re-warming.'));
+      body.append(el('a', { className: 'warm-btn', href: '/warm', target: '_blank', rel: 'noopener' }, 'Re-warm ↗'));
+      return;
+    }
+    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || 'Could not load requests.');
+    const data = await res.json();
+    renderReupRequests(data);
+  } catch (err) {
+    body.innerHTML = '';
+    body.append(el('p', { className: 'reup-msg error' }, err.message || 'Could not load requests.'));
+  }
+}
+
+function renderReupRequests(data) {
+  const body = $('#reupReqBody');
+  const cancelBtn = $('#reupReqCancelSel');
+  body.innerHTML = '';
+  const requests = (data && data.requests) || [];
+  const hist = (data && data.history) || [];
+
+  if (!requests.length) {
+    cancelBtn.hidden = true;
+    body.append(
+      el('div', { className: 'lib-empty' }, [
+        el('div', { className: 'lib-empty-icon' }, '↻'),
+        el('p', {}, 'No pending re-upload requests.'),
+        el('p', { className: 'hint' }, 'Requests you make from a result will show up here.'),
+      ])
+    );
+    return;
+  }
+
+  const selected = new Set();
+  for (const r of requests) {
+    const cb = el('input', { type: 'checkbox', className: 'reupreq-check' });
+    cb.addEventListener('change', () => {
+      if (cb.checked) selected.add(r.releaseName);
+      else selected.delete(r.releaseName);
+      cancelBtn.hidden = selected.size === 0;
+      cancelBtn.textContent = `Cancel selected (${selected.size})`;
+    });
+
+    // Deep-link back to the in-app thread if local history recorded this request.
+    const match = hist.find((h) => h.title && normReup(r.releaseName).includes(normReup(h.title)));
+    const title = match && match.url
+      ? el('a', { className: 'reupreq-name', href: match.url, target: '_blank', rel: 'noopener' }, r.releaseName)
+      : el('span', { className: 'reupreq-name' }, r.releaseName);
+
+    const meta = el('div', { className: 'reupreq-meta hint' },
+      `Requested ${r.requestedOn || '—'} · releaser last online ${r.releaserLastOnline || '—'}`);
+
+    body.append(el('label', { className: 'reupreq-row' }, [cb, el('div', { className: 'reupreq-main' }, [title, meta])]));
+  }
+
+  cancelBtn.hidden = true;
+  cancelBtn.textContent = 'Cancel selected';
+  cancelBtn.onclick = async () => {
+    if (!selected.size) return;
+    cancelBtn.disabled = true;
+    const prev = cancelBtn.textContent;
+    cancelBtn.textContent = 'Cancelling…';
+    try {
+      const res = await fetch('/api/reupload/cancel', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ releaseNames: [...selected] }),
+      });
+      const d = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(d.error || 'Cancel failed.');
+      await loadReupRequests(); // reflect Mobilism's authoritative state
+    } catch (err) {
+      cancelBtn.disabled = false;
+      cancelBtn.textContent = prev;
+      body.prepend(el('p', { className: 'reup-msg error' }, err.message || 'Cancel failed.'));
+    }
+  };
 }
 
 function renderHistoryItem(entry) {

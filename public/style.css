@@ -368,6 +368,18 @@ input:focus, select:focus, textarea:focus { border-color: var(--accent); box-sha
 }
 .history-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; }
 .history-head h2 { margin: 0; font-size: 1.05rem; }
+.history-head-actions { display: flex; gap: 0.4rem; align-items: center; }
+
+/* Re-upload requests modal (issue #27) */
+.reupreq-card { width: min(520px, 94vw); position: relative; }
+.reupreq-body { display: flex; flex-direction: column; gap: 0.5rem; margin: 0.75rem 0; max-height: 60vh; overflow-y: auto; }
+.reupreq-row { display: flex; gap: 0.6rem; align-items: flex-start; padding: 0.6rem 0.7rem; border: 1px solid var(--border); border-radius: 10px; cursor: pointer; }
+.reupreq-row:hover { background: var(--surface-2); }
+.reupreq-check { margin-top: 0.2rem; flex: 0 0 auto; }
+.reupreq-main { min-width: 0; }
+.reupreq-name { font-weight: 600; overflow-wrap: anywhere; }
+a.reupreq-name { color: var(--accent); }
+.reupreq-meta { margin-top: 0.2rem; }
 .history-item {
   border: 1px solid var(--border);
   border-radius: 10px;

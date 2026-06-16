@@ -16,12 +16,14 @@ const notify = require('./notify');
 const kindle = require('./kindle');
 const security = require('./security');
 const reupload = require('./reupload');
+const reuploads = require('./reuploads');
 const library = require('./library');
 const booktags = require('./booktags');
 const covers = require('./covers');
 const messages = require('./messages');
 const batch = require('./batch');
 const correct = require('./correct');
+const sources = require('./sources');
 const health = require('./health');
 const version = require('./version');
 const autowarm = require('./autowarm');
@@ -84,6 +86,13 @@ app.use(
   express.static(path.join(__dirname, '..', 'public'), {
     setHeaders(res, filePath) {
       if (/\.(html|js|css)$/i.test(filePath)) {
+        res.setHeader('Cache-Control', 'no-cache');
+      }
+      // PWA (issue #18): the service worker must never be stale, and some setups
+      // don't map .webmanifest to the right content type.
+      if (/sw\.js$/i.test(filePath)) res.setHeader('Cache-Control', 'no-cache');
+      if (/\.webmanifest$/i.test(filePath)) {
+        res.setHeader('Content-Type', 'application/manifest+json');
         res.setHeader('Cache-Control', 'no-cache');
       }
     },
@@ -168,7 +177,8 @@ app.post('/api/search', async (req, res) => {
       signal
     );
     history.logSearch({ title, author, sort, resultCount: results.length });
-    send({ step: 'done', results, fallbackLinks });
+    // External fallback sources (issue #19) — shown only when nothing matched.
+    send({ step: 'done', results, fallbackLinks, externalSources: sources.buildSources({ title, author }) });
   } catch (err) {
     // A cancellation isn't an error — the client already walked away, so there's
     // nothing (and nowhere) to report.
@@ -378,6 +388,37 @@ app.post('/api/reupload', async (req, res) => {
       return res.status(409).json({ error: err.message, needWarm: true });
     }
     res.status(500).json({ error: err.message || 'Re-upload request failed.' });
+  }
+});
+
+// --- Re-upload request management (issue #27) -------------------------------
+// Mobilism's UCP page is authoritative; we annotate with local history so a row
+// can deep-link back to the in-app book/thread. A stale session becomes a 409
+// the UI turns into a re-warm prompt (same as /api/reupload).
+app.get('/api/reupload/requests', async (_req, res) => {
+  try {
+    const data = await reuploads.listRequests();
+    const reupHistory = history.readAll().filter((e) => e.type === 'reupload');
+    res.json({ ...data, history: reupHistory });
+  } catch (err) {
+    console.error('Re-upload requests load failed:', err);
+    if (err.needWarm) return res.status(409).json({ error: err.message, needWarm: true });
+    res.status(500).json({ error: err.message || 'Could not load re-upload requests.' });
+  }
+});
+
+app.post('/api/reupload/cancel', async (req, res) => {
+  const { releaseNames } = req.body || {};
+  if (!Array.isArray(releaseNames) || !releaseNames.length) {
+    return res.status(400).json({ error: 'No requests selected to cancel.' });
+  }
+  try {
+    const result = await reuploads.cancelRequests(releaseNames.map(String).slice(0, 50));
+    res.json(result);
+  } catch (err) {
+    console.error('Re-upload cancel failed:', err);
+    if (err.needWarm) return res.status(409).json({ error: err.message, needWarm: true });
+    res.status(500).json({ error: err.message || 'Could not cancel the request(s).' });
   }
 });
 
