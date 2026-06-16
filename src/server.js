@@ -154,11 +154,13 @@ app.post('/api/search', async (req, res) => {
   // long gaps between page fetches so Cloudflare's 524 timeout never fires.
   const heartbeat = setInterval(() => { if (!res.writableEnded) res.write(': ping\n\n'); }, 15000);
 
-  // Cancellation (issue #28): when the client aborts the fetch the request
-  // closes — flip the signal so the running scrape bails at its next checkpoint
-  // and frees the shared browser for the next action. Cooperative, not a kill.
+  // Cancellation (issue #28): cancel ONLY when the client truly disconnects
+  // mid-stream. Listen on the RESPONSE close (not req 'close', which also fires
+  // when the request body finishes being read — and does so early behind
+  // Cloudflare — spuriously cancelling every search). `writableEnded` is true
+  // once we've called res.end() ourselves, so a normal finish never cancels.
   const signal = searcher.createCancelSignal();
-  req.on('close', () => signal.cancel());
+  res.on('close', () => { if (!res.writableEnded) signal.cancel(); });
 
   try {
     // Fuzzy spell-correction BEFORE the scrape: a misspelled request yields bad
@@ -709,6 +711,14 @@ app.use((err, req, res, _next) => {
   if (!res.headersSent) res.status(500).json({ error: err.message || 'Internal server error' });
 });
 
+// Export the Express app so the routes can be integration-tested in-process
+// (without binding a port or launching the browser). Only actually start the
+// server, browser, schedulers, and VNC bridge when run directly.
+module.exports = { app };
+
+if (require.main === module) startServer();
+
+function startServer() {
 // Bind to loopback by default. In Docker the container is isolated by the
 // host-side port mapping (127.0.0.1:3000:3000), so HOST=0.0.0.0 is safe there.
 const HOST = process.env.HOST || '127.0.0.1';
@@ -767,4 +777,5 @@ for (const sig of ['SIGINT', 'SIGTERM']) {
     await searcher.closeSession();
     process.exit(0);
   });
+}
 }
