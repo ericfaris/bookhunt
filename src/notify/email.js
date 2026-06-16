@@ -60,10 +60,34 @@ function buildMessage({ recipient, book }) {
   const name = recipient && recipient.name ? String(recipient.name).split(/\s+/)[0] : '';
   const greeting = name ? `Hi ${esc(name)},` : 'Hi there,';
 
+  // A watchlist hit (issue #7) reads differently from a hand-picked send: it's
+  // "the book you asked us to watch just showed up — go grab it".
+  const isWatch = !!book.watch;
+  const link = /^https?:\/\//i.test(String(book.link || '')) ? String(book.link) : '';
+
+  const subHeader = isWatch ? 'A book you’re watching is available' : 'A new book just landed';
+  const intro = isWatch
+    ? 'Good news — a book on your watchlist just turned up on Mobilism:'
+    : 'Eric just sent you something new to read:';
+  const pill = isWatch ? '🔔 Back in stock' : '✨ New arrival';
+
   // Tailor the closing line to what actually happened.
-  const delivery = book.pushedToKindle
-    ? `It’s already on its way to your Kindle — it’ll show up in your library in a minute or two. Happy reading! 🎉`
-    : `It’s ready and waiting for you. Happy reading! 🎉`;
+  const delivery = isWatch
+    ? `Head over and grab it while it’s live. Happy hunting! 🔎`
+    : book.pushedToKindle
+      ? `It’s already on its way to your Kindle — it’ll show up in your library in a minute or two. Happy reading! 🎉`
+      : `It’s ready and waiting for you. Happy reading! 🎉`;
+
+  // Optional call-to-action button (the Mobilism thread) — shown when a link is
+  // supplied (watch hits always carry one; sends currently don't).
+  const cta = link
+    ? `<tr><td style="padding:4px 28px 0">
+         <a href="${esc(link)}" style="display:inline-block;background:${ACCENT};color:#ffffff;
+            text-decoration:none;font-size:14px;font-weight:700;padding:11px 20px;border-radius:9px">
+           Open on Mobilism →
+         </a>
+       </td></tr>`
+    : '';
 
   // Attach the cover as an inline CID image so it renders even when clients
   // block remote images. nodemailer fetches the http(s) `path` itself. Only do
@@ -108,14 +132,14 @@ function buildMessage({ recipient, book }) {
           <!-- Sub-header -->
           <tr><td style="padding:18px 28px 0">
             <p style="margin:0;color:${ACCENT};font-size:13px;font-weight:700;letter-spacing:0.3px;text-transform:uppercase">
-              A new book just landed
+              ${subHeader}
             </p>
           </td></tr>
 
           <!-- Greeting -->
           <tr><td style="padding:12px 28px 0">
             <p style="margin:0 0 4px;font-size:15px;color:${MUTED}">${greeting}</p>
-            <p style="margin:0;font-size:15px;color:${MUTED}">Eric just sent you something new to read:</p>
+            <p style="margin:0;font-size:15px;color:${MUTED}">${intro}</p>
           </td></tr>
 
           <!-- Cover + title/author -->
@@ -132,7 +156,7 @@ function buildMessage({ recipient, book }) {
                   ${author ? `<p style="margin:0 0 12px;font-size:15px;color:${MUTED}">${esc(author)}</p>` : ''}
                   <span style="display:inline-block;background:#fde8df;color:${ACCENT};
                                font-size:12px;font-weight:700;padding:5px 12px;border-radius:999px">
-                    ✨ New arrival
+                    ${pill}
                   </span>
                 </td>
               </tr>
@@ -141,6 +165,9 @@ function buildMessage({ recipient, book }) {
 
           <!-- Blurb -->
           ${blurb}
+
+          <!-- Call to action -->
+          ${cta}
 
           <!-- Delivery line -->
           <tr><td style="padding:20px 28px 24px">
@@ -159,13 +186,20 @@ function buildMessage({ recipient, book }) {
 
   const text =
     `${name ? 'Hi ' + name + ',' : 'Hi there,'}\n\n` +
-    `Eric just sent you a new book to read:\n\n` +
+    `${isWatch ? 'A book on your watchlist just turned up on Mobilism:' : 'Eric just sent you a new book to read:'}\n\n` +
     `${title}${author ? ' ' + author : ''}` +
     (book.description ? `\n\n${book.description}` : '') +
-    `\n\n${book.pushedToKindle ? "It's on its way to your Kindle now." : "It's ready and waiting for you."} Happy reading!`;
+    (link ? `\n\nOpen on Mobilism: ${link}` : '') +
+    `\n\n${
+      isWatch
+        ? 'Head over and grab it while it’s live. Happy hunting!'
+        : (book.pushedToKindle ? "It's on its way to your Kindle now." : "It's ready and waiting for you.") + ' Happy reading!'
+    }`;
 
   return {
-    subject: `📚 A new book for you: “${title}”`,
+    subject: isWatch
+      ? `🔔 A book you’re watching is available: “${title}”`
+      : `📚 A new book for you: “${title}”`,
     text,
     html,
     attachments,

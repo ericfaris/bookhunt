@@ -27,6 +27,8 @@ const sources = require('./sources');
 const health = require('./health');
 const version = require('./version');
 const autowarm = require('./autowarm');
+const watchlist = require('./watchlist');
+const watcher = require('./watcher');
 
 const PORT = process.env.PORT || 3000;
 const app = express();
@@ -422,6 +424,54 @@ app.post('/api/reupload/cancel', async (req, res) => {
   }
 });
 
+// --- Watchlist (issue #7) ---------------------------------------------------
+// Saved searches the server re-runs on a schedule (src/watcher.js), notifying
+// the user when a match finally appears. The list also reports whether email is
+// configured (no email channel = notifications can't be delivered).
+app.get('/api/watchlist', (_req, res) => {
+  res.json({
+    watches: watchlist.readAll(),
+    emailReady: notify.listChannels().some((c) => c.id === 'email' && c.configured),
+    notifyTo: watcher.operatorEmail() || null,
+  });
+});
+
+app.post('/api/watchlist', (req, res) => {
+  try {
+    const entry = watchlist.add(req.body || {});
+    res.json(entry);
+  } catch (err) {
+    res.status(400).json({ error: err.message || 'Could not add the watch.' });
+  }
+});
+
+app.delete('/api/watchlist/:id', (req, res) => {
+  const ok = watchlist.remove(req.params.id);
+  res.json({ ok });
+});
+
+// Pause / resume a watch.
+app.post('/api/watchlist/:id/status', (req, res) => {
+  try {
+    const updated = watchlist.setStatus(req.params.id, (req.body || {}).status);
+    if (!updated) return res.status(404).json({ error: 'Watch not found.' });
+    res.json(updated);
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// "Check now" — run this watch immediately instead of waiting for the scheduler.
+app.post('/api/watchlist/:id/check', async (req, res) => {
+  try {
+    const result = await watcher.checkNow(req.params.id);
+    res.json(result);
+  } catch (err) {
+    if (err.needWarm) return res.status(409).json({ error: err.message, needWarm: true });
+    res.status(500).json({ error: err.message || 'Check failed.' });
+  }
+});
+
 // --- History ----------------------------------------------------------------
 app.get('/api/history', (_req, res) => {
   res.json({ entries: history.readAll() });
@@ -675,7 +725,10 @@ const server = app.listen(PORT, HOST, () => {
     .catch((err) => console.error('Startup browser launch failed:', err.message))
     // Keep the session authenticated on its own — auto-clears Cloudflare + logs in
     // unattended, and only summons a human (via email) for interactive challenges.
-    .finally(() => autowarm.start());
+    .finally(() => {
+      autowarm.start();
+      watcher.start(); // watchlist scheduler (issue #7)
+    });
 });
 
 // noVNC's WebSocket doesn't pass through Express — bridge upgrades on /warm/* to

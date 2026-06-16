@@ -72,3 +72,26 @@ test('buildMessage: falls back to filename when there is no title', () => {
   const m = email.buildMessage({ recipient: base.recipient, book: { filename: 'book.epub', pushedToKindle: false } });
   assert.match(m.subject, /book\.epub/);
 });
+
+// --- Watchlist hit variant (issue #7) ---------------------------------------
+test('buildMessage: a watch hit uses watch copy + subject + a thread CTA', () => {
+  const m = email.buildMessage({
+    recipient: { name: 'Eric', email: 'eric@example.com' },
+    book: {
+      title: 'Dune', author: 'Frank Herbert', cover: 'https://img/c.jpg',
+      description: 'epic', watch: true, link: 'https://forum.mobilism.org/t1',
+    },
+  });
+  assert.match(m.subject, /watching is available/i);
+  assert.match(m.html, /watchlist just turned up/i);
+  assert.match(m.html, /Open on Mobilism/i);
+  assert.match(m.html, /forum\.mobilism\.org\/t1/);
+  assert.match(m.text, /Open on Mobilism: https:\/\/forum\.mobilism\.org\/t1/);
+});
+
+test('buildMessage: a normal send is unchanged (no watch copy, no CTA without a link)', () => {
+  const m = email.buildMessage(base);
+  assert.match(m.subject, /A new book for you/);
+  assert.ok(!/Open on Mobilism/i.test(m.html));
+  assert.ok(!/watchlist/i.test(m.html));
+});

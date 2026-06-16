@@ -722,6 +722,29 @@ function renderNotFound(links, externalSources) {
     statusEl.append(el('p', { className: 'hint', style: 'margin:0.6rem 0 0' }, 'Or search another source:'));
     statusEl.append(el('div', { className: 'links' }, otherBits));
   }
+
+  // Watch this search (issue #7) — get pinged when it finally shows up.
+  const title = ($('#title').value || '').trim();
+  const author = ($('#author').value || '').trim();
+  if (title || author) {
+    const watchBtn = el('button', { className: 'ghost-btn watch-cta', type: 'button' }, '🔔 Watch for this book');
+    watchBtn.addEventListener('click', async () => {
+      watchBtn.disabled = true;
+      try {
+        const res = await fetch('/api/watchlist', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ title, author, sort: $('#sort').value }),
+        });
+        if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || 'Could not add watch');
+        watchBtn.textContent = '🔔 Watching — we’ll email you';
+      } catch (err) {
+        watchBtn.disabled = false;
+        watchBtn.textContent = `⚠ ${err.message}`;
+      }
+    });
+    statusEl.append(el('div', { className: 'links', style: 'margin-top:0.7rem' }, [watchBtn]));
+  }
 }
 
 function formatDate(d) {
@@ -1951,6 +1974,146 @@ function renderReupRequests(data) {
   };
 }
 
+// --- Watchlist (issue #7) ---------------------------------------------------
+const watchlistModal = $('#watchlistModal');
+$('#watchlistToggle').addEventListener('click', openWatchlist);
+$('#watchlistClose').addEventListener('click', () => { watchlistModal.hidden = true; });
+$('#watchForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const title = $('#watchTitle').value.trim();
+  const author = $('#watchAuthor').value.trim();
+  if (!title && !author) return;
+  try {
+    const res = await fetch('/api/watchlist', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title, author, sort: 'newest' }),
+    });
+    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || 'Could not add watch');
+    $('#watchTitle').value = '';
+    $('#watchAuthor').value = '';
+    await loadWatchlist();
+  } catch (err) {
+    const n = $('#watchlistNotice');
+    n.hidden = false; n.textContent = err.message;
+  }
+});
+
+async function openWatchlist() {
+  watchlistModal.hidden = false;
+  await loadWatchlist();
+}
+
+async function loadWatchlist() {
+  const body = $('#watchlistBody');
+  body.innerHTML = '<p class="hint">Loading…</p>';
+  try {
+    const data = await fetch('/api/watchlist').then((r) => r.json());
+    const notice = $('#watchlistNotice');
+    if (!data.emailReady) {
+      notice.hidden = false;
+      notice.textContent = '⚠ Email isn’t configured (SMTP_*), so watch notifications can’t be delivered yet.';
+    } else if (data.notifyTo) {
+      notice.hidden = false;
+      notice.className = 'hint';
+      notice.textContent = `Notifications go to ${data.notifyTo}.`;
+    } else {
+      notice.hidden = true;
+    }
+    renderWatchlist(data.watches || []);
+  } catch (err) {
+    body.innerHTML = '';
+    body.append(el('p', { className: 'reup-msg error' }, err.message || 'Could not load the watchlist.'));
+  }
+}
+
+function watchStatusBadge(w) {
+  const map = {
+    active: ['Active', 'ok-badge'],
+    paused: ['Paused', ''],
+    fulfilled: ['Found ✓', 'ok-badge'],
+  };
+  const [label, cls] = map[w.status] || [w.status, ''];
+  return el('span', { className: 'badge ' + cls }, label);
+}
+
+function renderWatchlist(watches) {
+  const body = $('#watchlistBody');
+  body.innerHTML = '';
+  if (!watches.length) {
+    body.append(
+      el('div', { className: 'lib-empty' }, [
+        el('div', { className: 'lib-empty-icon' }, '🔔'),
+        el('p', {}, 'No watches yet.'),
+        el('p', { className: 'hint' }, 'Add one above, or hit “Watch for this book” on a not-found search.'),
+      ])
+    );
+    return;
+  }
+  for (const w of watches) {
+    const label = [w.title && `“${w.title}”`, w.author && `by ${w.author}`].filter(Boolean).join(' ') || '(any)';
+    const head = el('div', { className: 'watch-head' }, [
+      el('span', { className: 'watch-q' }, label),
+      watchStatusBadge(w),
+    ]);
+
+    const bits = [];
+    if (w.status === 'fulfilled' && w.foundUrl) {
+      bits.push(el('a', { href: w.foundUrl, target: '_blank', rel: 'noopener' }, 'Open the match ↗'));
+    }
+    const checked = w.lastCheckedAt ? `checked ${formatDate(w.lastCheckedAt)} · ${w.checkCount || 0}×` : 'not checked yet';
+    bits.push(el('span', { className: 'hint' }, w.lastError ? `⚠ ${w.lastError}` : checked));
+    const meta = el('div', { className: 'watch-meta' }, bits);
+
+    // Actions: pause/resume, check now, remove.
+    const actions = el('div', { className: 'watch-actions' });
+    if (w.status !== 'fulfilled') {
+      const checkBtn = el('button', { className: 'ghost-btn', type: 'button' }, 'Check now');
+      checkBtn.addEventListener('click', async () => {
+        checkBtn.disabled = true; checkBtn.textContent = 'Checking…';
+        try {
+          const res = await fetch(`/api/watchlist/${w.id}/check`, { method: 'POST' });
+          const d = await res.json().catch(() => ({}));
+          if (res.status === 409) { checkBtn.textContent = 'Re-warm needed'; return; }
+          if (!res.ok) throw new Error(d.error || 'Check failed');
+        } catch { /* surfaced on reload */ }
+        await loadWatchlist();
+      });
+      actions.append(checkBtn);
+
+      const toggle = el('button', { className: 'ghost-btn', type: 'button' }, w.status === 'paused' ? 'Resume' : 'Pause');
+      toggle.addEventListener('click', async () => {
+        await fetch(`/api/watchlist/${w.id}/status`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ status: w.status === 'paused' ? 'active' : 'paused' }),
+        });
+        await loadWatchlist();
+      });
+      actions.append(toggle);
+    } else {
+      const again = el('button', { className: 'ghost-btn', type: 'button' }, 'Watch again');
+      again.addEventListener('click', async () => {
+        await fetch(`/api/watchlist/${w.id}/status`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ status: 'active' }),
+        });
+        await loadWatchlist();
+      });
+      actions.append(again);
+    }
+    const del = el('button', { className: 'ghost-btn watch-del', type: 'button' }, 'Remove');
+    del.addEventListener('click', async () => {
+      await fetch(`/api/watchlist/${w.id}`, { method: 'DELETE' });
+      await loadWatchlist();
+    });
+    actions.append(del);
+
+    body.append(el('div', { className: 'watch-row' }, [head, meta, actions]));
+  }
+}
+
 function renderHistoryItem(entry) {
   const when = el('div', { className: 'when' }, new Date(entry.timestamp).toLocaleString());
   const item = el('div', { className: 'history-item' });
@@ -1972,6 +2135,10 @@ function renderHistoryItem(entry) {
   } else if (entry.type === 'reupload') {
     const label = { success: 'requested', 'already-requested': 'already pending' }[entry.status] || entry.status;
     item.append(el('div', {}, `↻ Re-upload ${label}${entry.title ? ` — “${entry.title}”` : ''}`));
+  } else if (entry.type === 'watch-hit') {
+    const label = [entry.title && `“${entry.title}”`, entry.author && `by ${entry.author}`].filter(Boolean).join(' ');
+    item.append(el('div', {}, `🔔 Watch matched — ${label || 'a book'} is available`));
+    if (entry.url) item.append(el('a', { className: 'hint', href: entry.url, target: '_blank', rel: 'noopener' }, 'Open the match ↗'));
   } else {
     const where = entry.savePath ? ` → ${entry.savePath}` : '';
     item.append(el('div', {}, `⬇ ${entry.filename || 'download'}${where}`));

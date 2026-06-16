@@ -42,6 +42,7 @@
     </h1>
     <div class="topbar-actions">
       <button id="libraryToggle" class="ghost-btn" type="button">Library</button>
+      <button id="watchlistToggle" class="ghost-btn" type="button" title="Watchlist — get notified when a book shows up">🔔 Watchlist</button>
       <button id="historyToggle" class="ghost-btn" type="button">History</button>
       <button id="statusToggle" class="ghost-btn" type="button" title="Session, downloads & channels">Status</button>
       <button id="settingsToggle" class="ghost-btn" type="button" title="Settings" aria-label="Settings">⚙</button>
@@ -149,6 +150,24 @@
         <span class="spacer"></span>
         <button id="reupReqRefresh" class="ghost-btn" type="button">↻ Refresh</button>
       </div>
+    </div>
+  </div>
+
+  <!-- Watchlist modal (issue #7) -->
+  <div id="watchlistModal" class="modal" role="dialog" aria-modal="true" aria-label="Watchlist" hidden>
+    <div class="modal-card watchlist-card">
+      <button id="watchlistClose" class="dl-close" type="button" aria-label="Close">✕</button>
+      <h2>🔔 Watchlist</h2>
+      <p class="hint">We re-check these on Mobilism in the background and email you the moment one shows up.</p>
+      <div id="watchlistNotice" class="reup-msg warn" hidden></div>
+
+      <form id="watchForm" class="watch-form">
+        <input id="watchTitle" type="text" placeholder="Title" autocomplete="off" />
+        <input id="watchAuthor" type="text" placeholder="Author (optional)" autocomplete="off" />
+        <button type="submit" class="primary-btn">Add watch</button>
+      </form>
+
+      <div id="watchlistBody" class="watchlist-body"><p class="hint">Loading…</p></div>
     </div>
   </div>
 
