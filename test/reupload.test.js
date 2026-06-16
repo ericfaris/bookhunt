@@ -32,6 +32,37 @@ test('scanReuploadText: already-requested wins over a generic thank-you', () => 
   assert.equal(s.success, false);
 });
 
+// Issue #26: the REAL Mobilism confirmation wording + landing URL.
+test('scanReuploadText: recognizes the real "WRZ$ subtracted" confirmation', () => {
+  const s = scanReuploadText('3.00 WRZ$ subtracted. View your Reupload Requests');
+  assert.equal(s.success, true);
+  assert.equal(s.alreadyRequested, false);
+});
+
+test('scanReuploadText: recognizes "View your Reupload Requests" alone', () => {
+  assert.equal(scanReuploadText('View your Reupload Requests').success, true);
+});
+
+test('scanReuploadText: a reupload_request= landing URL counts as success', () => {
+  // Even with neutral body text, the Information-page URL confirms success.
+  const s = scanReuploadText('Information', 'https://forum.mobilism.org/viewtopic.php?reupload_request=2702908&p=5733586');
+  assert.equal(s.success, true);
+});
+
+test('scanReuploadText: already-requested still wins over a success URL', () => {
+  const s = scanReuploadText(
+    'You have already requested a re-upload.',
+    'https://forum.mobilism.org/viewtopic.php?reupload_request=2702908&p=5733586'
+  );
+  assert.equal(s.alreadyRequested, true);
+  assert.equal(s.success, false);
+});
+
+test('scanReuploadText: the plain topic URL is NOT a success signal', () => {
+  const s = scanReuploadText('Some unrelated forum post.', 'https://forum.mobilism.org/viewtopic.php?f=121&t=2702908');
+  assert.equal(s.success, false);
+});
+
 test('scanReuploadText: neutral page yields no signals', () => {
   const s = scanReuploadText('Some unrelated forum post about books.');
   assert.equal(s.success, false);

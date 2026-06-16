@@ -20,21 +20,27 @@ const { getSession, ensureReady, enqueue, randomDelay } = require('./searcher');
 // the exact wording varies by theme/plugin version.
 const ALREADY_RE =
   /(already\s+(been\s+)?(requested|asked|submitted)|re-?up(load)?\s+(already|pending)|pending\s+re-?up|request\s+is\s+pending|you\s+can\s+(request|ask).*again|wait\b.*\bbefore\b.*\b(request|re-?up))/i;
+// Includes the REAL Mobilism confirmation wording seen on a successful request:
+// the Information page reads "3.00 WRZ$ subtracted. View your Reupload Requests"
+// (issue #26). The earlier phrases were guesswork and never matched a real run.
 const SUCCESS_RE =
-  /(re-?up(load)?\s+request|uploader\s+(has\s+been|will\s+be)\s+notified|request\s+(has\s+been\s+)?(sent|submitted|received|recorded)|thank\s*you|notification\s+(has\s+been\s+)?sent)/i;
+  /(re-?up(load)?\s+request|uploader\s+(has\s+been|will\s+be)\s+notified|request\s+(has\s+been\s+)?(sent|submitted|received|recorded)|thank\s*you|notification\s+(has\s+been\s+)?sent|wrz\s*\$?\s*subtracted|view\s+your\s+re-?upload\s+requests)/i;
+// The success Information page lands on `…?reupload_request=<topicId>&p=<postId>`.
+// That URL param is a strong success signal independent of the page wording.
+const REQUEST_URL_RE = /[?&]reupload_request=\d+/i;
 
 /**
- * Reduce a page's body text to the boolean signals the classifier needs.
- * Pure — exported for unit testing. `alreadyRequested` wins over `success`
- * because some themes show both a generic thank-you and the cooldown notice.
+ * Reduce a page's body text (and optional landing URL) to the boolean signals
+ * the classifier needs. Pure — exported for unit testing. `alreadyRequested`
+ * wins over `success` because some themes show both a generic thank-you and the
+ * cooldown notice. A landing URL with `reupload_request=<id>` counts as success
+ * on its own (the Information page Mobilism redirects to after a real request).
  */
-function scanReuploadText(text) {
+function scanReuploadText(text, url = '') {
   const t = String(text || '');
   const alreadyRequested = ALREADY_RE.test(t);
-  return {
-    alreadyRequested,
-    success: !alreadyRequested && SUCCESS_RE.test(t),
-  };
+  const success = !alreadyRequested && (SUCCESS_RE.test(t) || REQUEST_URL_RE.test(String(url || '')));
+  return { alreadyRequested, success };
 }
 
 /**
@@ -90,7 +96,11 @@ async function findReuploadControl(page) {
       for (const elNode of candidates) {
         const txt = (elNode.textContent || elNode.value || '').trim();
         const href = elNode.getAttribute('href') || '';
-        if (wanted.test(txt) || /re-?up(load)?/i.test(href)) return elNode;
+        // The real control is `<a href="./viewtopic.php?reupload_request=…">Reupload</a>`
+        // — match that action href explicitly, then fall back to the broad text/href.
+        if (/reupload_request=/i.test(href) || wanted.test(txt) || /re-?up(load)?/i.test(href)) {
+          return elNode;
+        }
       }
       return null;
     })
@@ -131,17 +141,22 @@ async function runReupload(topicUrl) {
   // option simply isn't offered here.
   if (!control) {
     const bodyText = await page.evaluate(() => (document.body && document.body.innerText) || '').catch(() => '');
-    const signals = scanReuploadText(bodyText);
+    const signals = scanReuploadText(bodyText, page.url());
     return classifyReupload({ controlFound: false, ...signals });
   }
 
-  await control.click({ timeout: 10000 }).catch(() => {});
+  // Clicking the link navigates straight to the Information/confirmation page
+  // (".../viewtopic.php?reupload_request=<id>&p=<postId>"). Wait for that nav.
+  await Promise.all([
+    page.waitForLoadState('domcontentloaded').catch(() => {}),
+    control.click({ timeout: 10000 }).catch(() => {}),
+  ]);
   control.dispose().catch(() => {});
+  await page.waitForTimeout(1000);
 
-  // The action may navigate or post via JS; give it a beat, then handle a phpBB
-  // confirmation page ("Are you sure?") by submitting its Yes/confirm button.
-  await page.waitForLoadState('domcontentloaded').catch(() => {});
-  await page.waitForTimeout(1500);
+  // Some phpBB flows interpose an "Are you sure?" page — submit it if present.
+  // (On current Mobilism the click lands on the result directly, so this is a
+  // no-op there, but it keeps older/confirm-gated themes working.)
   const confirmBtn = await page.$('input[name="confirm"], button[name="confirm"], input[value="Yes" i]');
   if (confirmBtn) {
     await Promise.all([
@@ -152,10 +167,11 @@ async function runReupload(topicUrl) {
   }
 
   const bodyText = await page.evaluate(() => (document.body && document.body.innerText) || '').catch(() => '');
-  // Keep the raw page server-side so the selectors/patterns can be tuned against
-  // real Mobilism responses without leaking anything to the client.
-  console.error('[reupload] %s →\n%s', topicUrl, bodyText.slice(0, 800));
-  const signals = scanReuploadText(bodyText);
+  const landingUrl = page.url();
+  // Keep the raw page + URL server-side so the selectors/patterns can be tuned
+  // against real Mobilism responses without leaking anything to the client.
+  console.error('[reupload] %s → %s\n%s', topicUrl, landingUrl, bodyText.slice(0, 800));
+  const signals = scanReuploadText(bodyText, landingUrl);
   return classifyReupload({ controlFound: true, ...signals });
 }
 
