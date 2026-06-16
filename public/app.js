@@ -1067,8 +1067,10 @@ async function loadRecipients() {
   for (const r of recipientsCache) {
     const id = 'rc_' + r.id;
     const cb = el('input', { type: 'checkbox', id, value: r.id });
+    // Name only — the email/Kindle addresses are managed elsewhere and don't
+    // need to be shown here. The 📖 still flags that a Kindle push will happen.
     const tag = r.kindleEmail ? ' 📖' : '';
-    list.append(el('label', { className: 'recip-row', htmlFor: id }, [cb, ` ${r.name} (${r.email})${tag}`]));
+    list.append(el('label', { className: 'recip-row', htmlFor: id }, [cb, ` ${r.name}${tag}`]));
   }
   renderManageList();
 }
