@@ -51,11 +51,18 @@
 
     <section id="status" class="status" hidden></section>
 
-    <section id="results" class="results"></section>
+    <section id="results" class="results">
+      <div class="results-empty" id="resultsEmpty">
+        <div class="results-empty-icon">🔍</div>
+        <p class="results-empty-title">Find your next read</p>
+        <p class="hint">Search by title, author, or both. Paste an Amazon link to auto-fill,
+          or use Batch to look up a whole list at once.</p>
+      </div>
+    </section>
   </main>
 
   <!-- Library drawer -->
-  <aside id="libraryPanel" class="library-panel" hidden>
+  <aside id="libraryPanel" class="library-panel" role="dialog" aria-modal="true" aria-label="Library" hidden>
     <div class="library-head">
       <h2>📚 Library</h2>
       <button id="libraryClose" class="ghost-btn" type="button">✕</button>
@@ -69,7 +76,7 @@
   </aside>
 
   <!-- History drawer -->
-  <aside id="historyPanel" class="history-panel" hidden>
+  <aside id="historyPanel" class="history-panel" role="dialog" aria-modal="true" aria-label="Search history" hidden>
     <div class="history-head">
       <h2>Search History</h2>
       <button id="historyClose" class="ghost-btn" type="button">✕</button>
@@ -79,7 +86,7 @@
   <div id="overlay" class="overlay" hidden></div>
 
   <!-- Batch input modal -->
-  <div id="batchModal" class="modal" hidden>
+  <div id="batchModal" class="modal" role="dialog" aria-modal="true" aria-label="Batch search" hidden>
     <div class="modal-card batch-input-card">
       <h2>Batch search</h2>
       <p class="hint">One book per line — <code>Title — Author</code> (also <code>Title, Author</code> or just a title).</p>
@@ -105,7 +112,7 @@
   </div>
 
   <!-- Premium credentials modal -->
-  <div id="credModal" class="modal" hidden>
+  <div id="credModal" class="modal" role="dialog" aria-modal="true" aria-label="Premium downloader login" hidden>
     <div class="modal-card">
       <h2>Premium Downloader Login</h2>
       <p class="hint">Used only for this session — never stored on disk.</p>
@@ -127,7 +134,7 @@
   </div>
 
   <!-- Download progress modal -->
-  <div id="downloadModal" class="modal" hidden>
+  <div id="downloadModal" class="modal" role="dialog" aria-modal="true" aria-label="Download progress" hidden>
     <div class="modal-card dl-modal">
       <button id="dlClose" class="dl-close" type="button" aria-label="Close" hidden>✕</button>
       <h2 id="dlHeading">Downloading…</h2>
@@ -138,7 +145,7 @@
   </div>
 
   <!-- Send / notify modal -->
-  <div id="sendModal" class="modal" hidden>
+  <div id="sendModal" class="modal" role="dialog" aria-modal="true" aria-label="Send to readers" hidden>
     <div class="modal-card">
       <h2>Send to readers</h2>
       <p class="hint" id="sendBookLabel"></p>

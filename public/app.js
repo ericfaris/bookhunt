@@ -374,7 +374,7 @@ function debounce(fn, ms) {
 function renderCard(r) {
   const cover = r.cover
     ? el('img', { className: 'cover', src: r.cover, alt: 'cover', loading: 'lazy' })
-    : el('div', { className: 'cover placeholder' }, 'No cover');
+    : el('div', { className: 'cover placeholder', title: 'No cover available' }, '📖');
 
   const badges = el('div', { className: 'badges' }, [
     el('span', { className: 'badge' }, r.format || 'ePUB'),
@@ -1622,6 +1622,21 @@ function showStatusHTML(html) {
   statusEl.innerHTML = html;
 }
 function hideStatus() { statusEl.hidden = true; }
+
+// ---------------------------------------------------------------------------
+// Global keyboard: Escape dismisses the top-most open surface. The download
+// modal is only dismissible once its close button is shown (i.e. the download
+// has settled), matching the existing click-to-close affordance.
+// ---------------------------------------------------------------------------
+document.addEventListener('keydown', (e) => {
+  if (e.key !== 'Escape') return;
+  if (!sendModal.hidden) return closeSendModal();
+  if (!credModal.hidden) return closeCredModal();
+  if (!batchModal.hidden) { batchModal.hidden = true; return; }
+  if (!downloadModal.hidden && !$('#dlClose').hidden) return closeDownloadModal();
+  if (!libraryPanel.hidden) return closeLibrary();
+  if (!historyPanel.hidden) return closeHistory();
+});
 
 // Run the deep-link prefill last, so every module-level binding runSearch reads
 // (lastSearchParams, etc.) is already initialized — avoids a TDZ ReferenceError.
