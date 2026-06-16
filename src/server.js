@@ -539,22 +539,30 @@ app.post('/api/send', async (req, res) => {
 
   // Build the book info for the email, preferring what the client passed, then
   // the stored download entry. A resend from the Library/batch carries only a
-  // title, so cover/author/blurb are often missing here.
+  // title, so author/cover/blurb are often missing here — derive the author from
+  // the Mobilism "[Author]" filename so enrichment can disambiguate.
+  const author = (book && book.author) || entry.author || library.authorFromFilename(entry.filename) || '';
   const bookInfo = {
     title: (book && book.title) || entry.title || '',
-    author: (book && book.author) || entry.author || '',
+    author,
     cover: (book && book.cover) || entry.cover || null,
     description: (book && book.description) || '',
     filename: entry.filename,
   };
-  // Fill any missing cover/blurb from Google Books (Open Library for cover) so
-  // the notification email always has artwork + a synopsis, even when neither
-  // was stored at download time. Fails soft — a lookup miss just leaves it blank.
-  if (!bookInfo.cover || !bookInfo.description) {
+  // Fill any missing cover/blurb so the email always has artwork + a synopsis.
+  // CRUCIAL: only when we know the author — a title-only lookup can grab the
+  // wrong same-titled book (e.g. "Whistler"). With an author we use the SAME
+  // author-aware lookup the Library shows, so the email matches it; with no
+  // author we leave blanks rather than risk the wrong book. Fails soft.
+  if (bookInfo.author && (!bookInfo.cover || !bookInfo.description)) {
     try {
-      const meta = await covers.resolveMeta({ title: bookInfo.title, author: bookInfo.author });
-      if (!bookInfo.cover && meta.cover) bookInfo.cover = meta.cover;
-      if (!bookInfo.description && meta.description) bookInfo.description = meta.description;
+      if (!bookInfo.cover) {
+        bookInfo.cover = await covers.resolveCover({ title: bookInfo.title, author: bookInfo.author });
+      }
+      if (!bookInfo.description) {
+        const meta = await covers.resolveMeta({ title: bookInfo.title, author: bookInfo.author });
+        if (meta.description) bookInfo.description = meta.description;
+      }
     } catch { /* leave blanks — never block a send on metadata */ }
   }
   const results = [];

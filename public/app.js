@@ -1392,6 +1392,13 @@ librarySearch.addEventListener('input', debounce(applyLibraryFilter, 120));
 let allLibraryBooks = [];
 const coverCache = new Map(); // 'title|author' (lowercased) -> url | null
 
+// The cover the Library currently shows for a book (lazily resolved, same key
+// the row used), so a resend can hand the email the exact right artwork.
+function resolvedLibraryCover(book) {
+  const key = `${book.title || ''}|${book.author || ''}`.toLowerCase();
+  return coverCache.get(key) || null;
+}
+
 async function openLibrary() {
   libraryPanel.hidden = false;
   $('#overlay').hidden = false;
@@ -1650,7 +1657,14 @@ function renderLibraryBook(book) {
     resend.addEventListener('click', () =>
       openSendModal({
         downloadId: book.id,
-        book: { title: book.title, filename: book.filename },
+        // Pass the author + the exact artwork the Library is showing, so the
+        // email uses the right book's cover/blurb (not a title-only guess).
+        book: {
+          title: book.title,
+          author: book.author || '',
+          cover: book.cover || resolvedLibraryCover(book) || null,
+          filename: book.filename,
+        },
         onSent: openLibrary, // refresh inline history after a send
       })
     );
@@ -2115,7 +2129,7 @@ function addBatchSendButton(r, note) {
   send.addEventListener('click', () =>
     openSendModal({
       downloadId: r.downloadId,
-      book: { title: r.entry.title, filename: r.filename },
+      book: { title: r.entry.title, author: r.entry.author || '', filename: r.filename },
     })
   );
   // Place the Send button right after the note.

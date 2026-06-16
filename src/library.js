@@ -152,4 +152,4 @@ function matchSendToBook(notifyEntry, byKey) {
   return null;
 }
 
-module.exports = { buildLibrary, removeBook };
+module.exports = { buildLibrary, removeBook, authorFromFilename };
