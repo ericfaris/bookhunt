@@ -611,7 +611,7 @@ app.use((err, req, res, _next) => {
 // host-side port mapping (127.0.0.1:3000:3000), so HOST=0.0.0.0 is safe there.
 const HOST = process.env.HOST || '127.0.0.1';
 const server = app.listen(PORT, HOST, () => {
-  console.log(`Mobilism Ebook Finder running at http://localhost:${PORT}`);
+  console.log(`BookHunt running at http://localhost:${PORT}`);
   console.log(`Downloads will be saved to: ${downloader.DOWNLOAD_PATH}`);
   // Launch the browser at startup and park it on the forum so /warm always shows
   // a usable page (ready to clear Cloudflare) and status reflects reality — even

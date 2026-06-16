@@ -11,10 +11,12 @@ const smtp = require('../smtp');
 const id = 'email';
 const label = 'Email';
 
-// Brand palette (kept inline; email clients ignore :root/vars).
-const ACCENT = '#3b6ef0';
-const INK = '#1a1d21';
+// BookHunt brand palette (kept inline; email clients ignore :root/vars).
+const ACCENT = '#f1592a'; // hot orange — the magnifying glass
+const NAVY = '#1c2a56';   // deep navy — the book / header band
+const INK = '#1c2a56';
 const MUTED = '#6b727e';
+const PAPER = '#f6f1e7';  // warm cream
 
 function isConfigured() {
   return smtp.isConfigured();
@@ -40,7 +42,7 @@ function coverCell(hasCover) {
              box-shadow:0 6px 18px rgba(0,0,0,0.22)">`;
   }
   return `<div style="width:120px;height:180px;border-radius:10px;
-      background:linear-gradient(135deg,#5b8bff,#3b6ef0);
+      background:linear-gradient(135deg,${NAVY},#2a3a72);
       box-shadow:0 6px 18px rgba(0,0,0,0.22);text-align:center;line-height:180px;
       font-size:44px">📖</div>`;
 }
@@ -74,7 +76,7 @@ function buildMessage({ recipient, book }) {
 
   const blurb = book.description
     ? `<tr><td style="padding:20px 28px 4px">
-         <div style="background:#f4f6fb;border-left:3px solid ${ACCENT};border-radius:8px;
+         <div style="background:${PAPER};border-left:3px solid ${ACCENT};border-radius:8px;
                      padding:14px 16px;color:#3a3f47;font-size:14px;line-height:1.65">
            ${esc(book.description)}
          </div>
@@ -82,23 +84,36 @@ function buildMessage({ recipient, book }) {
     : '';
 
   const html = `
-  <div style="margin:0;padding:24px 12px;background:#eef0f4;
+  <div style="margin:0;padding:24px 12px;background:${PAPER};
               font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif">
     <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse">
       <tr><td align="center">
         <table role="presentation" width="540" cellpadding="0" cellspacing="0"
                style="width:540px;max-width:540px;background:#ffffff;border-radius:16px;
-                      overflow:hidden;box-shadow:0 4px 24px rgba(0,0,0,0.10)">
+                      overflow:hidden;box-shadow:0 4px 24px rgba(28,42,86,0.14)">
 
           <!-- Header band -->
-          <tr><td style="background:${ACCENT};padding:18px 28px">
-            <p style="margin:0;color:#ffffff;font-size:15px;font-weight:700;letter-spacing:0.3px">
-              📚 A new book just landed
+          <tr><td style="background:${NAVY};padding:16px 28px">
+            <table role="presentation" cellpadding="0" cellspacing="0"><tr>
+              <td style="font-size:20px;line-height:1;padding-right:9px">🔎</td>
+              <td>
+                <p style="margin:0;color:#ffffff;font-size:16px;font-weight:800;letter-spacing:0.2px">
+                  Book<span style="color:${ACCENT}">Hunt</span>
+                </p>
+                <p style="margin:0;color:#aeb6d6;font-size:11px;font-weight:600">find books. find threads.</p>
+              </td>
+            </tr></table>
+          </td></tr>
+
+          <!-- Sub-header -->
+          <tr><td style="padding:18px 28px 0">
+            <p style="margin:0;color:${ACCENT};font-size:13px;font-weight:700;letter-spacing:0.3px;text-transform:uppercase">
+              A new book just landed
             </p>
           </td></tr>
 
           <!-- Greeting -->
-          <tr><td style="padding:24px 28px 0">
+          <tr><td style="padding:12px 28px 0">
             <p style="margin:0 0 4px;font-size:15px;color:${MUTED}">${greeting}</p>
             <p style="margin:0;font-size:15px;color:${MUTED}">Eric just sent you something new to read:</p>
           </td></tr>
@@ -115,7 +130,7 @@ function buildMessage({ recipient, book }) {
                     ${esc(title)}
                   </p>
                   ${author ? `<p style="margin:0 0 12px;font-size:15px;color:${MUTED}">${esc(author)}</p>` : ''}
-                  <span style="display:inline-block;background:#e8f0ff;color:${ACCENT};
+                  <span style="display:inline-block;background:#fde8df;color:${ACCENT};
                                font-size:12px;font-weight:700;padding:5px 12px;border-radius:999px">
                     ✨ New arrival
                   </span>
@@ -133,8 +148,8 @@ function buildMessage({ recipient, book }) {
           </td></tr>
 
           <!-- Footer -->
-          <tr><td style="padding:16px 28px;background:#fafbfc;border-top:1px solid #eceef1">
-            <p style="margin:0;color:#9aa1ac;font-size:11px">Sent with ♥ by Eric via Mobilism Finder</p>
+          <tr><td style="padding:16px 28px;background:#faf7f0;border-top:1px solid #ece5d6">
+            <p style="margin:0;color:#9a93a1;font-size:11px">Sent with ♥ by Eric via BookHunt</p>
           </td></tr>
 
         </table>

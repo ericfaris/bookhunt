@@ -959,7 +959,8 @@ function renderDownloadError(ev) {
 
 // Lightweight dependency-free confetti burst.
 function celebrate() {
-  const colors = ['#ffd166', '#06d6a0', '#118ab2', '#ef476f', '#8338ec'];
+  // On-brand confetti: BookHunt orange + navy, warmed with gold and cream.
+  const colors = ['#f1592a', '#1c2a56', '#ffb347', '#f6f1e7', '#ff8157'];
   const card = downloadModal.querySelector('.modal-card');
   for (let i = 0; i < 80; i++) {
     const c = el('span', { className: 'confetti' });

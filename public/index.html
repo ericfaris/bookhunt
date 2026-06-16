@@ -3,12 +3,38 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Mobilism Ebook Finder</title>
+  <title>BookHunt — find books. find threads.</title>
+  <meta name="theme-color" content="#f6f1e7" media="(prefers-color-scheme: light)" />
+  <meta name="theme-color" content="#131a30" media="(prefers-color-scheme: dark)" />
+  <link rel="icon" type="image/svg+xml" href="favicon.svg" />
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
   <header class="topbar">
-    <h1><span class="brand-icon">📚</span> <span class="brand-full">Mobilism </span>Ebook Finder</h1>
+    <h1 class="brand">
+      <span class="brand-mark" aria-hidden="true">
+        <svg viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <g stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M9 41 L9 44.5 C16 41.5 26 41.5 32 46 C38 41.5 48 41.5 55 44.5 L55 41"/>
+            <path d="M32 21 C25 16 15 16 9 19 L9 41 C15 38 25 38 32 43 Z"/>
+            <path d="M32 21 C39 16 49 16 55 19 L55 41 C49 38 39 38 32 43 Z"/>
+            <path d="M40 25.5 L49 25"/>
+          </g>
+          <g stroke="currentColor" stroke-width="2" stroke-linecap="round">
+            <path d="M37 35.5 L44 35"/>
+            <path d="M38 39 L43 38.6"/>
+          </g>
+          <g stroke="#f1592a" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="41" cy="37" r="8.5"/>
+            <path d="M47.2 43.2 L53 49.5"/>
+          </g>
+        </svg>
+      </span>
+      <span class="brand-text">
+        <span class="brand-name">Book<span class="hunt">Hunt</span></span>
+        <span class="brand-tagline">find books. find threads.</span>
+      </span>
+    </h1>
     <div class="topbar-actions">
       <button id="libraryToggle" class="ghost-btn" type="button">Library</button>
       <button id="historyToggle" class="ghost-btn" type="button">History</button>
@@ -56,7 +82,20 @@
 
     <section id="results" class="results">
       <div class="results-empty" id="resultsEmpty">
-        <div class="results-empty-icon">🔍</div>
+        <div class="results-empty-icon" aria-hidden="true">
+          <svg viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <g stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M9 41 L9 44.5 C16 41.5 26 41.5 32 46 C38 41.5 48 41.5 55 44.5 L55 41"/>
+              <path d="M32 21 C25 16 15 16 9 19 L9 41 C15 38 25 38 32 43 Z"/>
+              <path d="M32 21 C39 16 49 16 55 19 L55 41 C49 38 39 38 32 43 Z"/>
+              <path d="M40 25.5 L49 25"/>
+            </g>
+            <g stroke="#f1592a" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="41" cy="37" r="8.5"/>
+              <path d="M47.2 43.2 L53 49.5"/>
+            </g>
+          </svg>
+        </div>
         <p class="results-empty-title">Find your next read</p>
         <p class="hint">Search by title, author, or both. Paste an Amazon link to auto-fill,
           or use Batch to look up a whole list at once.</p>
@@ -67,7 +106,7 @@
   <!-- Library drawer -->
   <aside id="libraryPanel" class="library-panel" role="dialog" aria-modal="true" aria-label="Library" hidden>
     <div class="library-head">
-      <h2>📚 Library</h2>
+      <h2>Library</h2>
       <button id="libraryClose" class="ghost-btn" type="button">✕</button>
     </div>
     <div class="library-search">
