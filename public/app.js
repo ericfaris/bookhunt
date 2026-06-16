@@ -591,6 +591,39 @@ function showResults(results) {
   refreshLibraryIndex().then(applyResultView).catch(() => {});
 }
 
+// A "Watch this search" button that saves the current query to the watchlist
+// (issue #7) and confirms inline. Shown on the results bar AND the not-found
+// state, so the user can ask to be emailed whether or not anything turned up
+// (e.g. to hear about a fresh re-upload of a book that's currently stale).
+function buildWatchSearchButton(labels = {}) {
+  const idle = labels.idle || '🔔 Watch this search';
+  const done = labels.done || '🔔 Watching — we’ll email you';
+  const title = ((lastSearchParams && lastSearchParams.title) || $('#title').value || '').trim();
+  const author = ((lastSearchParams && lastSearchParams.author) || $('#author').value || '').trim();
+  const sort = (lastSearchParams && lastSearchParams.sort) || $('#sort').value || 'newest';
+  const btn = el('button',
+    { className: 'ghost-btn watch-cta', type: 'button',
+      title: 'Get an email when a copy of this shows up on Mobilism' },
+    idle);
+  if (!title && !author) btn.disabled = true;
+  btn.addEventListener('click', async () => {
+    btn.disabled = true;
+    try {
+      const res = await fetch('/api/watchlist', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title, author, sort }),
+      });
+      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || 'Could not add watch');
+      btn.textContent = done;
+    } catch (err) {
+      btn.disabled = false;
+      btn.textContent = `⚠ ${err.message}`;
+    }
+  });
+  return btn;
+}
+
 function buildResultsBar() {
   const opt = (v, l) => el('option', { value: v }, l);
   const fmt = el('select', { className: 'rf-select', id: 'rfFormat' },
@@ -617,6 +650,8 @@ function buildResultsBar() {
       ctrl('Format', fmt),
       ctrl('Sort', sort),
       ctrl('Size (MB)', el('span', { className: 'rf-size-pair' }, [min, el('span', { className: 'rf-dash' }, '–'), max])),
+      // Offer to watch the same search even when results are showing.
+      el('div', { className: 'rf-field rf-watch' }, [buildWatchSearchButton()]),
     ]),
   ]);
 }
@@ -724,26 +759,12 @@ function renderNotFound(links, externalSources) {
   }
 
   // Watch this search (issue #7) — get pinged when it finally shows up.
-  const title = ($('#title').value || '').trim();
-  const author = ($('#author').value || '').trim();
-  if (title || author) {
-    const watchBtn = el('button', { className: 'ghost-btn watch-cta', type: 'button' }, '🔔 Watch for this book');
-    watchBtn.addEventListener('click', async () => {
-      watchBtn.disabled = true;
-      try {
-        const res = await fetch('/api/watchlist', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ title, author, sort: $('#sort').value }),
-        });
-        if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || 'Could not add watch');
-        watchBtn.textContent = '🔔 Watching — we’ll email you';
-      } catch (err) {
-        watchBtn.disabled = false;
-        watchBtn.textContent = `⚠ ${err.message}`;
-      }
-    });
-    statusEl.append(el('div', { className: 'links', style: 'margin-top:0.7rem' }, [watchBtn]));
+  if (($('#title').value || '').trim() || ($('#author').value || '').trim()) {
+    statusEl.append(
+      el('div', { className: 'links', style: 'margin-top:0.7rem' }, [
+        buildWatchSearchButton({ idle: '🔔 Watch for this book' }),
+      ])
+    );
   }
 }
 

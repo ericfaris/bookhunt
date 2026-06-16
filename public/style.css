@@ -396,6 +396,8 @@ a.reupreq-name { color: var(--accent); }
 .watch-actions .ghost-btn { font-size: 0.8rem; padding: 0.35rem 0.7rem; }
 .watch-del:hover { border-color: var(--danger); color: var(--danger); }
 .watch-cta { font-weight: 600; }
+.rf-watch { justify-content: flex-end; }
+.rf-watch .watch-cta { white-space: nowrap; }
 @media (max-width: 520px) {
   .watch-form { grid-template-columns: 1fr; }
 }
