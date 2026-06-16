@@ -5,6 +5,7 @@ const path = require('path');
 const { getSession, ensureReady, enqueue, randomDelay, fetchDetail, fuzzyMatch } = require('./searcher');
 const { readEpubMetadata, parseEpubBuffer } = require('./epub');
 const { sniffArchive, extractEpubs } = require('./archive');
+const { giveThanks } = require('./thanks');
 
 const DOWNLOAD_PATH = process.env.DOWNLOAD_PATH || 'C:\\temp';
 const PREMIUM_BASE =
@@ -389,6 +390,14 @@ async function runPremiumDownload(topicUrl, onProgress = () => {}, targetTitle) 
     (link) => attemptLink(page, link, meta, onProgress),
     onProgress
   );
+
+  // Etiquette: after a VERIFIED success, thank the poster on the same logged-in
+  // session (issue #25). Best-effort and non-blocking — never thank on a failed/
+  // unverified download, and never let a thanks failure affect the result.
+  if (downloads.some((d) => d.verified)) {
+    await giveThanks(page, topicUrl, onProgress).catch(() => {});
+  }
+
   return { downloads, errors, title: detail.title, description: detail.description || '' };
 }
 

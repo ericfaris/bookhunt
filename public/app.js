@@ -693,6 +693,7 @@ const DL_STEPS = [
   { id: 'fetch', label: 'Download from a mirror' },
   { id: 'extract', label: 'Unpack the archive (if any)' },
   { id: 'verify', label: "Open the ePUB & confirm it's the right book" },
+  { id: 'thank', label: 'Give thanks to the poster' },
 ];
 
 async function premiumDownload(result, btn) {
@@ -850,6 +851,20 @@ function handleDownloadEvent(ev, result) {
     case 'mirror-failed':
       stopFetchTimer();
       setStep('fetch', 'fail', `${ev.host || 'mirror'}: ${ev.error}`);
+      break;
+    // Giving Thanks (issue #25) — best-effort, never a hard failure.
+    case 'thanking':
+      setStep('thank', 'active', 'Clicking “Thank You”…');
+      break;
+    case 'thanked':
+      setStep('thank', 'done', ev.reason || 'Thanked the poster 🙏');
+      break;
+    case 'thanks-skipped':
+      setStep('thank', 'done', ev.reason || 'Already thanked');
+      break;
+    case 'thanks-failed':
+      // Non-blocking: show as a soft warning, not a download failure.
+      setStep('thank', 'warn', ev.reason || 'Couldn’t thank the poster');
       break;
     case 'done':
       stopFetchTimer();
