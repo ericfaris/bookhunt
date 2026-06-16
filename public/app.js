@@ -804,11 +804,15 @@ function handleDownloadEvent(ev, result) {
       setStep('read', 'done', `Found ${ev.total} mirror${ev.total === 1 ? '' : 's'}`);
       break;
     case 'mirror':
-      // A new mirror attempt begins — reset the per-mirror steps.
+      // A new mirror attempt begins — reset the per-mirror steps. Sign-in is the
+      // next thing that happens, so IT (not Download) becomes the active step;
+      // Download stays pending but carries the "Mirror X of Y" context. The
+      // 'downloading' event then flips Sign-in → done and Download → active, so
+      // the spinner never jumps ahead to step 3 before step 2 has run.
       stopFetchTimer();
       dlArchiveSeen = false;
-      setStep('login', 'pending', '');
-      setStep('fetch', 'active', `Mirror ${ev.index} of ${ev.total}${ev.host ? ' · ' + ev.host : ''}`);
+      setStep('login', 'active', '');
+      setStep('fetch', 'pending', `Mirror ${ev.index} of ${ev.total}${ev.host ? ' · ' + ev.host : ''}`);
       setStep('extract', 'pending', '');
       setStep('verify', 'pending', '');
       break;
