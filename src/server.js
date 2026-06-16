@@ -138,10 +138,16 @@ app.post('/api/search', async (req, res) => {
     Connection: 'keep-alive',
     'X-Accel-Buffering': 'no', // disable proxy buffering so events flush promptly
   });
-  const send = (event) => res.write(`data: ${JSON.stringify(event)}\n\n`);
+  const send = (event) => { if (!res.writableEnded) res.write(`data: ${JSON.stringify(event)}\n\n`); };
   // Comment-frame heartbeat (every 15s) keeps the connection alive across the
   // long gaps between page fetches so Cloudflare's 524 timeout never fires.
-  const heartbeat = setInterval(() => res.write(': ping\n\n'), 15000);
+  const heartbeat = setInterval(() => { if (!res.writableEnded) res.write(': ping\n\n'); }, 15000);
+
+  // Cancellation (issue #28): when the client aborts the fetch the request
+  // closes — flip the signal so the running scrape bails at its next checkpoint
+  // and frees the shared browser for the next action. Cooperative, not a kill.
+  const signal = searcher.createCancelSignal();
+  req.on('close', () => signal.cancel());
 
   try {
     // Fuzzy spell-correction BEFORE the scrape: a misspelled request yields bad
@@ -158,17 +164,22 @@ app.post('/api/search', async (req, res) => {
 
     const { results, fallbackLinks } = await searcher.search(
       { title, author, sort },
-      (ev) => send({ step: 'progress', ...ev })
+      (ev) => send({ step: 'progress', ...ev }),
+      signal
     );
     history.logSearch({ title, author, sort, resultCount: results.length });
     send({ step: 'done', results, fallbackLinks });
   } catch (err) {
-    console.error('Search failed:', err);
-    const info = messages.classifyError(err, { needWarm: !!err.needWarm });
-    send({ step: 'error', ...info });
+    // A cancellation isn't an error — the client already walked away, so there's
+    // nothing (and nowhere) to report.
+    if (!err || !err.cancelled) {
+      console.error('Search failed:', err);
+      const info = messages.classifyError(err, { needWarm: !!err.needWarm });
+      send({ step: 'error', ...info });
+    }
   } finally {
     clearInterval(heartbeat);
-    res.end();
+    if (!res.writableEnded) res.end();
   }
 });
 

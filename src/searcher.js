@@ -46,6 +46,54 @@ function enqueue(task) {
   return run;
 }
 
+// --- Cooperative cancellation (issue #28) ----------------------------------
+// A search is a long sequence of polite-delayed page.goto()s on the SHARED
+// browser page. We can't hard-abort a single navigation, so cancellation is
+// cooperative: the server flips the signal when the client disconnects, the
+// running scrape checks it at each row/page boundary (and aborts the polite
+// delay early), and any in-flight navigation is interrupted via window.stop().
+class CancelledError extends Error {
+  constructor() {
+    super('Search cancelled');
+    this.name = 'CancelledError';
+    this.cancelled = true;
+  }
+}
+
+// Throw if the signal has been cancelled. No-op when no signal is passed (so the
+// download/reupload paths that reuse these scrapers are unaffected).
+function throwIfCancelled(signal) {
+  if (signal && signal.cancelled) throw new CancelledError();
+}
+
+// Create a cancellation signal. `cancel()` fires every registered listener once
+// (used to clear the polite delay + stop the live navigation); `settle()` is
+// called when the work finishes so a late client-disconnect can't fire stop()
+// on a page another queued task has since taken over.
+function createCancelSignal() {
+  const listeners = [];
+  let settled = false;
+  return {
+    cancelled: false,
+    cancel() {
+      if (settled || this.cancelled) return;
+      this.cancelled = true;
+      for (const fn of listeners.splice(0)) {
+        try { fn(); } catch { /* best-effort */ }
+      }
+    },
+    settle() {
+      settled = true;
+      listeners.length = 0;
+    },
+    onCancel(fn) {
+      if (settled) return;
+      if (this.cancelled) { try { fn(); } catch { /* best-effort */ } return; }
+      listeners.push(fn);
+    },
+  };
+}
+
 const isLoggedIn = (page) =>
   page.evaluate(() => !!document.querySelector('a[href*="mode=logout"]'));
 
@@ -289,8 +337,17 @@ async function warmUp() {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-const randomDelay = () =>
-  new Promise((r) => setTimeout(r, 2000 + Math.floor(Math.random() * 3000))); // 2–5s
+// Polite 2–5s gap between requests. When a cancel `signal` is supplied, the gap
+// resolves early on cancel so the next throwIfCancelled() aborts promptly instead
+// of making the user wait out the delay. Callers without a signal (download /
+// reupload / thanks) keep the original behaviour.
+const randomDelay = (signal) =>
+  new Promise((resolve) => {
+    const t = setTimeout(resolve, 2000 + Math.floor(Math.random() * 3000));
+    if (signal && typeof signal.onCancel === 'function') {
+      signal.onCancel(() => { clearTimeout(t); resolve(); });
+    }
+  });
 
 /**
  * Pull a short description blurb out of a Mobilism post's raw text.
@@ -394,11 +451,13 @@ function hostLabel(url) {
 // ---------------------------------------------------------------------------
 
 /** Collect topic rows ({title, url}) across up to maxPages, following "next". */
-async function collectRows(page, startUrl, maxPages) {
+async function collectRows(page, startUrl, maxPages, signal) {
   const rows = [];
   let url = startUrl;
   for (let i = 0; i < maxPages && url; i++) {
-    await randomDelay();
+    throwIfCancelled(signal);
+    await randomDelay(signal);
+    throwIfCancelled(signal);
     await page.goto(url, { waitUntil: 'domcontentloaded' });
 
     const pageRows = await page.$$eval('td.expand a.topictitle', (els) =>
@@ -435,9 +494,13 @@ async function collectRows(page, startUrl, maxPages) {
   return rows;
 }
 
-/** Open a topic page and scrape its first div.content for detail fields. */
-async function fetchDetail(page, topicUrl) {
-  await randomDelay();
+/** Open a topic page and scrape its first div.content for detail fields.
+ *  `signal` (optional) makes the polite delay + navigation cancellable on the
+ *  search path; the download path calls this without one. */
+async function fetchDetail(page, topicUrl, signal) {
+  throwIfCancelled(signal);
+  await randomDelay(signal);
+  throwIfCancelled(signal);
   await page.goto(topicUrl, { waitUntil: 'domcontentloaded' });
 
   const raw = await page.evaluate(() => {
@@ -569,12 +632,22 @@ function publicResult(detail, source, row = {}) {
 // ---------------------------------------------------------------------------
 // Search orchestration
 // ---------------------------------------------------------------------------
-function search(params, onProgress) {
-  return enqueue(() => runSearch(params, onProgress));
+function search(params, onProgress, signal) {
+  return enqueue(async () => {
+    try {
+      return await runSearch(params, onProgress, signal);
+    } finally {
+      // Once the search settles, a late client-disconnect must not fire stop()
+      // on a page the next queued task has taken over.
+      if (signal) signal.settle();
+    }
+  });
 }
 
-async function runSearch({ title, author, sort = 'newest' }, onProgress) {
+async function runSearch({ title, author, sort = 'newest' }, onProgress, signal) {
   if (!title && !author) throw new Error('At least one of title or author is required');
+  // Cancelled while still queued? Don't even start.
+  throwIfCancelled(signal);
 
   // Optional progress sink. Drives the live spinner text; never throws into the
   // scrape if a malformed handler is passed.
@@ -584,6 +657,9 @@ async function runSearch({ title, author, sort = 'newest' }, onProgress) {
 
   const sd = sort === 'oldest' ? 'a' : 'd';
   const { page } = await getSession();
+  // Interrupt any in-flight navigation on cancel (the polite delays are handled
+  // by randomDelay(signal); this catches a slow page load mid-goto).
+  if (signal) signal.onCancel(() => { page.evaluate(() => window.stop()).catch(() => {}); });
   await ensureReady(page); // require a Mobilism login (throws needWarm if stale)
   const seen = new Set();
   const results = [];
@@ -597,10 +673,11 @@ async function runSearch({ title, author, sort = 'newest' }, onProgress) {
 
   // ---- Pass 1: title search ----
   emit({ phase: 'title-search' });
-  const rows = await collectRows(page, pass1Url, MAX_PAGES);
+  const rows = await collectRows(page, pass1Url, MAX_PAGES, signal);
   const collections = [];
 
   for (const row of rows) {
+    throwIfCancelled(signal);
     if (seen.has(row.url)) continue;
     if (title && !fuzzyMatch(title, row.title)) continue;
     if (isCollection(row.title)) {
@@ -610,7 +687,7 @@ async function runSearch({ title, author, sort = 'newest' }, onProgress) {
     if (results.length >= DETAIL_CAP) break;
     seen.add(row.url);
     emit({ phase: 'scanning', found: results.length });
-    const detail = await fetchDetail(page, row.url);
+    const detail = await fetchDetail(page, row.url, signal);
     if (!detail || detail.format !== 'ePUB') continue;
     if (
       author &&
@@ -626,9 +703,10 @@ async function runSearch({ title, author, sort = 'newest' }, onProgress) {
   // ---- Collection crawl (max 3) ----
   if (collections.length) emit({ phase: 'collections' });
   for (const col of collections.slice(0, MAX_COLLECTIONS)) {
+    throwIfCancelled(signal);
     if (seen.has(col.url)) continue;
     seen.add(col.url);
-    const detail = await fetchDetail(page, col.url);
+    const detail = await fetchDetail(page, col.url, signal);
     if (!detail) continue;
     const blob = detail.contentText.toLowerCase();
     if (!blob.includes('epub')) continue;
@@ -644,14 +722,15 @@ async function runSearch({ title, author, sort = 'newest' }, onProgress) {
   if (title && author) {
     emit({ phase: 'author-collections' });
     const byAuthorUrl = buildSearchUrl(`books by ${author}`, { sd, titleOnly: true });
-    const byAuthorRows = await collectRows(page, byAuthorUrl, COLLECTION_SEARCH_PAGES);
+    const byAuthorRows = await collectRows(page, byAuthorUrl, COLLECTION_SEARCH_PAGES, signal);
     let scanned = 0;
     for (const row of byAuthorRows) {
+      throwIfCancelled(signal);
       if (seen.has(row.url)) continue;
       if (scanned >= MAX_AUTHOR_COLLECTION_SCAN) break;
       seen.add(row.url);
       scanned++;
-      const detail = await fetchDetail(page, row.url);
+      const detail = await fetchDetail(page, row.url, signal);
       if (!detail) continue;
       // The set must list the requested title (on a single line) and offer ePUB.
       if (!detail.contentText.toLowerCase().includes('epub')) continue;
@@ -669,9 +748,10 @@ async function runSearch({ title, author, sort = 'newest' }, onProgress) {
     // blurb — comp-title marketing like "for fans of Colleen Hoover" — which is
     // exactly how unrelated books leaked into this pass.
     const fallbackUrl = buildSearchUrl(author, { sd, titleOnly: true });
-    const arows = await collectRows(page, fallbackUrl, MAX_PAGES);
+    const arows = await collectRows(page, fallbackUrl, MAX_PAGES, signal);
     let colCount = 0;
     for (const row of arows) {
+      throwIfCancelled(signal);
       if (seen.has(row.url)) continue;
       if (isCollection(row.title)) {
         if (colCount >= MAX_COLLECTIONS) continue;
@@ -680,7 +760,7 @@ async function runSearch({ title, author, sort = 'newest' }, onProgress) {
       if (results.length >= DETAIL_CAP) break;
       seen.add(row.url);
       emit({ phase: 'scanning', found: results.length });
-      const detail = await fetchDetail(page, row.url);
+      const detail = await fetchDetail(page, row.url, signal);
       if (!detail || detail.format !== 'ePUB') continue;
       // Require the post's ACTUAL author (parsed from "… by <author>" in the
       // title) to match. Without this, a body mention of the author was enough
@@ -723,9 +803,12 @@ module.exports = {
   enqueue,
   randomDelay,
   fetchDetail,
+  createCancelSignal,
+  CancelledError,
   // exported for unit tests
   normalize,
   fuzzyMatch,
   fuzzyMatchLine,
   isCollection,
+  throwIfCancelled,
 };

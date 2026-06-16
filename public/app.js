@@ -17,6 +17,11 @@ let pendingBatchDownload = null;
 // ---------------------------------------------------------------------------
 searchForm.addEventListener('submit', async (e) => {
   e.preventDefault();
+  // While a search is running the button is in "Cancel" mode — pressing Enter
+  // should never kick off a second search. The button's own click handler does
+  // the cancelling.
+  if (searchAbort) return;
+
   const title = $('#title').value.trim();
   const author = $('#author').value.trim();
   const sort = $('#sort').value;
@@ -27,6 +32,15 @@ searchForm.addEventListener('submit', async (e) => {
   }
 
   runSearch({ title, author, sort });
+});
+
+// When a search is in flight the Search button becomes a Cancel button: clicking
+// it aborts the fetch (which closes the stream → the server cancels the scrape).
+searchBtn.addEventListener('click', (e) => {
+  if (searchAbort) {
+    e.preventDefault(); // don't also submit the form
+    searchAbort.abort();
+  }
 });
 
 // ---------------------------------------------------------------------------
@@ -205,12 +219,18 @@ window.addEventListener('focus', refreshSessionStatus);
 
 // Remembered so the "Retry" affordance on a failed/stalled search can re-run it.
 let lastSearchParams = null;
+// AbortController for the in-flight search; non-null only while one is running
+// (also the flag the submit/click handlers use to switch to "Cancel" mode).
+let searchAbort = null;
 
 async function runSearch({ title, author, sort }) {
   lastSearchParams = { title, author, sort };
   resultsEl.innerHTML = '';
-  searchBtn.disabled = true;
-  searchBtn.textContent = 'Searching…';
+  searchAbort = new AbortController();
+  // Button flips to an enabled "Cancel" — keep it clickable so the user can stop.
+  searchBtn.disabled = false;
+  searchBtn.textContent = 'Cancel';
+  searchBtn.classList.add('cancel-btn');
   startSearchTimer();
 
   try {
@@ -218,6 +238,7 @@ async function runSearch({ title, author, sort }) {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ title, author, sort }),
+      signal: searchAbort.signal,
     });
 
     // A failure before the stream opens (e.g. the empty-query 400) still comes
@@ -281,11 +302,20 @@ async function runSearch({ title, author, sort }) {
       });
     }
   } catch (err) {
-    renderSearchError({ message: err.message || 'Search failed.', hint: 'Please try again.', retryable: true });
+    // The user cancelled — not an error. Aborting the fetch lands here.
+    if (err && err.name === 'AbortError') {
+      stopSearchTimer();
+      showStatus('Search cancelled.');
+      setTimeout(hideStatus, 2500);
+    } else {
+      renderSearchError({ message: err.message || 'Search failed.', hint: 'Please try again.', retryable: true });
+    }
   } finally {
     stopSearchTimer();
+    searchAbort = null;
     searchBtn.disabled = false;
     searchBtn.textContent = 'Search';
+    searchBtn.classList.remove('cancel-btn');
   }
 }
 

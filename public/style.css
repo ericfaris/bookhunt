@@ -179,6 +179,10 @@ input:focus, select:focus, textarea:focus { border-color: var(--accent); box-sha
 }
 .primary-btn:hover { background: var(--accent-hover); box-shadow: 0 4px 14px color-mix(in srgb, var(--accent) 45%, transparent); }
 .primary-btn:active { transform: translateY(1px); }
+
+/* Search button flips to a Cancel affordance while a search is in flight. */
+.primary-btn.cancel-btn { background: var(--danger); box-shadow: 0 2px 8px color-mix(in srgb, var(--danger) 35%, transparent); }
+.primary-btn.cancel-btn:hover { background: color-mix(in srgb, var(--danger) 88%, #000); box-shadow: 0 4px 14px color-mix(in srgb, var(--danger) 45%, transparent); }
 .primary-btn:disabled { opacity: 0.55; cursor: default; transform: none; }
 
 .ghost-btn {
