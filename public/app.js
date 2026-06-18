@@ -2050,10 +2050,80 @@ function renderLibraryBook(book) {
   ]);
 
   return el('div', { className: 'lib-book' }, [
-    el('div', { className: 'lib-top' }, [select, renderLibraryCover(book), main]),
+    el('div', { className: 'lib-top' }, [select, buildEditableCover(book), main]),
     sendsWrap,
     actions,
   ]);
+}
+
+// A library cover the user can fix when it's wrong. Shows the cover (lazy/stored)
+// with a small ✎ overlay that opens an inline editor: auto-refetch from the
+// catalog, or paste an image URL. Updates in place on success.
+function buildEditableCover(book) {
+  const mount = el('div', { className: 'lib-cover-mount' });
+  function paint(coverUrl) {
+    mount.innerHTML = '';
+    if (coverUrl) {
+      const img = el('img', { className: 'lib-cover zoomable', src: coverUrl, alt: '', loading: 'lazy', title: 'Click to enlarge' });
+      img.addEventListener('click', () => openLightbox(coverUrl, book.title || ''));
+      img.addEventListener('error', () => paint(null));
+      mount.append(img);
+    } else {
+      // null cover → reuse the existing lazy/placeholder loader (catalog lookup).
+      mount.append(renderLibraryCover({ ...book, cover: null }));
+    }
+  }
+  paint(book.cover || null);
+
+  const editBtn = el('button', { className: 'lib-cover-edit', type: 'button', title: 'Fix this cover' }, '✎');
+  const editor = el('div', { className: 'lib-cover-editor', hidden: true });
+  editBtn.addEventListener('click', () => {
+    if (!editor.children.length) {
+      buildCoverEditorBody(book, editor, (newUrl) => {
+        book.cover = newUrl;
+        coverCache.set(`${book.title || ''}|${book.author || ''}`.toLowerCase(), newUrl);
+        paint(newUrl);
+        editor.hidden = true;
+      });
+    }
+    editor.hidden = !editor.hidden;
+  });
+
+  return el('div', { className: 'lib-cover-wrap' }, [mount, editBtn, editor]);
+}
+
+function buildCoverEditorBody(book, container, onDone) {
+  const status = el('div', { className: 'lib-cover-status hint' }, '');
+  const put = async (body, btn) => {
+    const prev = btn.textContent;
+    btn.disabled = true; btn.textContent = 'Working…'; status.textContent = '';
+    try {
+      const res = await fetch(`/api/library/${book.id}/cover`, {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+      });
+      const d = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(d.error || 'Update failed');
+      onDone(d.cover);
+    } catch (e) {
+      status.textContent = `⚠ ${e.message}`;
+      btn.disabled = false; btn.textContent = prev;
+    }
+  };
+  const auto = el('button', { className: 'ghost-btn lib-cover-auto', type: 'button' }, '🔄 Auto-fetch a better cover');
+  auto.addEventListener('click', () => put({ refetch: true }, auto));
+  const input = el('input', { className: 'lib-cover-url', type: 'url', placeholder: 'or paste an image URL (https://…)' });
+  const save = el('button', { className: 'ghost-btn', type: 'button' }, 'Use URL');
+  save.addEventListener('click', () => {
+    const u = input.value.trim();
+    if (!u) { status.textContent = 'Paste an image URL first.'; return; }
+    put({ cover: u }, save);
+  });
+  input.addEventListener('keydown', (e) => { if (e.key === 'Enter') save.click(); });
+  container.append(
+    el('div', { className: 'lib-cover-editor-row' }, [auto]),
+    el('div', { className: 'lib-cover-editor-row' }, [input, save]),
+    status
+  );
 }
 
 function renderSend(s) {

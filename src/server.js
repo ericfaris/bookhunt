@@ -375,11 +375,22 @@ app.post('/api/download', async (req, res) => {
 
   try {
     const result = await downloader.premiumDownload(url, send, searchedTitle || title);
+    // The cover passed from the client is scraped from the forum post's first
+    // image, which is unreliable — for a multi-book set post it's a DIFFERENT
+    // book (the bug that put "The Dead Romantics" on "The Someday Garden"). Prefer
+    // a title+author-verified catalog cover (gated + disk-cached); fall back to
+    // the scraped one only when the catalog has nothing.
+    const bookTitle = searchedTitle || title || result.title;
+    let resolvedCover = cover || null;
+    try {
+      const catalogCover = await covers.resolveCover({ title: bookTitle, author });
+      if (catalogCover) resolvedCover = catalogCover;
+    } catch { /* keep the scraped cover */ }
     for (const d of result.downloads) {
       const stored = history.logDownload({
         title: searchedTitle || title || result.title,
         author: author || '',
-        cover: cover || null,
+        cover: resolvedCover,
         filename: d.filename,
         savePath: d.savePath,
         url: d.url,
@@ -572,6 +583,41 @@ app.put('/api/library/:id/tags', (req, res) => {
   if (!entry) return res.status(404).json({ error: 'Library book not found.' });
   const tags = booktags.setTags(entry.savePath, (req.body && req.body.tags) || []);
   res.json({ ok: true, tags });
+});
+
+// Update a library book's cover when it's wrong. Two modes:
+//   - { cover: "https://…" }  → set that exact image, OR
+//   - { refetch: true } / no cover → re-resolve from the catalog (FRESH, cache-
+//     bypassed, by title+author). The new cover is written to EVERY download
+//     entry for the same file so re-downloads stay consistent. Returns the cover.
+app.put('/api/library/:id/cover', async (req, res) => {
+  const entries = history.readAll();
+  const target = entries.find((e) => e.id === req.params.id && e.type === 'download' && e.savePath);
+  if (!target) return res.status(404).json({ error: 'Library book not found.' });
+
+  let cover = typeof (req.body && req.body.cover) === 'string' ? req.body.cover.trim() : '';
+  if (cover) {
+    if (!/^https:\/\//i.test(cover)) {
+      return res.status(400).json({ error: 'Cover must be an https image URL.' });
+    }
+    if (cover.length > 2000) return res.status(400).json({ error: 'That URL is too long.' });
+  } else {
+    // Re-fetch from the catalog, bypassing the cache so a previously-wrong cover
+    // can't be re-served. lookupCover hits the network directly.
+    try {
+      cover = (await covers.lookupCover({ title: target.title, author: target.author })) || '';
+    } catch { cover = ''; }
+    if (!cover) {
+      return res.status(422).json({ error: 'Couldn’t find a cover automatically — paste an image URL instead.' });
+    }
+  }
+
+  const keyPath = path.resolve(target.savePath);
+  for (const e of entries) {
+    if (e.type === 'download' && e.savePath && path.resolve(e.savePath) === keyPath) e.cover = cover;
+  }
+  history.writeAll(entries);
+  res.json({ ok: true, cover });
 });
 
 // --- Cover lookup: lazy per-book cover for Library rows lacking one ----------

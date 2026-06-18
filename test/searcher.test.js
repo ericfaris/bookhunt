@@ -80,6 +80,9 @@ test('collectionResult: flags the set and carries the searched book for the UI',
   assert.equal(r.setTitle, '7 Books by Sally Hepworth (.ePUB)'); // the set post title
   assert.equal(r.source, 'Found in collection');
   assert.equal(r.format, 'ePUB');
+  // The set's first-book image must NOT ride along as this book's cover — that's
+  // exactly what put the wrong artwork on a book and polluted the Library.
+  assert.equal(r.cover, null);
 });
 
 test('collectionResult: trims the searched terms (empty when title-less)', () => {

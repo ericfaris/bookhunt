@@ -689,6 +689,11 @@ function collectionResult(detail, row, matchedTitle, matchedAuthor) {
     setTitle: detail.title,
     matchedTitle: (matchedTitle || '').trim(),
     matchedAuthor: (matchedAuthor || '').trim(),
+    // The scraped post image is the SET's first book, not the searched one, so
+    // never carry it as this book's cover — it would otherwise be stored on
+    // download and pollute the Library. The UI resolves the real cover by
+    // title+author from the catalog instead.
+    cover: null,
   };
 }
 
