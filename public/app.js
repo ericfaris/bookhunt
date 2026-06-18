@@ -438,18 +438,57 @@ function debounce(fn, ms) {
 }
 
 // Build one result card node. (renderCard appends it — kept for compatibility.)
+//
+// When a book was found INSIDE a multi-book set (`r.collection`), the forum
+// post's title, cover and blurb all describe the whole SET, not the book the
+// user searched for — which is confusing (a card titled "7 Books by …" with some
+// other book's cover). For those, we foreground the searched book as the hero:
+// its own title, and its real cover + synopsis fetched from the book catalog
+// (/api/meta), with the set shown only as a "found inside this set" provenance
+// strip that still links to (and downloads) the set thread.
 function buildCard(r) {
-  const cover = r.cover
-    ? el('img', { className: 'cover zoomable', src: r.cover, alt: 'cover', loading: 'lazy', title: 'Click to enlarge' })
-    : el('div', { className: 'cover placeholder', title: 'No cover available' }, '📖');
-  if (r.cover) cover.addEventListener('click', () => openLightbox(r.cover, r.title));
+  const inSet = !!r.collection && !!(r.matchedTitle || r.matchedAuthor);
+  const heroTitle = inSet && r.matchedTitle ? r.matchedTitle : r.title;
+  const heroAuthor = inSet ? (r.matchedAuthor || r.author || '') : (r.author || '');
+  const setTitle = r.setTitle || r.title;
+
+  // --- Cover slot (mutable so a set card can swap in the real book's art) ---
+  const cover = el('div', { className: 'cover-slot' });
+  function renderCover(src, { loading = false } = {}) {
+    cover.innerHTML = '';
+    if (src) {
+      const img = el('img', { className: 'cover zoomable', src, alt: 'cover', loading: 'lazy', title: 'Click to enlarge' });
+      img.addEventListener('click', () => openLightbox(src, heroTitle));
+      cover.append(img);
+    } else {
+      const ph = el('div', { className: 'cover placeholder' + (loading ? ' loading' : ''), title: loading ? 'Looking up cover…' : 'No cover available' }, loading ? '' : '📖');
+      cover.append(ph);
+    }
+  }
+  // A set card ignores the post's (set) cover and looks up the real one below;
+  // a normal card uses the scraped cover immediately.
+  renderCover(inSet ? null : r.cover, { loading: inSet });
 
   const badges = el('div', { className: 'badges' }, [
     el('span', { className: 'badge' }, r.format || 'ePUB'),
-    el('span', { className: 'badge src' }, r.source),
+    inSet
+      ? el('span', { className: 'badge set', title: `Found inside the set “${setTitle}”` }, '📚 In a set')
+      : el('span', { className: 'badge src' }, r.source),
     r.premium ? el('span', { className: 'badge prem' }, 'Premium') : null,
     isInLibrary(r) ? el('span', { className: 'badge ok-badge', title: 'Already in your library' }, '✓ In library') : null,
   ]);
+
+  // Provenance strip: makes explicit that this book lives in a larger set and
+  // that the download/thread is that set. Links to the set thread.
+  const setNote = inSet
+    ? el('div', { className: 'set-note' }, [
+        el('span', { className: 'set-note-ico' }, '📚'),
+        el('span', { className: 'set-note-text' }, [
+          'Found inside a set — ',
+          el('a', { href: r.url, target: '_blank', rel: 'noopener', className: 'set-note-link' }, setTitle),
+        ]),
+      ])
+    : null;
 
   const metaBits = [];
   if (r.size) metaBits.push(el('span', {}, `📦 ${r.size}`));
@@ -459,7 +498,7 @@ function buildCard(r) {
 
   const dlRow = el('div', { className: 'dl-row' });
   if (r.premium) {
-    const btn = el('button', { className: 'dl-btn premium', type: 'button' }, 'Download (Premium)');
+    const btn = el('button', { className: 'dl-btn premium', type: 'button' }, inSet ? 'Download set (Premium)' : 'Download (Premium)');
     btn.addEventListener('click', () => premiumDownload(r, btn));
     dlRow.append(btn);
   } else if (r.postlinks && r.postlinks.length) {
@@ -474,21 +513,45 @@ function buildCard(r) {
   } else {
     dlRow.append(el('span', { className: 'hint' }, 'No download links found'));
   }
-  dlRow.append(el('a', { className: 'topic-link', href: r.url, target: '_blank', rel: 'noopener' }, 'View thread ↗'));
+  dlRow.append(el('a', { className: 'topic-link', href: r.url, target: '_blank', rel: 'noopener' }, inSet ? 'View set thread ↗' : 'View thread ↗'));
 
   // "Request re-upload" — always available (the user decides when links are
   // dead). Asks the OP to re-upload via the forum's Reupload control.
   const reupRow = buildReuploadRow(r);
 
+  // Synopsis slot (mutable so a set card can swap in the real book's blurb).
+  const synopsisSlot = el('div', { className: 'synopsis-slot' });
+  if (!inSet && r.description) synopsisSlot.append(buildSynopsis(r.description));
+
   const body = el('div', { className: 'card-body' }, [
-    el('h3', {}, r.title),
-    r.author ? el('p', { className: 'author' }, r.author) : null,
+    el('h3', {}, heroTitle),
+    heroAuthor ? el('p', { className: 'author' }, heroAuthor) : null,
     badges,
+    setNote,
     meta,
-    r.description ? buildSynopsis(r.description) : null,
+    synopsisSlot,
     dlRow,
     reupRow,
   ]);
+
+  // For a set result, fetch the searched book's own cover + blurb and swap them
+  // in once they arrive (fail-soft: keep the placeholder / set fallback).
+  if (inSet) {
+    const params = new URLSearchParams();
+    if (r.matchedTitle) params.set('title', r.matchedTitle);
+    if (heroAuthor) params.set('author', heroAuthor);
+    fetch(`/api/meta?${params.toString()}`)
+      .then((res) => res.json())
+      .then((meta) => {
+        renderCover(meta && meta.cover ? meta.cover : (r.cover || null));
+        const blurb = (meta && meta.description) || r.description;
+        if (blurb) { synopsisSlot.innerHTML = ''; synopsisSlot.append(buildSynopsis(blurb)); }
+      })
+      .catch(() => {
+        renderCover(r.cover || null); // network hiccup → fall back to the set cover
+        if (r.description) { synopsisSlot.innerHTML = ''; synopsisSlot.append(buildSynopsis(r.description)); }
+      });
+  }
 
   return el('div', { className: 'card' }, [cover, body]);
 }

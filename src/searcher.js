@@ -657,6 +657,23 @@ function publicResult(detail, source, row = {}) {
   };
 }
 
+/**
+ * A result for a book found INSIDE a multi-book set/collection post. The post's
+ * title (detail.title) names the SET and its cover is the set's first book — both
+ * misleading for the single book the user wanted. We flag it `collection` and
+ * carry the searched `matchedTitle`/`matchedAuthor` so the UI can foreground the
+ * actual book (its own cover + blurb) and show the set only as provenance.
+ */
+function collectionResult(detail, row, matchedTitle, matchedAuthor) {
+  return {
+    ...publicResult(detail, 'Found in collection', row),
+    collection: true,
+    setTitle: detail.title,
+    matchedTitle: (matchedTitle || '').trim(),
+    matchedAuthor: (matchedAuthor || '').trim(),
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Search orchestration
 // ---------------------------------------------------------------------------
@@ -742,7 +759,7 @@ async function runSearch({ title, author, sort = 'newest' }, onProgress, signal)
     const blob = detail.contentText.toLowerCase();
     if (!blob.includes('epub')) continue;
     if (title && !fuzzyMatchLine(title, detail.contentText)) continue;
-    results.push(publicResult(detail, 'Found in collection', col));
+    results.push(collectionResult(detail, col, title, author));
   }
 
   // ---- "Books by {author}" collection pass ----
@@ -767,7 +784,7 @@ async function runSearch({ title, author, sort = 'newest' }, onProgress, signal)
       // The set must list the requested title (on a single line) and offer ePUB.
       if (!detail.contentText.toLowerCase().includes('epub')) continue;
       if (!fuzzyMatchLine(title, detail.contentText)) continue;
-      results.push(publicResult(detail, 'Found in collection', row));
+      results.push(collectionResult(detail, row, title, author));
     }
   }
 
@@ -851,5 +868,6 @@ module.exports = {
   fuzzyMatchLine,
   isCollection,
   titleDeclaresNonEpub,
+  collectionResult,
   throwIfCancelled,
 };

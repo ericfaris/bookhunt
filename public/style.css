@@ -326,6 +326,31 @@ input:focus, select:focus, textarea:focus { border-color: var(--accent); box-sha
   color: var(--warn);
   border-color: color-mix(in srgb, #e0a049 35%, transparent);
 }
+/* "In a set" — the book was found inside a multi-book collection post. */
+.badge.set {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 32%, transparent);
+}
+
+/* Provenance strip on a set result: the searched book is the hero; this makes
+   clear it's bundled in a larger set and that the thread/download is that set. */
+.set-note {
+  display: flex;
+  gap: 0.5rem;
+  align-items: flex-start;
+  padding: 0.5rem 0.7rem;
+  margin: 0 0 0.6rem;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--accent) 7%, var(--surface-2));
+  border: 1px solid color-mix(in srgb, var(--accent) 22%, var(--border));
+  font-size: 0.82rem;
+  color: var(--text-dim);
+  line-height: 1.4;
+}
+.set-note-ico { flex: none; }
+.set-note-link { color: var(--accent); font-weight: 600; text-decoration: none; overflow-wrap: anywhere; }
+.set-note-link:hover { text-decoration: underline; }
 
 .dl-row { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; margin-top: 0.4rem; }
 .dl-row a.topic-link { font-size: 0.8rem; color: var(--accent); margin-left: auto; }
@@ -833,6 +858,23 @@ img.lib-cover { overflow: hidden; }
 }
 .synopsis-toggle:hover { text-decoration: underline; }
 .cover.zoomable { cursor: zoom-in; }
+
+/* Cover slot: wrapper that fills the card's cover column so a set result can
+   swap the placeholder for the matched book's real cover once it loads. */
+.card .cover-slot { aspect-ratio: 96 / 140; }
+.card .cover-slot .cover { width: 100%; height: 100%; }
+.card .cover.placeholder.loading {
+  position: relative; overflow: hidden; background: var(--surface-2);
+}
+.card .cover.placeholder.loading::after {
+  content: ''; position: absolute; inset: 0;
+  background: linear-gradient(110deg, transparent 30%, color-mix(in srgb, var(--accent) 16%, transparent) 50%, transparent 70%);
+  animation: cover-shimmer 1.1s linear infinite;
+}
+@keyframes cover-shimmer { from { transform: translateX(-100%); } to { transform: translateX(100%); } }
+@media (prefers-reduced-motion: reduce) {
+  .card .cover.placeholder.loading::after { animation: none; }
+}
 
 /* --- Cover lightbox (#11) ------------------------------------------------- */
 .lightbox {

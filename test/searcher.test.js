@@ -3,7 +3,7 @@
 const { test } = require('node:test');
 const assert = require('node:assert');
 
-const { normalize, fuzzyMatch, fuzzyMatchLine, isCollection, titleDeclaresNonEpub } = require('../src/searcher');
+const { normalize, fuzzyMatch, fuzzyMatchLine, isCollection, titleDeclaresNonEpub, collectionResult } = require('../src/searcher');
 
 test('normalize: lowercases, strips punctuation, collapses space', () => {
   assert.equal(normalize('1984: Illustrated!'), '1984 illustrated');
@@ -60,6 +60,33 @@ test('titleDeclaresNonEpub: skips audiobook/PDF-only titles without opening them
   assert.equal(titleDeclaresNonEpub('Some Audiobook (.MP3)'), true);
   assert.equal(titleDeclaresNonEpub('A Manual (.PDF)'), true);
   assert.equal(titleDeclaresNonEpub('Comic Issue 1 (.cbr)'), true);
+});
+
+test('collectionResult: flags the set and carries the searched book for the UI', () => {
+  const detail = {
+    title: '7 Books by Sally Hepworth (.ePUB)',
+    author: 'Sally Hepworth',
+    description: 'Set blurb…',
+    size: '3.7 MB',
+    url: 'https://forum.mobilism.org/viewtopic.php?t=1',
+    cover: 'https://example.com/set-first-cover.jpg',
+    premium: true,
+    postlinks: [],
+  };
+  const r = collectionResult(detail, { date: 'Oct 27th, 2020', category: 'eBooks' }, 'Mad Mabel', 'Sally Hepworth');
+  assert.equal(r.collection, true);
+  assert.equal(r.matchedTitle, 'Mad Mabel');     // the book the user actually wanted
+  assert.equal(r.matchedAuthor, 'Sally Hepworth');
+  assert.equal(r.setTitle, '7 Books by Sally Hepworth (.ePUB)'); // the set post title
+  assert.equal(r.source, 'Found in collection');
+  assert.equal(r.format, 'ePUB');
+});
+
+test('collectionResult: trims the searched terms (empty when title-less)', () => {
+  const detail = { title: 'A Set', author: '', description: '', url: 'u', cover: null, premium: false, postlinks: [] };
+  const r = collectionResult(detail, {}, '  ', '  Ann Patchett ');
+  assert.equal(r.matchedTitle, '');
+  assert.equal(r.matchedAuthor, 'Ann Patchett');
 });
 
 test('titleDeclaresNonEpub: keeps epub and mixed-format and unmarked titles', () => {

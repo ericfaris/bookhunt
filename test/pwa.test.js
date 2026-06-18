@@ -38,6 +38,14 @@ test('sw.js: caches the app shell and leaves API/warm to the network', () => {
   for (const asset of ['/index.html', '/style.css', '/app.js']) {
     assert.ok(sw.includes(asset), `shell includes ${asset}`);
   }
+  // Network-first: the fetch handler must hit the network BEFORE falling back to
+  // the cache, so a refresh always picks up a freshly deployed shell (the bug:
+  // cache-first served the stale app until a hard reload).
+  const fetchIdx = sw.indexOf('await fetch(req)');
+  const matchIdx = sw.indexOf('caches.match(req)');
+  assert.ok(fetchIdx >= 0, 'fetch handler goes to the network');
+  assert.ok(matchIdx >= 0, 'fetch handler can fall back to the cache');
+  assert.ok(fetchIdx < matchIdx, 'network is tried before the cache (network-first)');
 });
 
 test('index.html: links the manifest and registers nothing inline (CSP-safe)', () => {

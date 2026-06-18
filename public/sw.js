@@ -5,8 +5,16 @@
 // never caches API responses or the live-browser proxy (/warm) — those must
 // always hit the network so auth / Cloudflare Access and fresh data behave
 // exactly as without a SW.
+//
+// Strategy: NETWORK-FIRST for the shell. A cache-first shell (the old behaviour)
+// pinned index.html/app.js/style.css to whatever was first cached, so a normal
+// refresh kept serving the OLD app after a deploy — new UI (e.g. the watchlist
+// button) only appeared after a hard reload (CTRL+F5) that bypasses the SW. With
+// network-first, an online refresh always gets the freshly deployed assets and
+// the cache updates behind it; the cache is only used as an OFFLINE fallback.
+// Bump CACHE on changes that must evict the previous shell.
 
-const CACHE = 'bookhunt-shell-v1';
+const CACHE = 'bookhunt-shell-v2';
 const SHELL = [
   '/',
   '/index.html',
@@ -41,20 +49,20 @@ self.addEventListener('fetch', (event) => {
   // Never intercept API or the live-browser proxy — always go to the network.
   if (url.pathname.startsWith('/api') || url.pathname.startsWith('/warm')) return;
 
+  // Network-first: serve the freshest shell when online, update the cache, and
+  // fall back to the cache (or the cached index.html for navigations) offline.
   event.respondWith(
     (async () => {
-      const cached = await caches.match(req);
-      if (cached) return cached;
       try {
         const res = await fetch(req);
-        // Opportunistically cache same-origin static GETs that succeed.
         if (res && res.ok && res.type === 'basic') {
           const copy = res.clone();
           caches.open(CACHE).then((c) => c.put(req, copy)).catch(() => {});
         }
         return res;
       } catch (err) {
-        // Offline: fall back to the cached shell for navigations.
+        const cached = await caches.match(req);
+        if (cached) return cached;
         if (req.mode === 'navigate') {
           const shell = await caches.match('/index.html');
           if (shell) return shell;

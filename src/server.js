@@ -577,6 +577,23 @@ app.get('/api/cover', async (req, res) => {
   }
 });
 
+// --- Book metadata (cover + blurb) ------------------------------------------
+// Like /api/cover, but also returns the catalog blurb. Used by the result card
+// when a book was found inside a SET/collection: the forum post's title, cover
+// and blurb describe the whole set, so we look up the actual searched book's own
+// artwork + synopsis here (disk-cached via covers.resolveMeta). Fails soft.
+app.get('/api/meta', async (req, res) => {
+  const title = typeof req.query.title === 'string' ? req.query.title.slice(0, 300) : '';
+  const author = typeof req.query.author === 'string' ? req.query.author.slice(0, 300) : '';
+  if (!title.trim() && !author.trim()) return res.json({ cover: null, description: null });
+  try {
+    const meta = await covers.resolveMeta({ title, author });
+    res.json({ cover: meta.cover || null, description: meta.description || null });
+  } catch {
+    res.json({ cover: null, description: null });
+  }
+});
+
 // --- Notification recipients ------------------------------------------------
 app.get('/api/recipients', (_req, res) => {
   res.json({ recipients: recipients.readAll() });
