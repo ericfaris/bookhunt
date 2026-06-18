@@ -10,6 +10,14 @@
 // pass a stub).
 
 const path = require('path');
+const { matchScore } = require('./correct');
+const { authorMatches } = require('./covers');
+
+// A library book's title must match the query at least this well (the same
+// variant-aware scorer the spell-corrector + cover lookup use) before we'll claim
+// "you already have this". Gating on title (and corroborating author) keeps a
+// search for "The Whistler" from matching a stored "Whistler" by a different author.
+const LIBRARY_TITLE_THRESHOLD = 0.7;
 
 /**
  * @param {Array} entries  history.readAll() — newest-first.
@@ -152,4 +160,32 @@ function matchSendToBook(notifyEntry, byKey) {
   return null;
 }
 
-module.exports = { buildLibrary, removeBook, authorFromFilename };
+/**
+ * PURE: find the library books that match a { title, author } query, best first.
+ * Used by the search route to surface "you already own this" BEFORE the Mobilism
+ * scrape. Title is gated on the variant-aware match score; author (when given)
+ * must corroborate. An author-only query returns that author's books. Returns []
+ * when nothing matches or the query is empty.
+ *
+ * `opts.matchScore` / `opts.authorMatches` are injectable for offline tests.
+ */
+function findInLibrary(books, { title, author } = {}, opts = {}) {
+  const list = Array.isArray(books) ? books : [];
+  const t = String(title || '').trim();
+  const a = String(author || '').trim();
+  if (!t && !a) return [];
+  const score = opts.matchScore || matchScore;
+  const authorOk = opts.authorMatches || authorMatches;
+
+  const scored = [];
+  for (const b of list) {
+    const tScore = t ? score(t, b.title || '') : 1;
+    if (t && tScore < LIBRARY_TITLE_THRESHOLD) continue;
+    if (a && !authorOk(a, [b.author || ''])) continue;
+    scored.push({ book: b, score: tScore });
+  }
+  scored.sort((x, y) => y.score - x.score);
+  return scored.map((s) => s.book);
+}
+
+module.exports = { buildLibrary, removeBook, authorFromFilename, findInLibrary, LIBRARY_TITLE_THRESHOLD };

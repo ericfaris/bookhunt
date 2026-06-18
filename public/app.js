@@ -284,6 +284,8 @@ async function runSearch({ title, author, sort }) {
           showSearchProgress(ev);
         } else if (ev.step === 'corrected') {
           applyCorrection(ev);
+        } else if (ev.step === 'library') {
+          renderLibraryHits(ev.books);
         } else if (ev.step === 'error') {
           finished = true;
           renderSearchError(ev);
@@ -558,6 +560,120 @@ function buildCard(r) {
 
 function renderCard(r) {
   (document.getElementById('resultsList') || resultsEl).append(buildCard(r));
+}
+
+// --- Library-first stage ----------------------------------------------------
+// Every search checks your Library first (server emits a 'library' SSE step
+// before the Mobilism scrape). When you already own the book, surface it ABOVE
+// the live results so you can see — at a glance — that you have it and who it's
+// been sent to. Cover + blurb come from the book catalog (/api/meta) when the
+// stored record lacks them.
+function renderLibraryHits(books) {
+  if (!Array.isArray(books) || !books.length) return;
+  resultsEl.querySelector('.library-hit')?.remove(); // replace any prior section
+  const head = books.length === 1
+    ? 'Already in your library'
+    : `${books.length} already in your library`;
+  const section = el('div', { className: 'library-hit' }, [
+    el('div', { className: 'library-hit-head' }, [el('span', {}, '📚'), el('span', {}, head)]),
+  ]);
+  for (const b of books) section.append(buildLibraryHitCard(b));
+  resultsEl.insertBefore(section, resultsEl.firstChild);
+}
+
+function buildLibraryHitCard(book) {
+  // Mutable cover slot — a catalog lookup fills it in when the record has none.
+  const cover = el('div', { className: 'cover-slot' });
+  function renderCover(src, { loading = false } = {}) {
+    cover.innerHTML = '';
+    if (src) {
+      const img = el('img', { className: 'cover zoomable', src, alt: 'cover', loading: 'lazy', title: 'Click to enlarge' });
+      img.addEventListener('click', () => openLightbox(src, book.title));
+      cover.append(img);
+    } else {
+      cover.append(el('div', { className: 'cover placeholder' + (loading ? ' loading' : ''), title: loading ? 'Looking up cover…' : 'No cover available' }, loading ? '' : '📖'));
+    }
+  }
+  renderCover(book.cover || null, { loading: !book.cover });
+
+  const badges = el('div', { className: 'badges' }, [
+    el('span', { className: 'badge own' }, '📚 In your library'),
+    el('span', { className: 'badge' }, book.mode === 'standard' ? 'External' : 'Premium'),
+    book.verified ? el('span', { className: 'badge ok-badge' }, 'Verified ✓') : null,
+  ]);
+
+  const metaBits = [];
+  if (book.size) metaBits.push(el('span', {}, `📦 ${formatBytes(book.size)}`));
+  if (book.acquiredAt) metaBits.push(el('span', {}, `📅 ${formatDate(book.acquiredAt)}`));
+  const meta = el('div', { className: 'meta' }, metaBits);
+
+  // Send history — the "who's it gone to?" quick review the user wants.
+  const sendsWrap = el('div', { className: 'lib-sends' });
+  function renderSends() {
+    sendsWrap.innerHTML = '';
+    if (!book.sends || !book.sends.length) {
+      sendsWrap.append(el('div', { className: 'lib-notsent' }, 'Not sent to anyone yet'));
+      return;
+    }
+    const who = [...new Set(book.sends.flatMap((s) => s.to || []))].filter(Boolean).join(', ');
+    sendsWrap.append(el('div', { className: 'lib-sends-head' }, who ? `Sent to ${who}` : `Sent ${book.sends.length}×`));
+    for (const s of book.sends) sendsWrap.append(renderSend(s));
+  }
+  renderSends();
+
+  const synopsisSlot = el('div', { className: 'synopsis-slot' });
+
+  const actions = el('div', { className: 'dl-row' });
+  if (book.filePresent) {
+    const btn = el('button', { className: 'dl-btn premium', type: 'button' },
+      book.sends && book.sends.length ? '📧 Resend' : '📧 Send to readers');
+    btn.addEventListener('click', () => openSendModal({
+      downloadId: book.id,
+      book: { title: book.title, author: book.author || '', cover: book.cover || null, filename: book.filename },
+      onSent: () => refreshHitSends(book, renderSends),
+    }));
+    actions.append(btn);
+  } else {
+    actions.append(el('span', { className: 'hint' }, '⚠ File removed from disk.'));
+  }
+  if (book.url) actions.append(el('a', { className: 'topic-link', href: book.url, target: '_blank', rel: 'noopener' }, 'View thread ↗'));
+
+  const body = el('div', { className: 'card-body' }, [
+    el('h3', {}, book.title || book.filename || 'Untitled'),
+    book.author ? el('p', { className: 'author' }, book.author) : null,
+    badges,
+    meta,
+    sendsWrap,
+    synopsisSlot,
+    actions,
+  ]);
+
+  // Catalog lookup: fill the cover (if missing) and always try for a blurb.
+  const params = new URLSearchParams();
+  if (book.title) params.set('title', book.title);
+  if (book.author) params.set('author', book.author);
+  if (params.toString()) {
+    fetch(`/api/meta?${params.toString()}`)
+      .then((r) => r.json())
+      .then((meta) => {
+        if (!book.cover) renderCover((meta && meta.cover) || null);
+        if (meta && meta.description) { synopsisSlot.innerHTML = ''; synopsisSlot.append(buildSynopsis(meta.description)); }
+      })
+      .catch(() => { if (!book.cover) renderCover(null); });
+  } else if (!book.cover) {
+    renderCover(null);
+  }
+
+  return el('div', { className: 'card library-card' }, [cover, body]);
+}
+
+// After a send from a library-hit card, refresh just that book's send history.
+async function refreshHitSends(book, renderSends) {
+  try {
+    const data = await fetch('/api/library').then((r) => r.json());
+    const fresh = (data.books || []).find((b) => b.id === book.id);
+    if (fresh) { book.sends = fresh.sends || []; renderSends(); }
+  } catch { /* best effort — leave the existing list */ }
 }
 
 // Collapsible synopsis: clamp to a few lines with a more/less toggle when the
@@ -2283,8 +2399,35 @@ function renderWatchlist(watches) {
     });
     actions.append(del);
 
-    body.append(el('div', { className: 'watch-row' }, [head, meta, recipLine, editor, actions]));
+    const main = el('div', { className: 'watch-row-main' }, [head, meta, recipLine, editor, actions]);
+    body.append(el('div', { className: 'watch-row' }, [buildWatchCover(w), main]));
   }
+}
+
+// Lazy book cover for a watchlist row. Looked up by { title, author } via
+// /api/cover (disk-cached server-side). Falls back to a glyph when there's no
+// confident cover or the watch has no title/author to look up.
+function buildWatchCover(w) {
+  const slot = el('div', { className: 'watch-cover' });
+  if (!w.title && !w.author) {
+    slot.append(el('div', { className: 'watch-cover-ph' }, '🔔'));
+    return slot;
+  }
+  slot.append(el('div', { className: 'watch-cover-ph' }, '📖'));
+  const params = new URLSearchParams();
+  if (w.title) params.set('title', w.title);
+  if (w.author) params.set('author', w.author);
+  fetch(`/api/cover?${params.toString()}`)
+    .then((r) => r.json())
+    .then((d) => {
+      if (!d || !d.cover) return;
+      slot.innerHTML = '';
+      const img = el('img', { className: 'watch-cover-img zoomable', src: d.cover, alt: 'cover', loading: 'lazy', title: 'Click to enlarge' });
+      img.addEventListener('click', () => openLightbox(d.cover, w.title || ''));
+      slot.append(img);
+    })
+    .catch(() => { /* keep the glyph */ });
+  return slot;
 }
 
 function renderHistoryItem(entry) {

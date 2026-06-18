@@ -326,6 +326,23 @@ input:focus, select:focus, textarea:focus { border-color: var(--accent); box-sha
   color: var(--warn);
   border-color: color-mix(in srgb, #e0a049 35%, transparent);
 }
+/* Library-first hit: surfaced above the live results when you already own it. */
+.library-hit { margin-bottom: 1.1rem; }
+.library-hit-head {
+  display: flex; gap: 0.45rem; align-items: center;
+  font-weight: 700; font-size: 0.92rem; color: var(--text);
+  margin: 0 0 0.55rem;
+}
+.card.library-card {
+  border-color: color-mix(in srgb, var(--good) 38%, var(--border));
+  background: color-mix(in srgb, var(--good) 6%, var(--surface));
+}
+.badge.own {
+  background: color-mix(in srgb, var(--good) 16%, transparent);
+  color: var(--good);
+  border-color: color-mix(in srgb, var(--good) 34%, transparent);
+}
+
 /* "In a set" — the book was found inside a multi-book collection post. */
 .badge.set {
   background: color-mix(in srgb, var(--accent) 14%, transparent);
@@ -412,7 +429,11 @@ a.reupreq-name { color: var(--accent); }
 .watch-form input { min-width: 0; }
 .watch-form .primary-btn { white-space: nowrap; }
 .watchlist-body { display: flex; flex-direction: column; gap: 0.6rem; max-height: 56vh; overflow-y: auto; }
-.watch-row { border: 1px solid var(--border); border-radius: 12px; padding: 0.8rem 0.9rem; background: var(--surface); }
+.watch-row { border: 1px solid var(--border); border-radius: 12px; padding: 0.8rem 0.9rem; background: var(--surface); display: grid; grid-template-columns: 52px 1fr; gap: 0.85rem; align-items: start; }
+.watch-row-main { min-width: 0; }
+.watch-cover { width: 52px; height: 76px; }
+.watch-cover-img { width: 52px; height: 76px; object-fit: cover; border-radius: 6px; box-shadow: 0 1px 4px rgba(0,0,0,0.18); cursor: zoom-in; }
+.watch-cover-ph { width: 52px; height: 76px; display: flex; align-items: center; justify-content: center; font-size: 1.4rem; color: var(--text-dim); background: var(--surface-2); border-radius: 6px; }
 .watch-head { display: flex; align-items: center; justify-content: space-between; gap: 0.6rem; }
 .watch-q { font-weight: 600; overflow-wrap: anywhere; }
 .watch-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem 0.8rem; margin: 0.45rem 0; font-size: 0.84rem; }

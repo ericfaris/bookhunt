@@ -3,7 +3,7 @@
 const { test } = require('node:test');
 const assert = require('node:assert');
 
-const { buildLibrary, removeBook } = require('../src/library');
+const { buildLibrary, removeBook, findInLibrary } = require('../src/library');
 
 // Helper: history entries are newest-first in real life, so list them that way.
 const dl = (over) => ({ type: 'download', mode: 'premium', verified: true, ...over });
@@ -192,4 +192,39 @@ test('removeBook: preserves unrelated search/reupload entries', () => {
   const out = removeBook(entries, 'd1');
   assert.equal(out.entries.length, 2);
   assert.deepEqual(out.entries.map((e) => e.type), ['search', 'reupload']);
+});
+
+// --- findInLibrary (library-first search stage) -----------------------------
+
+const lib = [
+  { id: 'b1', title: 'Mad Mabel', author: 'Sally Hepworth' },
+  { id: 'b2', title: 'The Whistler', author: 'John Grisham' },
+  { id: 'b3', title: 'Bel Canto', author: 'Ann Patchett' },
+];
+
+test('findInLibrary: matches a stored book by title + author', () => {
+  const hits = findInLibrary(lib, { title: 'Mad Mabel', author: 'Sally Hepworth' });
+  assert.equal(hits.length, 1);
+  assert.equal(hits[0].id, 'b1');
+});
+
+test('findInLibrary: tolerates a small typo in the title', () => {
+  const hits = findInLibrary(lib, { title: 'Mad Mable', author: 'Sally Hepworth' });
+  assert.equal(hits[0] && hits[0].id, 'b1');
+});
+
+test('findInLibrary: author mismatch rejects a same-ish title (Whistler vs The Whistler)', () => {
+  // A different author must not match even when the title is close.
+  const hits = findInLibrary(lib, { title: 'The Whistler', author: 'Ann Patchett' });
+  assert.equal(hits.length, 0);
+});
+
+test('findInLibrary: author-only query returns that author\'s books', () => {
+  const hits = findInLibrary(lib, { author: 'Ann Patchett' });
+  assert.deepEqual(hits.map((b) => b.id), ['b3']);
+});
+
+test('findInLibrary: empty query and unknown book return []', () => {
+  assert.deepEqual(findInLibrary(lib, {}), []);
+  assert.deepEqual(findInLibrary(lib, { title: 'Some Book We Do Not Own' }), []);
 });

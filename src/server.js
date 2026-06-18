@@ -176,6 +176,20 @@ app.post('/api/search', async (req, res) => {
       send({ step: 'corrected', original: fix.original, title, author, source: fix.source });
     }
 
+    // Stage 1 — check the local Library first. If we already own this book,
+    // surface it immediately (with its send history) so the user sees they have
+    // it — and to whom it's gone — before the slower Mobilism scrape even starts.
+    // Local + instant; runs even if the Mobilism session is stale. Fail-soft.
+    try {
+      const libBooks = library.buildLibrary(history.readAll(), (p) => {
+        try { return fs.existsSync(path.resolve(p)); } catch { return false; }
+      });
+      const hits = library.findInLibrary(libBooks, { title, author }).slice(0, 3);
+      if (hits.length) send({ step: 'library', books: hits });
+    } catch (err) {
+      console.error('Library pre-search failed:', err.message);
+    }
+
     const { results, fallbackLinks } = await searcher.search(
       { title, author, sort },
       (ev) => send({ step: 'progress', ...ev }),
