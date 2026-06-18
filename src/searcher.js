@@ -415,16 +415,34 @@ function isCollection(title) {
 // sniff fetchDetail() does on the topic page.
 const TITLE_FORMAT_RE = /[.(/](epub|pdf|mobi|azw3?|cbr|cbz|djvu|m4b|m4a|mp3|aac|flac|ogg)\b/gi;
 
+// Audiobook posts are frequently tagged in the title WITHOUT a file-extension
+// marker — "(Audiobook)", "[Unabridged]", "Audible", or a bare "AB" tag like
+// "[AB]" / "(AB)" / "… - AB". Spelled-out words are matched case-insensitively;
+// the bare "AB" tag is matched CASE-SENSITIVELY and only when bracketed or set
+// off by a dash/pipe separator (the real tag forms), so an ordinary title with a
+// space-delimited "AB" ("The AB Guide", "Crab Cakes") is never mistaken for one.
+const AUDIOBOOK_WORD_RE = /\b(?:audio\s?books?|unabridged|audible)\b/i;
+const AUDIOBOOK_AB_TAG_RE = /[[({]\s*AB\s*[\])}]|[-–—|]\s*AB\b/;
+
+/** True when the title marks the post as an audiobook (tag or spelled out). */
+function titleLooksLikeAudiobook(title) {
+  const t = title || '';
+  return AUDIOBOOK_WORD_RE.test(t) || AUDIOBOOK_AB_TAG_RE.test(t);
+}
+
 /**
- * True only when the title declares a NON-epub format and does NOT also declare
- * epub. Used to skip audiobook/PDF/etc. topics WITHOUT opening them — the big
- * win for "books by"/author searches, which otherwise navigate to every MP3/M4B
- * topic page just to read and discard its format. Titles that declare epub (even
- * alongside other formats) or declare no format at all are kept; the latter stay
- * lenient and are resolved by fetchDetail() as before.
+ * True when a title says the post is NOT an ePUB ebook — so we can skip it
+ * WITHOUT opening it. The big win for "books by"/author searches, which would
+ * otherwise navigate to every MP3/M4B/audiobook topic page just to read and
+ * discard its format. Two signals:
+ *   1. A declared NON-epub file format (.M4B/.MP3/.PDF/…) and NOT also epub.
+ *   2. An audiobook tag in the title (Audiobook/Unabridged/Audible/[AB]).
+ * Titles that declare epub (even alongside other formats) or declare nothing at
+ * all are kept lenient and resolved by fetchDetail() as before.
  */
 function titleDeclaresNonEpub(title) {
   const t = title || '';
+  if (titleLooksLikeAudiobook(t)) return true; // audiobook tag → always skip
   let m;
   let sawEpub = false;
   let sawOther = false;
@@ -868,6 +886,7 @@ module.exports = {
   fuzzyMatchLine,
   isCollection,
   titleDeclaresNonEpub,
+  titleLooksLikeAudiobook,
   collectionResult,
   throwIfCancelled,
 };

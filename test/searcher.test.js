@@ -3,7 +3,7 @@
 const { test } = require('node:test');
 const assert = require('node:assert');
 
-const { normalize, fuzzyMatch, fuzzyMatchLine, isCollection, titleDeclaresNonEpub, collectionResult } = require('../src/searcher');
+const { normalize, fuzzyMatch, fuzzyMatchLine, isCollection, titleDeclaresNonEpub, titleLooksLikeAudiobook, collectionResult } = require('../src/searcher');
 
 test('normalize: lowercases, strips punctuation, collapses space', () => {
   assert.equal(normalize('1984: Illustrated!'), '1984 illustrated');
@@ -97,4 +97,25 @@ test('titleDeclaresNonEpub: keeps epub and mixed-format and unmarked titles', ()
   assert.equal(titleDeclaresNonEpub('The Hobbit by J.R.R. Tolkien'), false);
   // "mobi" inside an ordinary word must NOT count as a format marker.
   assert.equal(titleDeclaresNonEpub('Mobile Suit Gundam'), false);
+});
+
+test('titleLooksLikeAudiobook: catches AB tags and spelled-out audiobook markers', () => {
+  assert.equal(titleLooksLikeAudiobook('Project Hail Mary by Andy Weir [AB]'), true);
+  assert.equal(titleLooksLikeAudiobook('Project Hail Mary (AB)'), true);
+  assert.equal(titleLooksLikeAudiobook('Project Hail Mary by Andy Weir - AB'), true);
+  assert.equal(titleLooksLikeAudiobook('The Martian (Audiobook)'), true);
+  assert.equal(titleLooksLikeAudiobook('The Martian [Unabridged]'), true);
+  assert.equal(titleLooksLikeAudiobook('Some Title (Audible)'), true);
+});
+
+test('titleLooksLikeAudiobook: does NOT flag ordinary titles containing "ab"', () => {
+  assert.equal(titleLooksLikeAudiobook('The AB Guide to Testing'), false); // "AB" mid-sentence, no tag
+  assert.equal(titleLooksLikeAudiobook('Crab Cakes by Chef Ramsay'), false);
+  assert.equal(titleLooksLikeAudiobook('About a Boy by Nick Hornby'), false);
+  assert.equal(titleLooksLikeAudiobook('It Ends with Us (.ePUB)'), false);
+});
+
+test('titleDeclaresNonEpub: also skips audiobook-tagged titles with no extension', () => {
+  assert.equal(titleDeclaresNonEpub('Project Hail Mary by Andy Weir [AB]'), true);
+  assert.equal(titleDeclaresNonEpub('The Martian (Audiobook)'), true);
 });
