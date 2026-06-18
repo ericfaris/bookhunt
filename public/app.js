@@ -2264,6 +2264,9 @@ function renderHistoryItem(entry) {
 const batchModal = $('#batchModal');
 const batchInput = $('#batchInput');
 const batchRows = new Map(); // index → { entry, status, match, candidates, downloadId, filename, els }
+// AbortController for the in-flight batch search; non-null only while one runs.
+// Aborting it closes the SSE stream so the server cancels the batch scrape.
+let batchAbort = null;
 
 $('#batchToggle').addEventListener('click', openBatchModal);
 $('#batchCancel').addEventListener('click', () => { batchModal.hidden = true; });
@@ -2329,15 +2332,21 @@ async function startBatch() {
   const sort = $('#batchSort').value;
   batchModal.hidden = true;
 
-  // Take over the results area with the batch view.
+  // Take over the results area with the batch view. A Cancel button aborts the
+  // fetch, which closes the SSE stream → the server stops the batch scrape (so a
+  // closed/refreshed page can't leave it running rogue).
   hideStatus();
   resultsEl.innerHTML = '';
   batchRows.clear();
+  batchAbort = new AbortController();
+  const cancelBtn = el('button', { className: 'batch-cancel-btn', type: 'button' }, 'Cancel');
+  cancelBtn.addEventListener('click', () => { if (batchAbort) batchAbort.abort(); });
   const header = el('div', { className: 'batch-header' }, [
     el('h2', { className: 'batch-title' }, 'Batch results'),
     el('div', { className: 'batch-progress', id: 'batchProgress' }, [
       el('span', { className: 'spinner' }), 'Starting…',
     ]),
+    cancelBtn,
   ]);
   const rowsWrap = el('div', { className: 'batch-rows', id: 'batchRowsWrap' });
   const actionBar = el('div', { className: 'batch-actionbar', id: 'batchActionBar', hidden: true });
@@ -2348,6 +2357,7 @@ async function startBatch() {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ text, sort }),
+      signal: batchAbort.signal,
     });
     if (res.status === 409) {
       const data = await res.json().catch(() => ({}));
@@ -2361,8 +2371,29 @@ async function startBatch() {
     }
     await consumeSSE(res, handleBatchEvent);
   } catch (err) {
-    setBatchProgress(`✕ ${err.message}`, false);
+    // The user cancelled — aborting the fetch lands here. Not an error.
+    if (err && err.name === 'AbortError') {
+      setBatchProgress('Batch cancelled.', false);
+    } else {
+      setBatchProgress(`✕ ${err.message}`, false);
+    }
+  } finally {
+    batchAbort = null;
+    if (cancelBtn.isConnected) cancelBtn.remove();
   }
+}
+
+// Short pill labels for the per-row phase updates during a batch search. Mirrors
+// the single-search showSearchProgress() phases, trimmed to fit a status pill.
+function batchPhaseLabel(ev) {
+  const msgs = {
+    'title-search': 'Searching titles…',
+    'scanning': `Scanning…${ev.found ? ` (${ev.found})` : ''}`,
+    'collections': 'Checking sets…',
+    'author-collections': 'Books-by-author…',
+    'author-fallback': 'Author search…',
+  };
+  return msgs[ev.phase] || 'Searching…';
 }
 
 function setBatchProgress(text, spinning = true) {
@@ -2382,6 +2413,11 @@ function handleBatchEvent(ev) {
     case 'searching':
       setBatchProgress(`Searching ${ev.index} of ${ev.total}… “${ev.title}”`);
       setRowPill(ev.index, 'searching', 'Searching…');
+      break;
+    case 'progress':
+      // Live phase update for the book currently being searched — gives the row
+      // a sense of movement, same phases the single search shows.
+      setRowPill(ev.index, 'searching', batchPhaseLabel(ev));
       break;
     case 'entry':
       fillBatchRow(ev.index, ev);

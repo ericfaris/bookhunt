@@ -230,28 +230,54 @@ app.post('/api/search/batch', async (req, res) => {
     Connection: 'keep-alive',
     'X-Accel-Buffering': 'no',
   });
-  const send = (event) => res.write(`data: ${JSON.stringify(event)}\n\n`);
-  const heartbeat = setInterval(() => res.write(': ping\n\n'), 15000);
+  const send = (event) => { if (!res.writableEnded) res.write(`data: ${JSON.stringify(event)}\n\n`); };
+  const heartbeat = setInterval(() => { if (!res.writableEnded) res.write(': ping\n\n'); }, 15000);
+
+  // Cancellation (same posture as /api/search): a batch is a long sequence of
+  // per-entry scrapes, so when the client truly disconnects mid-stream we must
+  // stop — otherwise the batch "goes rogue" and keeps scraping after the page is
+  // closed/refreshed. `batchCancelled` halts runSequential at the next entry
+  // boundary; `currentSignal` aborts the entry currently in flight (its polite
+  // delay + any live navigation). Guarded by writableEnded so our own res.end()
+  // never trips it.
+  let batchCancelled = false;
+  let currentSignal = null;
+  res.on('close', () => {
+    if (res.writableEnded) return;
+    batchCancelled = true;
+    if (currentSignal) currentSignal.cancel();
+  });
 
   // Per-entry worker: spell-correct first (fail-open), then search. A search
   // error becomes a classified outcome (not a throw) so it's reported inline and
   // the batch keeps going. The correction (if any) rides along in the outcome so
   // the row can show before→after and download/log with the corrected spelling.
-  const worker = async (entry) => {
+  const worker = async (entry, i) => {
+    const index = i + 1;
     const fix = await correct.correct({ title: entry.title, author: entry.author });
     const corrected = fix.corrected
       ? { corrected: true, original: fix.original, title: fix.title, author: fix.author, source: fix.source }
       : { corrected: false };
+    // Per-entry cancel signal: searcher.search() settles it in its own finally,
+    // so each entry needs a fresh one (a settled signal can't fire cancel).
+    const signal = searcher.createCancelSignal();
+    currentSignal = signal;
+    // Forward the scrape's phase events to THIS row so each book shows live
+    // movement (mirrors the single-search progress line).
+    const onProgress = (ev) => send({ step: 'progress', index, total: entries.length, ...ev });
     try {
       const { results, fallbackLinks } = await searcher.search({
         title: fix.title,
         author: fix.author,
         sort,
-      });
+      }, onProgress, signal);
       return { ...batch.classifyBatchOutcome({ results }), results, fallbackLinks, ...corrected };
     } catch (err) {
+      if (err && err.cancelled) throw err; // bubble up so runSequential stops the batch
       const info = messages.classifyError(err, { needWarm: !!err.needWarm });
       return { status: 'error', error: info.message, hint: info.hint, needWarm: info.needWarm, ...corrected };
+    } finally {
+      currentSignal = null;
     }
   };
 
@@ -263,7 +289,7 @@ app.post('/api/search/batch', async (req, res) => {
       } else if (ev.phase === 'ok') {
         send({ step: 'entry', index: ev.index, total: ev.total, ...ev.value });
       }
-    });
+    }, () => !batchCancelled);
     const found = outcomes.filter((o) => o.ok && o.value && (o.value.status === 'found' || o.value.status === 'multiple')).length;
     history.logSearch({ title: `Batch (${entries.length} books)`, author: '', sort, resultCount: found });
     send({ step: 'done', total: entries.length, found });

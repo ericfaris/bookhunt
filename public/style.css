@@ -579,6 +579,8 @@ img.lib-cover { overflow: hidden; }
 .batch-header { display: flex; align-items: baseline; justify-content: space-between; gap: 1rem; flex-wrap: wrap; margin-bottom: 0.25rem; }
 .batch-title { margin: 0; font-size: 1.1rem; }
 .batch-progress { font-size: 0.85rem; color: var(--text-dim); display: flex; align-items: center; }
+.batch-cancel-btn { border: 0; cursor: pointer; border-radius: 8px; padding: 0.4rem 0.9rem; font: inherit; font-size: 0.85rem; color: #fff; background: var(--danger); box-shadow: 0 2px 8px color-mix(in srgb, var(--danger) 35%, transparent); }
+.batch-cancel-btn:hover { background: color-mix(in srgb, var(--danger) 88%, #000); }
 
 .batch-rows { display: flex; flex-direction: column; gap: 0.7rem; margin-top: 1rem; }
 .batch-row {

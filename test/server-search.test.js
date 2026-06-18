@@ -58,6 +58,104 @@ function search(port, body, opts = {}) {
   });
 }
 
+// POST /api/search/batch, collecting SSE frames. opts.abortOnStep aborts the
+// request the moment a frame with that `step` arrives (simulates the tab going
+// away mid-batch). Resolves with the frames received so far.
+function batchSearch(port, body, opts = {}) {
+  return new Promise((resolve) => {
+    const payload = JSON.stringify(body);
+    const req = http.request(
+      { host: '127.0.0.1', port, path: '/api/search/batch', method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) } },
+      (res) => {
+        const frames = [];
+        let buf = '';
+        res.on('data', (chunk) => {
+          buf += chunk.toString();
+          let i;
+          while ((i = buf.indexOf('\n\n')) >= 0) {
+            const frame = buf.slice(0, i);
+            buf = buf.slice(i + 2);
+            const line = frame.split('\n').find((l) => l.startsWith('data:'));
+            if (!line) continue;
+            let ev;
+            try { ev = JSON.parse(line.slice(5).trim()); } catch { continue; }
+            frames.push(ev);
+            if (opts.abortOnStep && ev.step === opts.abortOnStep) { req.destroy(); resolve({ frames, aborted: true }); return; }
+          }
+        });
+        res.on('end', () => resolve({ frames, aborted: false }));
+        res.on('close', () => resolve({ frames, aborted: false }));
+      }
+    );
+    req.on('error', () => { /* aborts surface here — resolved above */ });
+    req.write(payload);
+    req.end();
+  });
+}
+
+test('/api/search/batch: streams per-row progress and a terminal done frame', async () => {
+  const orig = { search: searcher.search, correct: correct.correct, log: history.logSearch, status: searcher.sessionStatus };
+  correct.correct = async ({ title, author }) => ({ corrected: false, title, author });
+  history.logSearch = () => {};
+  searcher.sessionStatus = async () => ({ ready: true });
+  searcher.search = async (_params, onProgress) => {
+    onProgress({ phase: 'title-search' });
+    await delay(20);
+    return { results: [{ title: 'A Book' }], fallbackLinks: {} };
+  };
+  const server = await listen();
+  try {
+    const { frames } = await batchSearch(server.address().port, { text: 'A Book - Some Author' });
+    const progress = frames.find((f) => f.step === 'progress');
+    assert.ok(progress, 'received a per-row progress frame');
+    assert.equal(progress.index, 1);
+    assert.equal(progress.phase, 'title-search');
+    const done = frames.find((f) => f.step === 'done');
+    assert.ok(done, 'received a terminal done frame');
+    assert.equal(done.found, 1);
+  } finally {
+    server.close();
+    Object.assign(searcher, { search: orig.search, sessionStatus: orig.status });
+    Object.assign(correct, { correct: orig.correct });
+    Object.assign(history, { logSearch: orig.log });
+  }
+});
+
+test('/api/search/batch: a mid-stream disconnect cancels the scrape and stops remaining books', async () => {
+  const orig = { search: searcher.search, correct: correct.correct, log: history.logSearch, status: searcher.sessionStatus };
+  correct.correct = async ({ title, author }) => ({ corrected: false, title, author });
+  history.logSearch = () => {};
+  searcher.sessionStatus = async () => ({ ready: true });
+
+  let calls = 0;
+  let sawCancel = false;
+  searcher.search = async (_params, onProgress, signal) => {
+    calls++;
+    onProgress({ phase: 'title-search' }); // first progress frame → triggers the client abort
+    for (let i = 0; i < 100; i++) {
+      if (signal && signal.cancelled) { sawCancel = true; throw new searcher.CancelledError(); }
+      await delay(20);
+    }
+    return { results: [], fallbackLinks: {} };
+  };
+
+  const server = await listen();
+  try {
+    // Two books; aborting on the first 'progress' frame cancels book 1 mid-scrape.
+    await batchSearch(server.address().port, { text: 'Book One - A\nBook Two - B' }, { abortOnStep: 'progress' });
+    for (let i = 0; i < 50 && !sawCancel; i++) await delay(20);
+    assert.equal(sawCancel, true, 'the in-flight scrape saw the cancel signal');
+    await delay(60); // give the runner a beat in case it (wrongly) starts book 2
+    assert.equal(calls, 1, 'the second book was never started after cancel');
+  } finally {
+    server.close();
+    Object.assign(searcher, { search: orig.search, sessionStatus: orig.status });
+    Object.assign(correct, { correct: orig.correct });
+    Object.assign(history, { logSearch: orig.log });
+  }
+});
+
 test('/api/search: a normal search streams a terminal done frame (no spurious cancel)', async () => {
   const orig = { search: searcher.search, correct: correct.correct, log: history.logSearch };
   correct.correct = async () => ({ corrected: false });

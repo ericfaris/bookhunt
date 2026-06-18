@@ -408,6 +408,34 @@ function isCollection(title) {
   return COLLECTION_KEYWORDS.some((kw) => t.includes(kw));
 }
 
+// Mobilism book topics declare the file format right in the title, e.g.
+// "Title by Author (.ePUB)" or an audiobook "… (.M4B)". A format marker is a
+// known extension preceded by "." "(" or "/" (so a stray "mobi" inside an
+// ordinary word like "Mobile" doesn't count) — mirrors the authoritative title
+// sniff fetchDetail() does on the topic page.
+const TITLE_FORMAT_RE = /[.(/](epub|pdf|mobi|azw3?|cbr|cbz|djvu|m4b|m4a|mp3|aac|flac|ogg)\b/gi;
+
+/**
+ * True only when the title declares a NON-epub format and does NOT also declare
+ * epub. Used to skip audiobook/PDF/etc. topics WITHOUT opening them — the big
+ * win for "books by"/author searches, which otherwise navigate to every MP3/M4B
+ * topic page just to read and discard its format. Titles that declare epub (even
+ * alongside other formats) or declare no format at all are kept; the latter stay
+ * lenient and are resolved by fetchDetail() as before.
+ */
+function titleDeclaresNonEpub(title) {
+  const t = title || '';
+  let m;
+  let sawEpub = false;
+  let sawOther = false;
+  TITLE_FORMAT_RE.lastIndex = 0;
+  while ((m = TITLE_FORMAT_RE.exec(t))) {
+    if (m[1].toLowerCase() === 'epub') sawEpub = true;
+    else sawOther = true;
+  }
+  return sawOther && !sawEpub;
+}
+
 function buildSearchUrl(keywords, { sd = 'd', titleOnly = false } = {}) {
   const params = new URLSearchParams({
     keywords: keywords || '',
@@ -680,6 +708,8 @@ async function runSearch({ title, author, sort = 'newest' }, onProgress, signal)
     throwIfCancelled(signal);
     if (seen.has(row.url)) continue;
     if (title && !fuzzyMatch(title, row.title)) continue;
+    // Skip MP3/M4B/PDF/etc. topics by their title alone — don't open them.
+    if (titleDeclaresNonEpub(row.title)) continue;
     if (isCollection(row.title)) {
       collections.push(row);
       continue;
@@ -705,6 +735,7 @@ async function runSearch({ title, author, sort = 'newest' }, onProgress, signal)
   for (const col of collections.slice(0, MAX_COLLECTIONS)) {
     throwIfCancelled(signal);
     if (seen.has(col.url)) continue;
+    if (titleDeclaresNonEpub(col.title)) continue; // skip audiobook/PDF collections
     seen.add(col.url);
     const detail = await fetchDetail(page, col.url, signal);
     if (!detail) continue;
@@ -727,6 +758,7 @@ async function runSearch({ title, author, sort = 'newest' }, onProgress, signal)
     for (const row of byAuthorRows) {
       throwIfCancelled(signal);
       if (seen.has(row.url)) continue;
+      if (titleDeclaresNonEpub(row.title)) continue; // skip audiobook/PDF sets
       if (scanned >= MAX_AUTHOR_COLLECTION_SCAN) break;
       seen.add(row.url);
       scanned++;
@@ -753,6 +785,14 @@ async function runSearch({ title, author, sort = 'newest' }, onProgress, signal)
     for (const row of arows) {
       throwIfCancelled(signal);
       if (seen.has(row.url)) continue;
+      if (titleDeclaresNonEpub(row.title)) continue; // skip MP3/M4B/PDF without opening
+      // A title was entered, so only open a non-collection author post when its
+      // title is plausibly the requested book. Mobilism titles posts "Title by
+      // Author (.ePUB)", so the title should be in the row title — if it isn't,
+      // this is a DIFFERENT book by the author and we skip it WITHOUT opening the
+      // thread (the VNC no longer walks every author post). Collections carry no
+      // title in their name, so they're still opened (capped) and scanned inside.
+      if (title && !isCollection(row.title) && !fuzzyMatch(title, row.title)) continue;
       if (isCollection(row.title)) {
         if (colCount >= MAX_COLLECTIONS) continue;
         colCount++;
@@ -810,5 +850,6 @@ module.exports = {
   fuzzyMatch,
   fuzzyMatchLine,
   isCollection,
+  titleDeclaresNonEpub,
   throwIfCancelled,
 };

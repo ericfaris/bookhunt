@@ -68,12 +68,17 @@ function classifyBatchOutcome({ results, error } = {}) {
  * continues to the next item (one bad book never sinks the batch). `onProgress`
  * is notified with { phase:'start'|'ok'|'error', index, total, ... } as it goes.
  *
+ * `shouldContinue()` is checked at each item boundary; returning false stops the
+ * run early (used to abort the whole batch when the client disconnects) so the
+ * remaining items are never started. Items already processed are still returned.
+ *
  * Returns [{ item, ok, value? , error? }] in input order.
  */
-async function runSequential(items, worker, onProgress = () => {}) {
+async function runSequential(items, worker, onProgress = () => {}, shouldContinue = () => true) {
   const list = Array.isArray(items) ? items : [];
   const results = [];
   for (let i = 0; i < list.length; i++) {
+    if (!shouldContinue()) break;
     const item = list[i];
     onProgress({ phase: 'start', index: i + 1, total: list.length, item });
     try {

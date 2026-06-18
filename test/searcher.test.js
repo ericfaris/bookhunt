@@ -3,7 +3,7 @@
 const { test } = require('node:test');
 const assert = require('node:assert');
 
-const { normalize, fuzzyMatch, fuzzyMatchLine, isCollection } = require('../src/searcher');
+const { normalize, fuzzyMatch, fuzzyMatchLine, isCollection, titleDeclaresNonEpub } = require('../src/searcher');
 
 test('normalize: lowercases, strips punctuation, collapses space', () => {
   assert.equal(normalize('1984: Illustrated!'), '1984 illustrated');
@@ -52,4 +52,22 @@ test('isCollection: detects bundle/series keywords (incl. "&")', () => {
   assert.equal(isCollection('Animal Farm & 1984'), true);
   assert.equal(isCollection('Dune Omnibus'), true);
   assert.equal(isCollection('1984'), false);
+});
+
+test('titleDeclaresNonEpub: skips audiobook/PDF-only titles without opening them', () => {
+  // Non-epub formats declared in the title → skip (the bug: these were opened).
+  assert.equal(titleDeclaresNonEpub('Project Hail Mary by Andy Weir (.M4B)'), true);
+  assert.equal(titleDeclaresNonEpub('Some Audiobook (.MP3)'), true);
+  assert.equal(titleDeclaresNonEpub('A Manual (.PDF)'), true);
+  assert.equal(titleDeclaresNonEpub('Comic Issue 1 (.cbr)'), true);
+});
+
+test('titleDeclaresNonEpub: keeps epub and mixed-format and unmarked titles', () => {
+  assert.equal(titleDeclaresNonEpub('It Ends with Us by Colleen Hoover (.ePUB)'), false);
+  // epub alongside another format → still keep it.
+  assert.equal(titleDeclaresNonEpub('Dune (.ePUB/.PDF)'), false);
+  // No format marker at all → keep (lenient; fetchDetail resolves it).
+  assert.equal(titleDeclaresNonEpub('The Hobbit by J.R.R. Tolkien'), false);
+  // "mobi" inside an ordinary word must NOT count as a format marker.
+  assert.equal(titleDeclaresNonEpub('Mobile Suit Gundam'), false);
 });

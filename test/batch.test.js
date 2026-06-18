@@ -128,6 +128,29 @@ test('runSequential: empty list yields []', async () => {
   assert.deepEqual(await runSequential(undefined, async () => 1), []);
 });
 
+test('runSequential: shouldContinue stops the run early (batch cancel)', async () => {
+  const processed = [];
+  // Cancel after the first item is processed — simulates the client disconnecting
+  // mid-batch. Remaining items must never be started.
+  let cancelled = false;
+  const out = await runSequential(
+    ['a', 'b', 'c'],
+    async (x) => { processed.push(x); cancelled = true; return x.toUpperCase(); },
+    () => {},
+    () => !cancelled
+  );
+  assert.deepEqual(processed, ['a'], 'only the first item runs before cancel');
+  assert.equal(out.length, 1, 'only processed items are returned');
+  assert.equal(out[0].value, 'A');
+});
+
+test('runSequential: shouldContinue=false up front runs nothing', async () => {
+  let ran = false;
+  const out = await runSequential(['a', 'b'], async () => { ran = true; }, () => {}, () => false);
+  assert.equal(ran, false);
+  assert.deepEqual(out, []);
+});
+
 // Simulates the batch-search worker contract: search errors become classified
 // outcomes (not throws), so the batch keeps going and the bad entry is reported.
 test('runSequential + classifyBatchOutcome: models the batch-search worker', async () => {
