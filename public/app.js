@@ -177,8 +177,41 @@ async function prefillFromQuery() {
 // ---------------------------------------------------------------------------
 const warmBanner = $('#warmBanner');
 
+// Rotating, tongue-in-cheek "we're on it" status lines — the movement that tells
+// the user the warm-up is actively churning (paired with the steaming mug + the
+// sliding shimmer in CSS). Cycled only while the banner is visible.
+const WARM_LINES = [
+  'Warming up the reading room…',
+  'Brewing a fresh session…',
+  'Coaxing Cloudflare with a warm cookie…',
+  'Dusting off the card catalog…',
+  'Stoking the embers…',
+  'Sweet-talking the Mobilism doorman…',
+  'Fluffing the beanbags…',
+  'Re-shelving by vibe, not by spine…',
+];
+let warmRotator = null;
+let warmLineIdx = 0;
+function startWarmRotator() {
+  if (warmRotator) return;
+  const head = document.getElementById('warmHeadline');
+  if (!head) return;
+  warmRotator = setInterval(() => {
+    warmLineIdx = (warmLineIdx + 1) % WARM_LINES.length;
+    head.classList.remove('swap');
+    void head.offsetWidth; // reflow so the fade-in animation restarts
+    head.textContent = WARM_LINES[warmLineIdx];
+    head.classList.add('swap');
+  }, 3500);
+}
+function stopWarmRotator() {
+  if (warmRotator) { clearInterval(warmRotator); warmRotator = null; }
+}
+
 function showWarmBanner(show) {
   warmBanner.hidden = !show;
+  if (show) startWarmRotator();
+  else stopWarmRotator();
 }
 
 // Manual "Log into Mobilism" button — fills env creds + submits on the live
@@ -1729,6 +1762,21 @@ $('#libraryClose').addEventListener('click', closeLibrary);
 // Live title/author filter — debounced so each keystroke doesn't thrash the DOM.
 librarySearch.addEventListener('input', debounce(applyLibraryFilter, 120));
 
+// List vs. cover-grid view (persisted). Grid is a pleasant cover-wall for
+// browsing by spine; list keeps the full per-book detail + send history.
+let libViewMode = localStorage.getItem('libView') === 'grid' ? 'grid' : 'list';
+function setLibView(mode) {
+  libViewMode = mode === 'grid' ? 'grid' : 'list';
+  localStorage.setItem('libView', libViewMode);
+  $('#libViewList').classList.toggle('active', libViewMode === 'list');
+  $('#libViewGrid').classList.toggle('active', libViewMode === 'grid');
+  applyLibraryFilter(); // re-render in the chosen mode
+}
+$('#libViewList').addEventListener('click', () => setLibView('list'));
+$('#libViewGrid').addEventListener('click', () => setLibView('grid'));
+$('#libViewList').classList.toggle('active', libViewMode === 'list');
+$('#libViewGrid').classList.toggle('active', libViewMode === 'grid');
+
 // Full set from the last /api/library load; the search box filters this in place
 // (no refetch). Covers resolved lazily are remembered across re-filters.
 let allLibraryBooks = [];
@@ -1934,6 +1982,7 @@ function renderLibrarySkeleton() {
 
 function renderLibrary(books, query) {
   libraryList.innerHTML = '';
+  libraryList.classList.toggle('lib-grid', libViewMode === 'grid');
   if (!books.length) {
     const empty = query
       ? el('div', { className: 'lib-empty' }, [
@@ -1949,7 +1998,53 @@ function renderLibrary(books, query) {
     libraryList.append(empty);
     return;
   }
-  for (const book of books) libraryList.append(renderLibraryBook(book));
+  const render = libViewMode === 'grid' ? renderLibraryGridCard : renderLibraryBook;
+  books.forEach((book, i) => {
+    const node = render(book);
+    node.style.setProperty('--i', i); // staggered reveal
+    libraryList.append(node);
+  });
+}
+
+// A cover-forward grid tile: the artwork is the hero, with a soft caption and a
+// tap-to-enlarge cover. A "sent" pip shows at a glance which books have gone out;
+// the ✎ overlay (from buildEditableCover) still lets a wrong cover be fixed.
+function renderLibraryGridCard(book) {
+  const select = el('input', { type: 'checkbox', className: 'lib-select lib-tile-select',
+    'aria-label': `Select ${book.title || book.filename}` });
+  select.checked = librarySelection.has(book.id);
+  select.addEventListener('change', () => {
+    if (select.checked) librarySelection.add(book.id); else librarySelection.delete(book.id);
+    tile.classList.toggle('selected', select.checked);
+    updateLibActionBar();
+  });
+
+  const sentCount = (book.sends && book.sends.length) || 0;
+  const pip = sentCount
+    ? el('span', { className: 'lib-tile-pip sent', title: `Sent ${sentCount}×` }, '✓')
+    : el('span', { className: 'lib-tile-pip', title: 'Not sent yet' }, '·');
+
+  const send = el('button', { className: 'lib-tile-send', type: 'button',
+    title: sentCount ? 'Resend' : 'Send to readers' }, '📧');
+  send.disabled = !book.filePresent;
+  send.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (!book.filePresent) return;
+    openSendModal({
+      downloadId: book.id,
+      book: { title: book.title, author: book.author || '', cover: book.cover || resolvedLibraryCover(book) || null, filename: book.filename },
+      onSent: openLibrary,
+    });
+  });
+
+  const tile = el('div', { className: 'lib-tile' + (select.checked ? ' selected' : '') }, [
+    el('div', { className: 'lib-tile-art' }, [buildEditableCover(book), pip, select, send]),
+    el('div', { className: 'lib-tile-info' }, [
+      el('div', { className: 'lib-tile-title', title: book.title || book.filename || '' }, book.title || book.filename || 'Untitled'),
+      book.author ? el('div', { className: 'lib-tile-author', title: book.author }, book.author) : null,
+    ]),
+  ]);
+  return tile;
 }
 
 // Build a book's cover element. A stored cover renders immediately; otherwise a

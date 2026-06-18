@@ -510,6 +510,79 @@ a.reupreq-name { color: var(--accent); }
 
 .library-list { display: flex; flex-direction: column; gap: 0.85rem; }
 
+/* --- Library view toggle (list ☰ / grid ▦) --- */
+.lib-view-toggle { display: inline-flex; border: 1px solid var(--border-strong); border-radius: 9px; overflow: hidden; flex: none; }
+.lib-view-btn {
+  border: 0; background: var(--surface); color: var(--text-dim);
+  padding: 0.4rem 0.6rem; font-size: 0.95rem; line-height: 1; cursor: pointer;
+  transition: background var(--ease), color var(--ease);
+}
+.lib-view-btn + .lib-view-btn { border-left: 1px solid var(--border); }
+.lib-view-btn:hover { color: var(--text); }
+.lib-view-btn.active { background: var(--accent); color: #fff; }
+
+/* --- Cover grid: artwork-forward wall of books --- */
+.library-list.lib-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(118px, 1fr));
+  gap: 1.1rem 0.9rem;
+}
+.lib-tile {
+  display: flex; flex-direction: column; gap: 0.45rem; min-width: 0;
+  animation: tile-in 0.4s cubic-bezier(0.2, 0.7, 0.2, 1) both;
+  animation-delay: calc(var(--i, 0) * 28ms);
+}
+@keyframes tile-in { from { opacity: 0; transform: translateY(10px) scale(0.97); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) { .lib-tile { animation: none; } }
+.lib-tile-art { position: relative; aspect-ratio: 2 / 3; }
+/* Make the editable-cover machinery fill the tile in grid mode. */
+.lib-grid .lib-cover-wrap { width: 100%; height: 100%; }
+.lib-grid .lib-cover-mount { width: 100%; height: 100%; }
+.lib-grid .lib-cover,
+.lib-grid img.lib-cover { width: 100%; height: 100%; border-radius: 11px; }
+.lib-grid .lib-cover { box-shadow: 0 6px 18px rgba(0, 0, 0, 0.22); transition: transform var(--ease), box-shadow var(--ease); }
+.lib-tile:hover .lib-cover { transform: translateY(-4px); box-shadow: 0 12px 28px rgba(0, 0, 0, 0.3); }
+.lib-grid .lib-cover.placeholder { font-size: 2.2rem; }
+
+/* Sent-status pip, top-left. */
+.lib-tile-pip {
+  position: absolute; top: 7px; left: 7px; z-index: 2;
+  width: 20px; height: 20px; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 0.7rem; font-weight: 700; color: #fff;
+  background: color-mix(in srgb, var(--text) 45%, transparent);
+  backdrop-filter: blur(2px); box-shadow: 0 1px 4px rgba(0,0,0,0.25);
+}
+.lib-tile-pip.sent { background: var(--good); }
+
+/* Multi-select checkbox, top-right; appears on hover or when checked. */
+.lib-tile-select {
+  position: absolute; top: 6px; right: 6px; z-index: 2;
+  width: 18px; height: 18px; cursor: pointer;
+  opacity: 0; transition: opacity var(--ease);
+}
+.lib-tile:hover .lib-tile-select, .lib-tile.selected .lib-tile-select { opacity: 1; }
+.lib-tile.selected .lib-tile-art { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 12px; }
+
+/* Send button slides up from the bottom on hover. */
+.lib-tile-send {
+  position: absolute; left: 8px; right: 8px; bottom: 8px; z-index: 2;
+  border: 0; border-radius: 8px; padding: 0.4rem; cursor: pointer;
+  background: color-mix(in srgb, var(--accent) 92%, #000); color: #fff; font-size: 0.85rem;
+  opacity: 0; transform: translateY(8px); transition: opacity var(--ease), transform var(--ease), background var(--ease);
+}
+.lib-tile:hover .lib-tile-send { opacity: 1; transform: none; }
+.lib-tile-send:hover:not(:disabled) { background: var(--accent-hover); }
+.lib-tile-send:disabled { background: color-mix(in srgb, var(--text-dim) 55%, transparent); cursor: not-allowed; }
+
+.lib-tile-info { min-width: 0; }
+.lib-tile-title { font-size: 0.84rem; font-weight: 600; line-height: 1.25; color: var(--text);
+  overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.lib-tile-author { font-size: 0.76rem; color: var(--text-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* In grid mode the ✎ edit affordance sits just inside the art corner. */
+.lib-grid .lib-cover-edit { top: 6px; right: 28px; opacity: 0; }
+.lib-tile:hover .lib-cover-edit { opacity: 1; }
+
 .lib-book {
   border: 1px solid var(--border);
   border-radius: 12px;
@@ -695,33 +768,80 @@ img.lib-cover { overflow: hidden; }
 .batch-actionbar .primary-btn { min-width: 220px; }
 
 /* --- Re-warm banner ------------------------------------------------------- */
+/* "Warming up" banner — a cozy, MOVING status (not an alarm): a steaming mug, a
+   sliding heat shimmer, and rotating witty lines tell the user the app is busy
+   getting the session ready, while the action buttons stay available. */
 .warm-banner {
   display: flex;
   align-items: center;
   justify-content: center;
   flex-wrap: wrap;
-  gap: 0.75rem;
-  padding: 0.7rem 1rem;
-  background: #fdecec;
-  color: #8a1f1f;
-  border-bottom: 1px solid #f0b8b8;
-  font-size: 0.95rem;
+  gap: 0.5rem 0.95rem;
+  padding: 0.65rem 1.1rem;
+  position: relative;
+  overflow: hidden;
+  background:
+    linear-gradient(100deg,
+      color-mix(in srgb, var(--accent) 13%, var(--bg)),
+      color-mix(in srgb, #f4b73f 18%, var(--bg)) 55%,
+      color-mix(in srgb, var(--accent) 10%, var(--bg)));
+  color: color-mix(in srgb, var(--text) 86%, var(--accent));
+  border-bottom: 1px solid color-mix(in srgb, var(--accent) 30%, var(--border));
+  font-size: 0.92rem;
 }
-.warm-banner .warm-btn {
-  background: #c0392b;
-  color: #fff;
-  text-decoration: none;
-  padding: 0.35rem 0.85rem;
-  border-radius: 6px;
-  font-weight: 600;
-  white-space: nowrap;
-}
-.warm-banner .warm-btn:hover { background: #a93226; }
 
-@media (prefers-color-scheme: dark) {
-  .warm-banner { background: #3a1e1e; color: #ffb4b4; border-bottom-color: #5a2a2a; }
-  .warm-banner .warm-btn { background: #d65a4a; }
-  .warm-banner .warm-btn:hover { background: #e06a5a; }
+/* Steaming mug */
+.warm-stage { position: relative; width: 32px; height: 30px; flex: none; display: flex; align-items: flex-end; justify-content: center; }
+.warm-mug { font-size: 1.45rem; line-height: 1; animation: warm-bob 3s ease-in-out infinite; }
+.warm-steam { position: absolute; top: -3px; left: 50%; transform: translateX(-46%); display: flex; gap: 3px; }
+.warm-steam i {
+  width: 4px; height: 11px; border-radius: 50%; filter: blur(2px); opacity: 0;
+  background: color-mix(in srgb, var(--accent) 40%, #fff);
+  animation: warm-steam 2.4s ease-in-out infinite;
+}
+.warm-steam i:nth-child(2) { animation-delay: 0.55s; }
+.warm-steam i:nth-child(3) { animation-delay: 1.1s; }
+@keyframes warm-steam {
+  0%   { opacity: 0; transform: translateY(2px) scaleY(0.6); }
+  30%  { opacity: 0.75; }
+  100% { opacity: 0; transform: translateY(-13px) scaleY(1.35); }
+}
+@keyframes warm-bob { 0%, 100% { transform: translateY(0) rotate(-2deg); } 50% { transform: translateY(-1px) rotate(2deg); } }
+
+.warm-copy { display: flex; flex-direction: column; line-height: 1.25; min-width: 0; max-width: 60ch; }
+.warm-headline { font-weight: 700; }
+.warm-headline.swap { animation: warm-fade 0.5s ease; }
+@keyframes warm-fade { from { opacity: 0; transform: translateY(3px); } to { opacity: 1; transform: none; } }
+.warm-sub { font-size: 0.77rem; color: color-mix(in srgb, var(--text-dim) 85%, var(--accent)); }
+
+.warm-actions { display: flex; gap: 0.5rem; }
+.warm-banner .warm-btn {
+  background: var(--accent); color: #fff; text-decoration: none;
+  padding: 0.4rem 0.9rem; border: 0; border-radius: 8px;
+  font-weight: 600; white-space: nowrap; cursor: pointer;
+  box-shadow: 0 2px 8px color-mix(in srgb, var(--accent) 30%, transparent);
+  transition: background var(--ease), box-shadow var(--ease);
+}
+.warm-banner .warm-btn:hover { background: var(--accent-hover); }
+.warm-banner .warm-btn-ghost {
+  background: transparent; color: var(--accent);
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--border)); box-shadow: none;
+}
+.warm-banner .warm-btn-ghost:hover { background: color-mix(in srgb, var(--accent) 10%, transparent); }
+
+/* Sliding heat shimmer along the bottom edge — the "actively working" pulse. */
+.warm-shimmer {
+  position: absolute; left: 0; right: 0; bottom: 0; height: 3px;
+  background: linear-gradient(90deg, transparent, var(--accent),
+    color-mix(in srgb, #f4b73f 80%, #fff), var(--accent), transparent);
+  background-size: 220% 100%;
+  animation: warm-slide 1.9s linear infinite;
+}
+@keyframes warm-slide { from { background-position: 220% 0; } to { background-position: -220% 0; } }
+
+@media (prefers-reduced-motion: reduce) {
+  .warm-mug, .warm-steam i, .warm-shimmer, .warm-headline.swap { animation: none; }
+  .warm-steam i { opacity: 0.5; }
 }
 
 /* --- Send / notify modal -------------------------------------------------- */

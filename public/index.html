@@ -49,10 +49,20 @@
     </div>
   </header>
 
-  <div id="warmBanner" class="warm-banner" hidden>
-    <span class="warm-msg">⚠️ Mobilism session isn’t ready. It re-warms itself automatically — if a Cloudflare challenge is blocking it, clear that once in /warm.</span>
-    <button id="warmLoginBtn" class="warm-btn" type="button">Log into Mobilism</button>
-    <a id="warmLink" class="warm-btn" href="/warm" target="_blank" rel="noopener">Open /warm ↗</a>
+  <div id="warmBanner" class="warm-banner" hidden aria-live="polite">
+    <div class="warm-stage" aria-hidden="true">
+      <span class="warm-mug">☕</span>
+      <span class="warm-steam"><i></i><i></i><i></i></span>
+    </div>
+    <div class="warm-copy">
+      <span id="warmHeadline" class="warm-headline">Warming up the reading room…</span>
+      <span class="warm-sub">Getting your Mobilism session cozy — it re-warms itself. If Cloudflare’s playing doorman, clear it once in /warm.</span>
+    </div>
+    <div class="warm-actions">
+      <button id="warmLoginBtn" class="warm-btn" type="button">Log into Mobilism</button>
+      <a id="warmLink" class="warm-btn warm-btn-ghost" href="/warm" target="_blank" rel="noopener">Open /warm ↗</a>
+    </div>
+    <span class="warm-shimmer" aria-hidden="true"></span>
   </div>
 
   <main>
@@ -118,6 +128,10 @@
     <div class="library-search">
       <input id="librarySearch" type="search" placeholder="Search by title or author…"
              autocomplete="off" aria-label="Search library by title or author" />
+      <div id="libViewToggle" class="lib-view-toggle" role="group" aria-label="Library view">
+        <button id="libViewList" class="lib-view-btn" type="button" aria-label="List view" title="List view">☰</button>
+        <button id="libViewGrid" class="lib-view-btn" type="button" aria-label="Cover grid view" title="Cover grid">▦</button>
+      </div>
       <span id="libraryCount" class="library-count" aria-live="polite"></span>
     </div>
     <div id="libTagBar" class="lib-tagbar" hidden></div>
