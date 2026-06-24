@@ -7,16 +7,17 @@ const { classifyThanks, THANKERS_RE } = require('../src/thanks');
 
 // --- classifyThanks: maps scrape signals → outcome + progress step -----------
 
-test('classifyThanks: clicked and the control is gone afterwards → thanked', () => {
-  const r = classifyThanks({ controlFoundBefore: true, controlFoundAfter: false, clicked: true });
+test('classifyThanks: clicked → thanked (no post-click verification)', () => {
+  const r = classifyThanks({ controlFoundBefore: true, clicked: true });
   assert.equal(r.status, 'thanked');
   assert.equal(r.step, 'thanked');
 });
 
-test('classifyThanks: clicked but the control is still there → thanks-failed', () => {
-  const r = classifyThanks({ controlFoundBefore: true, controlFoundAfter: true, clicked: true });
-  assert.equal(r.status, 'unknown');
-  assert.equal(r.step, 'thanks-failed');
+test('classifyThanks: clicked → thanked regardless of leftover signals', () => {
+  // The page may still show a control after a real thank; a click is success.
+  const r = classifyThanks({ controlFoundBefore: true, clicked: true, thankersListPresent: true });
+  assert.equal(r.status, 'thanked');
+  assert.equal(r.step, 'thanked');
 });
 
 test('classifyThanks: no control + a thankers block present → already-thanked (skip)', () => {
@@ -32,15 +33,15 @@ test('classifyThanks: no control + no thankers block → not-available (skip)', 
 });
 
 test('classifyThanks: control present but never clicked → thanks-failed', () => {
-  const r = classifyThanks({ controlFoundBefore: true, controlFoundAfter: false, clicked: false });
+  const r = classifyThanks({ controlFoundBefore: true, clicked: false });
   assert.equal(r.status, 'unknown');
   assert.equal(r.step, 'thanks-failed');
 });
 
 test('classifyThanks: every outcome carries a non-empty message', () => {
   for (const sig of [
-    { controlFoundBefore: true, controlFoundAfter: false, clicked: true },
-    { controlFoundBefore: true, controlFoundAfter: true, clicked: true },
+    { controlFoundBefore: true, clicked: true },
+    { controlFoundBefore: true, clicked: false },
     { controlFoundBefore: false, clicked: false, thankersListPresent: true },
     { controlFoundBefore: false, clicked: false, thankersListPresent: false },
     {},

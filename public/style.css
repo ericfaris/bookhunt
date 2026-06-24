@@ -625,6 +625,10 @@ img.lib-cover { overflow: hidden; }
   background: var(--surface); border: 1px solid var(--border-strong);
   box-shadow: var(--shadow); display: flex; flex-direction: column; gap: 0.5rem;
 }
+/* While the editor dropdown is open, lift the whole tile above its neighbours
+   so the popup isn't painted under sibling covers. */
+.lib-cover-wrap.editing { z-index: 60; }
+.lib-tile.editing { position: relative; z-index: 60; }
 .lib-cover-editor-row { display: flex; gap: 0.4rem; }
 .lib-cover-auto { width: 100%; justify-content: center; }
 .lib-cover-url { flex: 1; min-width: 0; font-size: 0.82rem; padding: 0.35rem 0.5rem; }

@@ -245,8 +245,13 @@ if (warmLoginBtn) {
 async function refreshSessionStatus() {
   try {
     const s = await fetch('/api/session/status').then((r) => r.json());
-    // Only nag once the browser is actually up; on a cold boot it may be null.
-    showWarmBanner(s.browser === true && !s.ready);
+    // Show the warming banner whenever the session isn't ready to search —
+    // including a cold boot where the browser hasn't come up yet (issue #29).
+    // Previously we only nagged once `browser === true`, which suppressed the
+    // banner in exactly the worst case: the user searched, waited 30s, and only
+    // then learned Mobilism was warming. The server-side auto-warm watcher is
+    // already churning in the background, so surfacing it up front is honest.
+    showWarmBanner(!s.ready);
   } catch {
     /* leave the banner as-is on a transient error */
   }
@@ -1415,6 +1420,13 @@ function renderManageList() {
   }
 }
 
+// A single recipient's send counts as OK when nothing hard-failed: the Kindle
+// push is absent/ok/skipped AND every channel is ok or skipped. Shared by the
+// result rendering and the auto-close decision (issue #31).
+function sendResultOk(r) {
+  return (!r.kindle || r.kindle.ok || r.kindle.skipped) && r.channels.every((c) => c.ok || c.skipped);
+}
+
 function renderSendResults(results) {
   const box = $('#sendResults');
   box.innerHTML = '';
@@ -1428,8 +1440,7 @@ function renderSendResults(results) {
     for (const c of r.channels) {
       parts.push(c.ok ? `${c.channel} ✓` : c.skipped ? `${c.channel} skipped (${c.error})` : `${c.channel} ✕ ${c.error}`);
     }
-    const ok =
-      (!r.kindle || r.kindle.ok || r.kindle.skipped) && r.channels.every((c) => c.ok || c.skipped);
+    const ok = sendResultOk(r);
     box.append(el('div', { className: 'dl-result' + (ok ? '' : ' err') }, `${r.name}: ${parts.join(' · ')}`));
   }
 }
@@ -1472,6 +1483,7 @@ $('#sendGo').addEventListener('click', async () => {
   const go = $('#sendGo');
   go.disabled = true;
   go.textContent = 'Sending…';
+  let sentClean = false;
   try {
     // One book (downloadId) or several (downloadIds, from a Library multi-select).
     const targets = sendCtx.downloadIds && sendCtx.downloadIds.length ? sendCtx.downloadIds : [sendCtx.downloadId];
@@ -1489,12 +1501,23 @@ $('#sendGo').addEventListener('click', async () => {
     renderSendResults(all);
     // Let an opener (e.g. the Library view) refresh its inline send history.
     if (sendCtx && typeof sendCtx.onSent === 'function') sendCtx.onSent();
+    // On a clean send (every recipient OK), dismiss the send modal and the
+    // download-steps modal behind it so the user lands back without manual
+    // cleanup (issue #31). On any failure, leave the modal open with the result
+    // visible so they can see what went wrong and retry.
+    if (all.length && all.every(sendResultOk)) {
+      sentClean = true;
+      go.textContent = 'Sent ✓';
+      setTimeout(() => { closeSendModal(); closeDownloadModal(); go.textContent = 'Send'; }, 900);
+    }
   } catch (err) {
     box.innerHTML = '';
     box.append(el('div', { className: 'dl-result err' }, err.message));
   } finally {
     go.disabled = false;
-    go.textContent = 'Send';
+    // Keep the "Sent ✓" confirmation visible until the auto-close fires; only
+    // restore the default label when the send didn't fully succeed.
+    if (!sentClean) go.textContent = 'Send';
   }
 });
 
@@ -2172,6 +2195,13 @@ function buildEditableCover(book) {
 
   const editBtn = el('button', { className: 'lib-cover-edit', type: 'button', title: 'Fix this cover' }, '✎');
   const editor = el('div', { className: 'lib-cover-editor', hidden: true });
+  const wrap = el('div', { className: 'lib-cover-wrap' }, [mount, editBtn, editor]);
+  // Lift this tile above its neighbours so the dropdown editor isn't painted
+  // under sibling covers (later tiles paint on top within the grid).
+  const setEditing = (on) => {
+    wrap.classList.toggle('editing', on);
+    wrap.closest('.lib-tile')?.classList.toggle('editing', on);
+  };
   editBtn.addEventListener('click', () => {
     if (!editor.children.length) {
       buildCoverEditorBody(book, editor, (newUrl) => {
@@ -2179,12 +2209,14 @@ function buildEditableCover(book) {
         coverCache.set(`${book.title || ''}|${book.author || ''}`.toLowerCase(), newUrl);
         paint(newUrl);
         editor.hidden = true;
+        setEditing(false);
       });
     }
     editor.hidden = !editor.hidden;
+    setEditing(!editor.hidden);
   });
 
-  return el('div', { className: 'lib-cover-wrap' }, [mount, editBtn, editor]);
+  return wrap;
 }
 
 function buildCoverEditorBody(book, container, onDone) {

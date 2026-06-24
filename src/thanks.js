@@ -30,18 +30,21 @@ const THANKERS_RE = /say(?:s)?\s+thank\s*you|thanked\s+the\s+(?:author|poster)|f
  * Map raw scrape signals to a client-facing outcome + a progress step. Pure —
  * exported for unit testing.
  *
- * signals: { controlFoundBefore, controlFoundAfter, clicked, thankersListPresent }
+ * We do NOT verify the click against the page afterwards: the "action link is
+ * consumed on reload" assumption doesn't hold across Mobilism themes / post-click
+ * navigation, so it produced false failures on thanks that actually went through
+ * (issue #30). Since thanks is best-effort and non-blocking, a successful click
+ * is reported as success outright.
+ *
+ * signals: { controlFoundBefore, clicked, thankersListPresent }
  * returns: { status, step, message } where
  *   status ∈ 'thanked' | 'already-thanked' | 'not-available' | 'unknown'
  *   step   ∈ 'thanked' | 'thanks-skipped' | 'thanks-failed'
  */
-function classifyThanks({ controlFoundBefore, controlFoundAfter, clicked, thankersListPresent } = {}) {
+function classifyThanks({ controlFoundBefore, clicked, thankersListPresent } = {}) {
   if (clicked) {
-    // A successful thank consumes the action link — it's gone on reload.
-    if (!controlFoundAfter) {
-      return { status: 'thanked', step: 'thanked', message: 'Thanked the poster — much appreciated! 🙏' };
-    }
-    return { status: 'unknown', step: 'thanks-failed', message: 'Couldn’t confirm the thanks went through.' };
+    // We clicked the Thank You control — that's all we need to call it done.
+    return { status: 'thanked', step: 'thanked', message: 'Thanked the poster — much appreciated! 🙏' };
   }
   if (!controlFoundBefore) {
     // No active control: either we already thanked (a thankers block is shown) or
@@ -113,26 +116,24 @@ async function giveThanks(page, topicUrl, onProgress = () => {}) {
       control.dispose().catch(() => {});
     }
 
-    // After a real thank, the action control is consumed (gone on reload).
-    let controlFoundAfter = false;
-    if (clicked) {
-      const after = await findThanksControl(page);
-      controlFoundAfter = !!after;
-      if (after) after.dispose().catch(() => {});
+    // Only inspect the page text when we DIDN'T click — it's how we tell
+    // "already thanked" apart from "no button on this thread". A click is a
+    // success on its own and needs no confirmation scrape (issue #30).
+    let thankersListPresent = false;
+    if (!clicked) {
+      const bodyText = await page
+        .evaluate(() => (document.body && document.body.innerText) || '')
+        .catch(() => '');
+      // Keep the raw page server-side so the selectors can be tuned against real
+      // Mobilism responses without leaking anything to the client.
+      console.error('[thanks] %s →\n%s', topicUrl, bodyText.slice(0, 400));
+      thankersListPresent = THANKERS_RE.test(bodyText);
     }
-
-    const bodyText = await page
-      .evaluate(() => (document.body && document.body.innerText) || '')
-      .catch(() => '');
-    // Keep the raw page server-side so the selectors can be tuned against real
-    // Mobilism responses without leaking anything to the client.
-    console.error('[thanks] %s →\n%s', topicUrl, bodyText.slice(0, 400));
 
     const result = classifyThanks({
       controlFoundBefore,
-      controlFoundAfter,
       clicked,
-      thankersListPresent: THANKERS_RE.test(bodyText),
+      thankersListPresent,
     });
     onProgress({ step: result.step, reason: result.message });
     return result;
