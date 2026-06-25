@@ -56,7 +56,7 @@ async function sendTest(email) {
   await ch.send({
     recipient: { email },
     book: {
-      title: 'Mobilism Finder test email',
+      title: 'BookHunt test email',
       description: 'If you can read this, your SMTP settings are working. 🎉',
     },
   });

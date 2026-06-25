@@ -1,6 +1,6 @@
-# Mobilism Ebook Finder
+# BookHunt
 
-A self-hosted web app that searches the Mobilism ebook forum by title and/or author, auto-crawls collection posts, triggers Premium downloads where available, and saves ePUBs to disk. Accessible at `http://localhost:3000` locally or at `https://read.mooseflip.com` via Cloudflare Tunnel.
+A self-hosted web app that searches the Mobilism ebook forum by title and/or author, auto-crawls collection posts, triggers Premium downloads where available, and saves ePUBs to disk. Accessible at `http://localhost:3000` locally or at `https://bookhunt.mooseflip.com` via Cloudflare Tunnel.
 
 > For personal use against an account you own. Drives a real Chromium browser with your logged-in session and inserts polite 2–5s delays between requests.
 
@@ -86,12 +86,12 @@ touch history.json
 **3. Start the container**
 ```bash
 docker compose up -d
-docker logs mobilism-search-app-1
+docker logs bookhunt-app-1
 ```
 
 Expected output:
 ```
-Mobilism Ebook Finder running at http://localhost:3000
+BookHunt running at http://localhost:3000
 Downloads will be saved to: /downloads
 ```
 
@@ -112,7 +112,7 @@ clearance or the forum login expires. When it does, the app shows a red
 **"Mobilism session expired — Re-warm"** banner (and searches return a 409
 `needWarm`). To refresh — no host steps, no restart:
 
-1. Click **Re-warm ↗** in the banner (or open `https://read.mooseflip.com/warm`).
+1. Click **Re-warm ↗** in the banner (or open `https://bookhunt.mooseflip.com/warm`).
 2. A noVNC view of the live in-container browser appears. Clear any Cloudflare
    challenge / log into the forum there.
 3. Switch back to the app — the banner clears and search works again.
@@ -136,9 +136,9 @@ and Chromium profile locks on boot, so `docker compose up -d` just works.
 
 ---
 
-## Cloudflare Tunnel (remote access via read.mooseflip.com)
+## Cloudflare Tunnel (remote access via bookhunt.mooseflip.com)
 
-The app is exposed at `https://read.mooseflip.com` through the existing `youtube-rss` Cloudflare Tunnel. No separate tunnel is needed — it's an additional ingress rule on the same tunnel.
+The app is exposed at `https://bookhunt.mooseflip.com` through the existing `youtube-rss` Cloudflare Tunnel. No separate tunnel is needed — it's an additional ingress rule on the same tunnel.
 
 ### Current config (`/etc/cloudflared/config.yml`)
 
@@ -149,14 +149,14 @@ credentials-file: /etc/cloudflared/83441a36-f288-40e3-ab39-9393b284ccc5.json
 ingress:
   - hostname: rss.mooseflip.com
     service: http://localhost:8000
-  - hostname: read.mooseflip.com
+  - hostname: bookhunt.mooseflip.com
     service: http://localhost:3000
   - service: http_status:404
 ```
 
 ### If you need to re-add the DNS record
 ```bash
-cloudflared tunnel route dns youtube-rss read.mooseflip.com
+cloudflared tunnel route dns youtube-rss bookhunt.mooseflip.com
 sudo systemctl restart cloudflared
 ```
 
@@ -166,7 +166,7 @@ The app has no user accounts of its own — Cloudflare Access is the front door.
 
 1. Go to [dash.cloudflare.com](https://dash.cloudflare.com) → **Zero Trust** → **Access** → **Applications**
 2. Click **Add an application** → **Self-hosted**
-3. Set **Application domain** to `read.mooseflip.com`
+3. Set **Application domain** to `bookhunt.mooseflip.com`
 4. Create a policy: **Allow** where **Email** = `ericfaris@gmail.com`
 5. Save
 
@@ -208,7 +208,7 @@ Cloudflare Access is the front gate, but the origin no longer trusts it blindly.
 Two ways to jump from an Amazon book page straight into a search:
 
 - **Paste button** (in the app) — copy an Amazon link (or `Title — Author` text) and click **Paste**. Amazon links are scraped server-side via `/api/amazon`; plain text is parsed locally with no network call.
-- **Browser extension** (`extension/`, Chrome/Edge, Manifest V3) — adds a **"🔍 Search on Mooseflip"** button, a right-click entry, and a toolbar action to Amazon book pages. It scrapes the title/author (same cleaning rules as `src/amazon.js`) and opens the search prefilled. See [`extension/README.md`](extension/README.md) for install (load-unpacked) and config.
+- **Browser extension** (`extension/`, Chrome/Edge, Manifest V3) — adds a **"🔍 Search on BookHunt"** button, a right-click entry, and a toolbar action to Amazon book pages. It scrapes the title/author (same cleaning rules as `src/amazon.js`) and opens the search prefilled. See [`extension/README.md`](extension/README.md) for install (load-unpacked) and config.
 
 Both rely on **deep-link query params** the search page reads on load (`public/app.js` → `prefillFromQuery`, invoked last so module-level bindings are initialized before it runs):
 

@@ -1,14 +1,14 @@
 {
   "manifest_version": 3,
-  "name": "Mooseflip — Search on Amazon book pages",
+  "name": "BookHunt — Search on Amazon book pages",
   "version": "1.0.0",
-  "description": "Adds a 'Search on Mooseflip' button + right-click entry to Amazon book pages that opens your Mobilism search prefilled with the book's title and author.",
+  "description": "Adds a 'Search on BookHunt' button + right-click entry to Amazon book pages that opens your BookHunt search prefilled with the book's title and author.",
   "permissions": ["contextMenus", "scripting"],
   "host_permissions": [
     "*://*.amazon.com/*",
     "*://*.amazon.co.uk/*",
     "*://*.amazon.ca/*",
-    "*://read.mooseflip.com/*"
+    "*://bookhunt.mooseflip.com/*"
   ],
   "background": {
     "service_worker": "background.js"
@@ -25,7 +25,7 @@
     }
   ],
   "action": {
-    "default_title": "Search this book on Mooseflip"
+    "default_title": "Search this book on BookHunt"
   },
   "icons": {}
 }

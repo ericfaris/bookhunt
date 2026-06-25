@@ -1,13 +1,13 @@
 'use strict';
 
-// Mooseflip Amazon helper — content script.
+// BookHunt Amazon helper — content script.
 // Scrapes the book's title/author from the product page (mirroring the cleaning
 // in the app's server-side src/amazon.js so results match the Paste button) and
-// opens the Mooseflip search prefilled. Adds a visible button near the title's
+// opens the BookHunt search prefilled. Adds a visible button near the title's
 // share icon, with a fixed-position floating fallback, and answers the
 // background worker's requests for the right-click / toolbar entries.
 
-const APP_URL = 'https://read.mooseflip.com/';
+const APP_URL = 'https://bookhunt.mooseflip.com/';
 
 // --- scraping (mirror of src/amazon.js cleanTitle/cleanAuthor) -------------
 const collapse = (s) => (s || '').replace(/\s+/g, ' ').trim();
@@ -72,9 +72,9 @@ function openSearch() {
 // --- injected button -------------------------------------------------------
 function makeButton() {
   const btn = document.createElement('button');
-  btn.id = 'mooseflip-search-btn';
+  btn.id = 'bookhunt-search-btn';
   btn.type = 'button';
-  btn.textContent = '🔍 Search on Mooseflip';
+  btn.textContent = '🔍 Search on BookHunt';
   Object.assign(btn.style, {
     display: 'inline-flex',
     alignItems: 'center',
@@ -98,7 +98,7 @@ function makeButton() {
 }
 
 function injectButton() {
-  if (document.getElementById('mooseflip-search-btn')) return true;
+  if (document.getElementById('bookhunt-search-btn')) return true;
   // Only on book product pages.
   if (!document.querySelector('#productTitle')) return false;
 
@@ -133,7 +133,7 @@ if (!injectButton()) {
 
 // --- background worker requests (context menu / toolbar action) ------------
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
-  if (msg && msg.type === 'mooseflip:open') {
+  if (msg && msg.type === 'bookhunt:open') {
     openSearch();
     sendResponse({ ok: true });
   }

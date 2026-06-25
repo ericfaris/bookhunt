@@ -1,3 +1,7 @@
+# Project name fixes the container name to bookhunt-app-1 regardless of the
+# directory the compose file lives in.
+name: bookhunt
+
 services:
   app:
     build:
@@ -7,7 +11,7 @@ services:
         # script, which exports these). Default blank when built directly.
         GIT_SHA: ${GIT_SHA:-}
         BUILD_TIME: ${BUILD_TIME:-}
-    image: ericfaris/mobilism-search:latest
+    image: ericfaris/bookhunt:latest
     restart: unless-stopped
     # Run as the host user (uid:gid 1000) so the bind-mounted browser profile,
     # history, and downloads stay owned by you — never root.

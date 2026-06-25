@@ -120,7 +120,7 @@ pasteBtn.addEventListener('click', async () => {
 });
 
 // ---------------------------------------------------------------------------
-// Deep-link prefill — lets the Mooseflip browser extension (or a bookmarklet)
+// Deep-link prefill — lets the BookHunt browser extension (or a bookmarklet)
 // hand a book off straight from an Amazon page. Supported query params:
 //   ?title=…&author=…   fill the fields directly and search (no network call)
 //   ?amazon=<url>       scrape the product page via /api/amazon, then search

@@ -17,7 +17,7 @@ const CHECK_MS = Number(process.env.AUTO_WARM_INTERVAL_MS) || 20000;
 // human can solve the challenge in /warm without the watcher yanking the page out
 // from under them. Once they clear it, the next tick logs in automatically.
 const BLOCK_BACKOFF_MS = Number(process.env.AUTO_WARM_BACKOFF_MS) || 90000;
-const PUBLIC_URL = (process.env.PUBLIC_URL || 'https://read.mooseflip.com').replace(/\/$/, '');
+const PUBLIC_URL = (process.env.PUBLIC_URL || 'https://bookhunt.mooseflip.com').replace(/\/$/, '');
 
 let _inFlight = false;
 let _backoffUntil = 0;

@@ -2,7 +2,7 @@
 
 // Defense-in-depth middleware for an app exposed through a Cloudflare Tunnel.
 //
-// The primary gate is Cloudflare Access (a login policy on read.mooseflip.com).
+// The primary gate is Cloudflare Access (a login policy on bookhunt.mooseflip.com).
 // Everything here assumes that gate could fail or be bypassed — if someone
 // discovers the origin/tunnel hostname, or the Access policy is ever loosened,
 // these layers keep the app from being wide open:

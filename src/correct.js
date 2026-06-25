@@ -190,7 +190,7 @@ async function fetchJson(url, { fetchImpl = fetch, timeoutMs = LOOKUP_TIMEOUT_MS
   const timer = setTimeout(() => ac.abort(), timeoutMs);
   let res;
   try {
-    res = await fetchImpl(url, { signal: ac.signal, headers: { 'User-Agent': 'mobilism-finder/1.0' } });
+    res = await fetchImpl(url, { signal: ac.signal, headers: { 'User-Agent': 'bookhunt/1.0' } });
   } finally {
     clearTimeout(timer);
   }

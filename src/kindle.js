@@ -22,7 +22,7 @@ async function pushToKindle({ kindleEmail, filePath, filename }) {
     from: smtp.FROM,
     to: kindleEmail,
     subject: name, // ignored by Amazon, but useful in your Sent folder
-    text: 'Sent from Mobilism Finder',
+    text: 'Sent from BookHunt',
     attachments: [{ filename: name, path: filePath, contentType: 'application/epub+zip' }],
   });
 }
