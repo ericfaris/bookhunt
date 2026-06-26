@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "BookHunt — Search on Amazon book pages",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Adds a 'Search on BookHunt' button + right-click entry to Amazon book pages that opens your BookHunt search prefilled with the book's title and author.",
   "permissions": ["contextMenus", "scripting"],
   "host_permissions": [
