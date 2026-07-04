@@ -1930,6 +1930,16 @@ async function deleteSelectedLibrary() {
   await openLibrary();
 }
 
+// Per-book removal — same endpoint as the multi-select Delete, minus the
+// selection dance. Removes the file from disk and the book's send history.
+async function deleteLibraryBook(book) {
+  const name = book.title || book.filename || 'this book';
+  if (!window.confirm(`Delete “${name}”? This removes the file from disk and clears its send history.`)) return;
+  try { await fetch('/api/library/' + book.id, { method: 'DELETE' }); } catch { /* best effort */ }
+  librarySelection.delete(book.id);
+  await openLibrary();
+}
+
 async function editBookTags(book) {
   const input = window.prompt('Tags for this book (comma-separated):', (book.tags || []).join(', '));
   if (input === null) return;
@@ -2068,8 +2078,14 @@ function renderLibraryGridCard(book) {
     });
   });
 
+  const del = el('button', { className: 'lib-tile-del', type: 'button', title: 'Remove from library' }, '🗑');
+  del.addEventListener('click', (e) => {
+    e.stopPropagation();
+    deleteLibraryBook(book);
+  });
+
   const tile = el('div', { className: 'lib-tile' + (select.checked ? ' selected' : '') }, [
-    el('div', { className: 'lib-tile-art' }, [buildEditableCover(book), pip, select, send]),
+    el('div', { className: 'lib-tile-art' }, [buildEditableCover(book), pip, select, send, del]),
     el('div', { className: 'lib-tile-info' }, [
       el('div', { className: 'lib-tile-title', title: book.title || book.filename || '' }, book.title || book.filename || 'Untitled'),
       book.author ? el('div', { className: 'lib-tile-author', title: book.author }, book.author) : null,
@@ -2146,6 +2162,9 @@ function renderLibraryBook(book) {
       actions.append(rd);
     }
   }
+  const del = el('button', { className: 'ghost-btn lib-del-btn', type: 'button', title: 'Remove from library' }, '🗑 Delete');
+  del.addEventListener('click', () => deleteLibraryBook(book));
+  actions.append(del);
 
   // Tags / collections row.
   const tagsRow = el('div', { className: 'lib-tags' });
