@@ -68,16 +68,50 @@ test('buildNewBooksEmail: lists the books and carries the magic link', () => {
   assert.match(msg.html, /unsub=1/, 'has a stop-emails link');
 });
 
+test('buildNewBooksEmail: carries the brand shell (wordmark + signature)', () => {
+  const msg = buildNewBooksEmail({ name: 'Darla', readerToken: 'tok123456789012345678' },
+    [{ title: 'Theo of Golden', author: 'Allen Levi', cover: null }]);
+  assert.match(msg.html, /Book<span[^>]*>Hunt<\/span>/, 'has the BookHunt wordmark');
+  assert.match(msg.html, /Sent with ♥ by Eric/, 'has the app signature footer');
+  assert.match(msg.html, /#1c2a56/, 'uses the navy brand color');
+});
+
+test('buildNewBooksEmail: cover URLs become inline CID attachments', () => {
+  const msg = buildNewBooksEmail({ name: 'D', readerToken: 't2345678901234567890' }, [
+    { title: 'With Cover', author: 'A', cover: 'https://x/c.jpg' },
+    { title: 'No Cover', author: 'B', cover: null },
+  ]);
+  assert.equal(msg.attachments.length, 1, 'only the book with a cover attaches');
+  assert.equal(msg.attachments[0].cid, 'cover0@book');
+  assert.equal(msg.attachments[0].path, 'https://x/c.jpg');
+  assert.match(msg.html, /cid:cover0@book/, 'html references the CID');
+  assert.match(msg.html, /📖/, 'the cover-less book gets a placeholder');
+});
+
 test('buildNewBooksEmail: escapes HTML in titles', () => {
   const msg = buildNewBooksEmail({ name: 'D', readerToken: 't2345678901234567890' },
     [{ title: 'Cat<script>x</script>', author: '' }]);
   assert.ok(!msg.html.includes('<script>x'));
 });
 
-test('buildInviteEmail: personal, carries the link, warns to keep it private', () => {
-  const msg = buildInviteEmail({ name: 'April', readerToken: 'tok223456789012345678' });
-  assert.match(msg.subject, /invited/i);
+test('buildInviteEmail: personal, carries the link, uses the brand shell', () => {
+  const msg = buildInviteEmail({ name: 'April Faris', readerToken: 'tok223456789012345678' });
+  assert.match(msg.subject, /April/, 'greets by first name');
   assert.match(msg.text, /April/);
   assert.match(msg.text, /\/reader\?t=tok223456789012345678/);
-  assert.match(msg.text, /keep the link to yourself/i);
+  assert.match(msg.html, /Book<span[^>]*>Hunt<\/span>/, 'has the wordmark');
+  assert.match(msg.html, /Open my shelf/, 'has the CTA button');
+  assert.match(msg.html, /just for you/i, 'reassures the link is private, plainly');
+  assert.deepEqual(msg.attachments, [], 'invite has no attachments');
+});
+
+test('buildManifest: bakes the token into start_url for a per-reader home icon', () => {
+  const { buildManifest } = require('../src/reader');
+  const m = buildManifest('tok_abc123');
+  assert.equal(m.name, 'BookHunt');
+  assert.equal(m.short_name, 'BookHunt');
+  assert.equal(m.start_url, '/reader?t=tok_abc123');
+  assert.equal(m.scope, '/reader');
+  assert.equal(m.display, 'standalone');
+  assert.ok(m.icons.some((i) => i.purpose === 'maskable'), 'has a maskable icon');
 });

@@ -81,6 +81,23 @@ app.get('/reader/app.js', (_req, res) => {
   res.sendFile(path.join(__dirname, '..', 'public', 'reader.js'));
 });
 
+// Per-reader web app manifest (home-screen install). Token from the query is
+// baked into start_url so the installed icon opens THIS reader's shelf. Must
+// live under /reader/* to clear Cloudflare Access.
+app.get('/reader/manifest.webmanifest', (req, res) => {
+  const r = reader.byToken(String(req.query.t || ''));
+  res.setHeader('Content-Type', 'application/manifest+json');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.json(reader.buildManifest(r ? r.readerToken : ''));
+});
+
+// App icons for the home-screen install — also under /reader/* for CF Access.
+app.get('/reader/icon-:size.png', (req, res) => {
+  const size = ['180', '192', '512'].includes(req.params.size) ? req.params.size : '192';
+  res.setHeader('Cache-Control', 'public, max-age=86400');
+  res.sendFile(path.join(__dirname, '..', 'public', `reader-icon-${size}.png`));
+});
+
 app.get('/reader/api/books', async (req, res) => {
   const r = reader.byToken(String(req.query.t || ''));
   if (!r) return res.status(404).json({ error: 'Not found' });

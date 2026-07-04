@@ -5,6 +5,15 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex, nofollow">
 <title>Your BookHunt shelf</title>
+<meta name="theme-color" content="#1c2a56">
+<!-- Home-screen install. The <link rel="manifest"> is injected by reader.js so
+     it can carry the reader's token (Android/Chrome). iOS uses these apple-*
+     tags + captures the current URL, so the token rides along there too. -->
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="BookHunt">
+<link rel="apple-touch-icon" href="/reader/icon-180.png">
+<link rel="icon" type="image/png" href="/reader/icon-192.png">
 <style>
   :root {
     --bg: #f6f1e7; --surface: #fffdf8; --text: #1c2a56; --dim: #616a8c;
@@ -39,6 +48,18 @@
   button.send:disabled { opacity: 0.85; cursor: default; }
   button.send.sent { background: var(--good); }
   .err { color: #c0392b; font-size: 0.8rem; }
+  /* Gentle, dismissable "add to home screen" hint — never a blocker. */
+  .install { background: var(--surface); border: 1px solid var(--border); border-radius: 14px;
+    padding: 14px 16px; margin: 0 0 16px; display: flex; align-items: center; gap: 12px; }
+  .install img { width: 44px; height: 44px; border-radius: 10px; flex-shrink: 0; }
+  .install .it { flex: 1; min-width: 0; }
+  .install .it b { display: block; font-size: 0.95rem; }
+  .install .it span { font-size: 0.82rem; color: var(--dim); }
+  .install button.add { border: 0; border-radius: 9px; padding: 9px 14px; font-weight: 600;
+    font-size: 0.85rem; cursor: pointer; background: var(--accent); color: #fff; flex-shrink: 0; }
+  .install button.add:hover { background: var(--accent-hover); }
+  .install button.x { border: 0; background: none; color: var(--dim); font-size: 1.2rem;
+    cursor: pointer; padding: 0 2px; line-height: 1; flex-shrink: 0; }
   .center { text-align: center; padding: 40px 10px; color: var(--dim); }
   footer { text-align: center; margin-top: 34px; font-size: 0.8rem; color: var(--dim); }
   footer a { color: var(--dim); }
@@ -51,6 +72,7 @@
     <p id="greet">Opening your shelf…</p>
   </header>
   <div id="banner"></div>
+  <div id="install" class="install" hidden></div>
   <div id="main" class="center">Loading…</div>
   <footer id="foot" hidden>
     Tap “Send to my Kindle” and the book arrives in your Kindle library in a few minutes.<br>

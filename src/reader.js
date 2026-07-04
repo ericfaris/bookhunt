@@ -46,6 +46,34 @@ function readerLink(recipient) {
   return `${BASE_URL}/reader?t=${encodeURIComponent(recipient.readerToken || '')}`;
 }
 
+/**
+ * PURE: the per-reader web app manifest. The token is baked into start_url so
+ * an installed home-screen icon (Android/Chrome, which uses the manifest)
+ * launches straight to THIS reader's shelf. Icons + manifest live under
+ * /reader/* so they clear Cloudflare Access like the rest of the portal. iOS
+ * doesn't use start_url — it captures the current URL on "Add to Home Screen"
+ * — so the token rides along there for free.
+ */
+function buildManifest(token) {
+  const q = token ? `?t=${encodeURIComponent(token)}` : '';
+  return {
+    name: 'BookHunt',
+    short_name: 'BookHunt',
+    description: 'Your BookHunt shelf — send books to your Kindle.',
+    start_url: `/reader${q}`,
+    scope: '/reader',
+    display: 'standalone',
+    orientation: 'portrait-primary',
+    background_color: '#f6f1e7',
+    theme_color: '#1c2a56',
+    icons: [
+      { src: '/reader/icon-192.png', sizes: '192x192', type: 'image/png', purpose: 'any' },
+      { src: '/reader/icon-512.png', sizes: '512x512', type: 'image/png', purpose: 'any' },
+      { src: '/reader/icon-512.png', sizes: '512x512', type: 'image/png', purpose: 'maskable' },
+    ],
+  };
+}
+
 /** Ensure a recipient has a reader token (lazily minted, persisted). */
 function ensureToken(id) {
   const list = recipients.readAll();
@@ -181,50 +209,166 @@ async function sendToReader(recipient, downloadId) {
 }
 
 // --- reader emails -----------------------------------------------------------------
+// These share the app's email design language (see src/notify/email.js): a
+// warm cream backdrop, a white rounded card, a navy header band carrying the
+// 🔎 BookHunt wordmark, orange accents, and the "Sent with ♥ by Eric" footer.
+// Email-client-safe: tables + inline styles only (no fl/grid, no <style>).
+// Written plainly for non-technical readers — no jargon, no "token"/"login".
+
+// Brand palette (inline; email clients ignore :root/vars).
+const ACCENT = '#f1592a';
+const NAVY = '#1c2a56';
+const INK = '#1c2a56';
+const MUTED = '#6b727e';
+const PAPER = '#f6f1e7';
 
 function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
 
-/** PURE: the "new books on the shelf" email for one reader. */
-function buildNewBooksEmail(recipient, books) {
-  const link = readerLink(recipient);
-  const n = books.length;
-  const subject = `📚 ${n} new book${n === 1 ? '' : 's'} on the BookHunt shelf`;
-  const text =
-    `Hi ${recipient.name},\n\n` +
-    `New on the shelf:\n${books.map((b) => `  • ${b.title}${b.author ? ' — ' + b.author : ''}`).join('\n')}\n\n` +
-    `Pick what you'd like sent to your Kindle:\n${link}\n\n` +
-    `(This link is yours alone — no login needed.)`;
-  const rows = books.map((b) =>
-    `<tr><td style="padding:6px 12px 6px 0">${b.cover ? `<img src="${escapeHtml(b.cover)}" width="46" style="border-radius:4px" alt="">` : '📕'}</td>` +
-    `<td><strong>${escapeHtml(b.title)}</strong>${b.author ? `<br><span style="color:#666">${escapeHtml(b.author)}</span>` : ''}</td></tr>`
-  ).join('');
-  const html =
-    `<div style="font-family:sans-serif;max-width:560px">` +
-    `<h2 style="margin:0 0 12px">New books on the shelf 📚</h2>` +
-    `<p>Hi ${escapeHtml(recipient.name)} — fresh arrivals you can send to your Kindle:</p>` +
-    `<table style="border-collapse:collapse">${rows}</table>` +
-    `<p style="margin:18px 0"><a href="${escapeHtml(link)}" style="background:#e4572e;color:#fff;padding:10px 18px;border-radius:8px;text-decoration:none;font-weight:600">Browse &amp; send to my Kindle</a></p>` +
-    `<p style="color:#888;font-size:12px">This link is yours alone — no login needed. ` +
-    `<a href="${escapeHtml(link + '&unsub=1')}" style="color:#888">Stop these emails</a>.</p></div>`;
-  return { subject, text, html };
+/** The BookHunt card shell: header band + body + footer, matching the notify
+ *  email. `body` is the inner rows HTML; `footerNote` is optional small print
+ *  (e.g. the unsubscribe line) shown above the standard signature. */
+function emailShell(subHeader, body, footerNote = '') {
+  return `
+  <div style="margin:0;padding:24px 12px;background:${PAPER};
+              font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse">
+      <tr><td align="center">
+        <table role="presentation" width="540" cellpadding="0" cellspacing="0"
+               style="width:540px;max-width:540px;background:#ffffff;border-radius:16px;
+                      overflow:hidden;box-shadow:0 4px 24px rgba(28,42,86,0.14)">
+
+          <tr><td style="background:${NAVY};padding:16px 28px">
+            <table role="presentation" cellpadding="0" cellspacing="0"><tr>
+              <td style="font-size:20px;line-height:1;padding-right:9px">🔎</td>
+              <td>
+                <p style="margin:0;color:#ffffff;font-size:16px;font-weight:800;letter-spacing:0.2px">
+                  Book<span style="color:${ACCENT}">Hunt</span>
+                </p>
+                <p style="margin:0;color:#aeb6d6;font-size:11px;font-weight:600">find books. find threads.</p>
+              </td>
+            </tr></table>
+          </td></tr>
+
+          <tr><td style="padding:18px 28px 0">
+            <p style="margin:0;color:${ACCENT};font-size:13px;font-weight:700;letter-spacing:0.3px;text-transform:uppercase">
+              ${subHeader}
+            </p>
+          </td></tr>
+
+          ${body}
+
+          <tr><td style="padding:16px 28px;background:#faf7f0;border-top:1px solid #ece5d6">
+            ${footerNote ? `<p style="margin:0 0 6px;color:#9a93a1;font-size:11px">${footerNote}</p>` : ''}
+            <p style="margin:0;color:#9a93a1;font-size:11px">Sent with ♥ by Eric via BookHunt</p>
+          </td></tr>
+
+        </table>
+      </td></tr>
+    </table>
+  </div>`;
 }
 
-/** PURE: the invite email. */
+/** An orange call-to-action button row. */
+function ctaRow(href, label, pad = '20px 28px 4px') {
+  return `<tr><td style="padding:${pad}">
+    <a href="${escapeHtml(href)}" style="display:inline-block;background:${ACCENT};color:#ffffff;
+       text-decoration:none;font-size:15px;font-weight:700;padding:13px 26px;border-radius:10px">
+      ${label}
+    </a>
+  </td></tr>`;
+}
+
+/** PURE: the invite email — warm, personal, one clear button. */
 function buildInviteEmail(recipient) {
   const link = readerLink(recipient);
+  const name = String(recipient.name || '').split(/\s+/)[0] || 'there';
+  const body = `
+    <tr><td style="padding:14px 28px 0">
+      <p style="margin:0 0 10px;font-size:16px;color:${INK};line-height:1.6">Hi ${escapeHtml(name)},</p>
+      <p style="margin:0;font-size:15px;color:${MUTED};line-height:1.65">
+        Eric set up a personal book shelf just for you. Tap the button to see the newest books —
+        and send any of them straight to your Kindle. No password, nothing to sign up for.
+      </p>
+    </td></tr>
+    ${ctaRow(link, 'Open my shelf →', '22px 28px 6px')}
+    <tr><td style="padding:8px 28px 22px">
+      <div style="background:${PAPER};border-left:3px solid ${ACCENT};border-radius:8px;
+                  padding:12px 15px;color:#3a3f47;font-size:13px;line-height:1.6">
+        💡 Tip: this link is just for you — keep it handy and you can come back anytime.
+        On your phone, you can even add it to your home screen like an app.
+      </div>
+    </td></tr>`;
   return {
-    subject: `📖 You're invited to the BookHunt shelf`,
+    subject: `📖 Your BookHunt shelf is ready, ${name}`,
     text:
-      `Hi ${recipient.name},\n\nEric set you up with a personal book shelf. ` +
-      `Open your link to browse new books and send any of them straight to your Kindle — no login needed:\n\n${link}\n\n` +
-      `Keep the link to yourself; it's your key.`,
-    html:
-      `<div style="font-family:sans-serif;max-width:560px">` +
-      `<h2 style="margin:0 0 12px">Your BookHunt shelf 📖</h2>` +
-      `<p>Hi ${escapeHtml(recipient.name)} — Eric set you up with a personal shelf. Browse new books and send any of them straight to your Kindle. No login, no password — the link below is your key, so keep it to yourself.</p>` +
-      `<p style="margin:18px 0"><a href="${escapeHtml(link)}" style="background:#e4572e;color:#fff;padding:10px 18px;border-radius:8px;text-decoration:none;font-weight:600">Open my shelf</a></p></div>`,
+      `Hi ${name},\n\n` +
+      `Eric set up a personal book shelf just for you. Open it to see the newest books and ` +
+      `send any of them straight to your Kindle — no password, nothing to sign up for:\n\n${link}\n\n` +
+      `This link is just for you — keep it handy and you can come back anytime.\n\n` +
+      `Sent with love by Eric via BookHunt`,
+    html: emailShell('Your shelf is ready', body),
+    attachments: [],
+  };
+}
+
+/** PURE: the "new books on the shelf" email — cover-forward book rows + CTA.
+ *  Covers ride as inline CID images (cid:cover0@book …) so they render even
+ *  when a client blocks remote images, matching the notify email. */
+function buildNewBooksEmail(recipient, books) {
+  const link = readerLink(recipient);
+  const name = String(recipient.name || '').split(/\s+/)[0] || 'there';
+  const n = books.length;
+
+  const attachments = [];
+  const rows = books.map((b, i) => {
+    const hasCover = /^https?:\/\//i.test(String(b.cover || ''));
+    let coverCell;
+    if (hasCover) {
+      const cid = `cover${i}@book`;
+      attachments.push({ filename: `cover${i}.jpg`, path: b.cover, cid });
+      coverCell = `<img src="cid:${cid}" alt="" width="54"
+        style="width:54px;height:auto;display:block;border-radius:7px;box-shadow:0 3px 10px rgba(0,0,0,0.18)">`;
+    } else {
+      coverCell = `<div style="width:54px;height:80px;border-radius:7px;
+        background:linear-gradient(135deg,${NAVY},#2a3a72);text-align:center;line-height:80px;font-size:24px">📖</div>`;
+    }
+    return `<tr>
+      <td valign="top" width="54" style="padding:0 16px 16px 0">${coverCell}</td>
+      <td valign="top" style="padding:0 0 16px">
+        <p style="margin:0 0 3px;font-size:16px;font-weight:700;color:${INK};line-height:1.3">${escapeHtml(b.title)}</p>
+        ${b.author ? `<p style="margin:0;font-size:14px;color:${MUTED}">${escapeHtml(b.author)}</p>` : ''}
+      </td>
+    </tr>`;
+  }).join('');
+
+  const body = `
+    <tr><td style="padding:14px 28px 0">
+      <p style="margin:0 0 4px;font-size:16px;color:${INK};line-height:1.6">Hi ${escapeHtml(name)},</p>
+      <p style="margin:0;font-size:15px;color:${MUTED};line-height:1.6">
+        ${n === 1 ? 'A new book just landed on your shelf:' : `${n} new books just landed on your shelf:`}
+      </p>
+    </td></tr>
+    <tr><td style="padding:18px 28px 0">
+      <table role="presentation" cellpadding="0" cellspacing="0" width="100%">${rows}</table>
+    </td></tr>
+    ${ctaRow(link, 'Pick what to send to my Kindle →', '6px 28px 22px')}`;
+
+  const footerNote =
+    `Getting too many of these? <a href="${escapeHtml(link + '&unsub=1')}" style="color:#9a93a1">Stop these emails</a> ` +
+    `— your shelf still works anytime.`;
+
+  return {
+    subject: n === 1 ? `📚 A new book is on your shelf` : `📚 ${n} new books are on your shelf`,
+    text:
+      `Hi ${name},\n\n` +
+      `${n === 1 ? 'A new book just landed on your shelf:' : `${n} new books just landed on your shelf:`}\n` +
+      `${books.map((b) => `  • ${b.title}${b.author ? ' — ' + b.author : ''}`).join('\n')}\n\n` +
+      `Pick what you'd like sent to your Kindle:\n${link}\n\n` +
+      `Sent with love by Eric via BookHunt`,
+    html: emailShell(n === 1 ? 'A new book for you' : 'New books for you', body, footerNote),
+    attachments,
   };
 }
 
@@ -293,6 +437,7 @@ module.exports = {
   setReaderEnabled,
   byToken,
   readerLink,
+  buildManifest,
   booksForReader,
   sendToReader,
   invite,
