@@ -10,3 +10,4 @@ watchlist.json
 *.log
 .DS_Store
 settings.json
+lists.json

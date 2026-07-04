@@ -64,13 +64,64 @@ function setWatchIntervalMin(v) {
   return minutes;
 }
 
+// --- New-release list radar (issue #33) --------------------------------------
+// Enabled by default once NYT_API_KEY is set; the UI toggle overrides. Pull
+// cadence is generous by default (daily) — the lists themselves refresh weekly.
+const MIN_LIST_HOURS = 1;
+const MAX_LIST_HOURS = 7 * 24;
+const DEFAULT_LIST_HOURS = 24;
+
+/** PURE: clamp arbitrary input to a valid pull cadence in hours. */
+function clampListHours(v, fallback = DEFAULT_LIST_HOURS) {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.min(MAX_LIST_HOURS, Math.max(MIN_LIST_HOURS, Math.round(n)));
+}
+
+function getListsEnabled() {
+  const v = readAll().listsEnabled;
+  return v === undefined ? true : !!v;
+}
+
+function setListsEnabled(v) {
+  const all = readAll();
+  all.listsEnabled = !!v;
+  writeAll(all);
+  return all.listsEnabled;
+}
+
+function getListPullIntervalHours() {
+  return clampListHours(readAll().listPullIntervalHours, DEFAULT_LIST_HOURS);
+}
+
+function getListPullIntervalMs() {
+  return getListPullIntervalHours() * 3600000;
+}
+
+function setListPullIntervalHours(v) {
+  const hours = clampListHours(v);
+  const all = readAll();
+  all.listPullIntervalHours = hours;
+  writeAll(all);
+  return hours;
+}
+
 module.exports = {
   getWatchIntervalMin,
   getWatchIntervalMs,
   setWatchIntervalMin,
+  getListsEnabled,
+  setListsEnabled,
+  getListPullIntervalHours,
+  getListPullIntervalMs,
+  setListPullIntervalHours,
   // exported for unit tests + UI bounds
   clampWatchMinutes,
+  clampListHours,
   MIN_WATCH_MIN,
   MAX_WATCH_MIN,
   DEFAULT_WATCH_MIN,
+  MIN_LIST_HOURS,
+  MAX_LIST_HOURS,
+  DEFAULT_LIST_HOURS,
 };

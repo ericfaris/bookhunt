@@ -1614,6 +1614,9 @@ $('#settingsClose').addEventListener('click', closeSettings);
 $('#setPremUpdate').addEventListener('click', () => openCredModal());
 $('#setTestBtn').addEventListener('click', sendTestEmail);
 $('#setWatchCadence').addEventListener('change', saveWatchCadence);
+$('#setListsEnabled').addEventListener('change', saveListsSettings);
+$('#setListCadence').addEventListener('change', saveListsSettings);
+$('#setListsRun').addEventListener('click', runListsNow);
 
 // Reflect the saved cadence in the dropdown; add a one-off option if the stored
 // value isn't one of the presets (e.g. an env-set custom value).
@@ -1669,10 +1672,93 @@ async function loadSettings() {
     box.append(el('div', { className: 'set-channel ' + (s.kindle ? 'on' : 'off') },
       `${s.kindle ? '✓' : '✕'} Send-to-Kindle${s.kindle ? '' : ' — needs SMTP'}`));
     setWatchCadenceSelect((s.settings && s.settings.watchCheckIntervalMin) || 30);
+    renderListsSettings(s);
     renderVersion(s.version);
   } catch {
     $('#setPremStatus').textContent = 'Could not load settings.';
     $('#setVersion').textContent = 'Unknown';
+  }
+}
+
+// --- New-release radar settings (issue #33) ---------------------------------
+function renderListsSettings(s) {
+  const enabled = $('#setListsEnabled');
+  const cadence = $('#setListCadence');
+  const status = $('#setListsStatus');
+  if (!enabled) return;
+  const conf = s.lists && s.lists.configured;
+  enabled.checked = !!(s.settings && s.settings.listsEnabled);
+  enabled.disabled = !conf;
+  cadence.disabled = !conf;
+  $('#setListsRun').disabled = !conf || !enabled.checked;
+  const hours = String((s.settings && s.settings.listPullIntervalHours) || 24);
+  if (![...cadence.options].some((o) => o.value === hours)) {
+    cadence.append(el('option', { value: hours }, `${hours} hours`));
+  }
+  cadence.value = hours;
+  if (!conf) {
+    status.textContent = 'Needs NYT_API_KEY in .env.';
+  } else if (s.lists && s.lists.lastRunAt) {
+    const watching = s.lists.watching || 0;
+    status.textContent = `Last checked ${new Date(s.lists.lastRunAt).toLocaleString()}${watching ? ` · watching ${watching}` : ''}`;
+  } else {
+    status.textContent = 'Not run yet.';
+  }
+}
+
+async function saveListsSettings() {
+  const out = $('#setListsResult');
+  out.className = 'set-test-result';
+  try {
+    const res = await fetch('/api/settings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        listsEnabled: $('#setListsEnabled').checked,
+        listPullIntervalHours: Number($('#setListCadence').value),
+      }),
+    });
+    if (!res.ok) throw new Error('Could not save');
+    $('#setListsRun').disabled = !$('#setListsEnabled').checked;
+    out.classList.add('ok');
+    out.textContent = '✓ Saved.';
+  } catch {
+    out.classList.add('err');
+    out.textContent = 'Could not save.';
+  }
+}
+
+async function runListsNow() {
+  const btn = $('#setListsRun');
+  const out = $('#setListsResult');
+  out.className = 'set-test-result';
+  btn.disabled = true;
+  const label = btn.textContent;
+  btn.textContent = 'Checking…';
+  try {
+    const res = await fetch('/api/lists/run', { method: 'POST' });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Run failed');
+    if (data.skipped) {
+      out.classList.add('err');
+      out.textContent = `Skipped: ${data.skipped}`;
+    } else {
+      const bits = [];
+      if ((data.seeded || []).length) bits.push('baseline saved — new entrants tracked from next refresh');
+      if ((data.watching || []).length) bits.push(`now watching ${data.watching.length}`);
+      if ((data.owned || []).length) bits.push(`${data.owned.length} already in your library`);
+      if ((data.expired || []).length) bits.push(`${data.expired.length} expired`);
+      if ((data.errors || []).length) bits.push(`${data.errors.length} error(s)`);
+      out.classList.add('ok');
+      out.textContent = '✓ ' + (bits.length ? bits.join(' · ') : 'Lists unchanged — nothing new.');
+    }
+    await loadSettings();
+  } catch (err) {
+    out.classList.add('err');
+    out.textContent = err.message || 'Run failed.';
+  } finally {
+    btn.disabled = false;
+    btn.textContent = label;
   }
 }
 
@@ -2514,9 +2600,13 @@ function watchStatusBadge(w) {
     active: ['Active', 'ok-badge'],
     paused: ['Paused', ''],
     fulfilled: ['Found ✓', 'ok-badge'],
+    expired: ['Expired', ''],
   };
   const [label, cls] = map[w.status] || [w.status, ''];
-  return el('span', { className: 'badge ' + cls }, label);
+  const badge = el('span', { className: 'badge ' + cls }, label);
+  // List-origin watches carry a provenance badge so hand-added ones stand out.
+  if (w.source !== 'list') return badge;
+  return el('span', {}, [badge, el('span', { className: 'badge', title: w.listLabel || 'From a bestseller list' }, '📈 List')]);
 }
 
 function renderWatchlist(watches) {

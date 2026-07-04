@@ -30,6 +30,8 @@ const autowarm = require('./autowarm');
 const watchlist = require('./watchlist');
 const watcher = require('./watcher');
 const settings = require('./settings');
+const lists = require('./lists');
+const listwatcher = require('./listwatcher');
 
 const PORT = process.env.PORT || 3000;
 const app = express();
@@ -767,18 +769,45 @@ app.get('/api/status', async (_req, res) => {
       watchCheckIntervalMin: settings.getWatchIntervalMin(),
       watchMinMin: settings.MIN_WATCH_MIN,
       watchMaxMin: settings.MAX_WATCH_MIN,
+      listsEnabled: settings.getListsEnabled(),
+      listPullIntervalHours: settings.getListPullIntervalHours(),
+    },
+    lists: {
+      configured: lists.isConfigured(),
+      lastRunAt: lists.readState().lastRunAt,
+      watching: watchlist.readAll().filter((w) => w.source === 'list' && w.status === 'active').length,
     },
   });
 });
 
-// Update user-tunable settings (currently the watchlist re-check cadence).
+// Update user-tunable settings (watchlist cadence + new-release radar).
 app.post('/api/settings', (req, res) => {
   const body = req.body || {};
   const out = {};
   if (body.watchCheckIntervalMin !== undefined) {
     out.watchCheckIntervalMin = settings.setWatchIntervalMin(body.watchCheckIntervalMin);
   }
+  if (body.listsEnabled !== undefined) {
+    out.listsEnabled = settings.setListsEnabled(body.listsEnabled);
+  }
+  if (body.listPullIntervalHours !== undefined) {
+    out.listPullIntervalHours = settings.setListPullIntervalHours(body.listPullIntervalHours);
+  }
   res.json({ ok: true, settings: { watchCheckIntervalMin: settings.getWatchIntervalMin(), ...out } });
+});
+
+// --- New-release list radar (issue #33) --------------------------------------
+// Manual "Run now" for the radar: pulls the lists immediately regardless of
+// cadence. The pull itself is only NYT API calls (no forum traffic), so it's
+// safe to run on demand; acquisitions still drain politely via the watcher.
+app.post('/api/lists/run', async (_req, res) => {
+  try {
+    const summary = await listwatcher.run({ force: true });
+    res.json({ ok: true, ...summary });
+  } catch (err) {
+    console.error('List run failed:', err);
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // --- Send: notify recipients (+ optional Kindle push) -----------------------
@@ -900,6 +929,7 @@ const server = app.listen(PORT, HOST, () => {
     .finally(() => {
       autowarm.start();
       watcher.start(); // watchlist scheduler (issue #7)
+      listwatcher.start(); // new-release list radar (issue #33)
     });
 });
 

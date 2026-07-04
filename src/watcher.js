@@ -21,8 +21,14 @@ const history = require('./history');
 const settings = require('./settings');
 const downloader = require('./downloader');
 const kindle = require('./kindle');
+const booktags = require('./booktags');
+const lists = require('./lists');
 
 const TICK_MS = Number(process.env.WATCH_TICK_MS) || 300000; // wake every 5 min
+// List-origin watches never re-check faster than this, whatever the user's
+// watchlist cadence — bestseller lists refresh weekly, and dozens of radar
+// watches on a tight cadence would be impolite to the forum.
+const LIST_RECHECK_FLOOR_MS = Number(process.env.LIST_RECHECK_FLOOR_MS) || 24 * 3600 * 1000;
 // The per-watch re-check cadence is user-configurable in Settings (settings.js);
 // read it fresh each tick so changes take effect without a restart.
 
@@ -98,6 +104,10 @@ async function autoDeliver(watch, top) {
         mode: 'premium', verified: download.verified, size: download.size,
       });
     } catch { /* best effort */ }
+    // List-origin watches carry tags so the Library groups auto-acquisitions.
+    if (Array.isArray(watch.tags) && watch.tags.length && download.savePath) {
+      try { booktags.setTags(download.savePath, watch.tags); } catch { /* best effort */ }
+    }
   }
 
   // 3) Deliver to recipients: push the file to Kindle (when we have it + an
@@ -127,8 +137,10 @@ async function autoDeliver(watch, top) {
     }
   }
 
-  // 4) Always tell the operator (unless they were already emailed as a recipient).
-  const op = operatorEmail();
+  // 4) Always tell the operator (unless they were already emailed as a
+  // recipient). List-origin watches stay quiet here — their outcome lands in
+  // the radar's digest email instead of one email per book.
+  const op = watch.source === 'list' ? '' : operatorEmail();
   if (op && !emailed.has(op.toLowerCase())) {
     try {
       await notify.notify({ email: op, name: '' }, { ...book, pushedToKindle: false }, ['email']);
@@ -180,6 +192,19 @@ async function checkWatch(watch) {
         status: 'fulfilled',
       });
     } catch { /* best effort */ }
+    // Feed the radar's digest: verified acquisition vs. found-but-unverified.
+    if (watch.source === 'list') {
+      try {
+        lists.recordEvent({
+          type: delivery.downloaded ? 'added' : 'unverified',
+          title: watch.title || top.title,
+          author: watch.author || top.author,
+          list: watch.listLabel || '',
+          url: top.url || null,
+        });
+        require('./listwatcher').scheduleDigestSoon(); // lazy — avoids require cycle
+      } catch { /* best effort */ }
+    }
     console.log(
       '[watcher] match for "%s" — %s, emailed %d, kindle %d',
       watch.title || watch.author,
@@ -199,7 +224,12 @@ async function tick() {
   if (_inFlight) return; // don't stack ticks
   _inFlight = true;
   try {
-    const due = watchlist.dueWatches(watchlist.readAll(), Date.now(), settings.getWatchIntervalMs());
+    const due = watchlist.dueWatchesMixed(
+      watchlist.readAll(),
+      Date.now(),
+      settings.getWatchIntervalMs(),
+      LIST_RECHECK_FLOOR_MS
+    );
     if (!due.length) return;
     const st = await searcher.sessionStatus(); // passive — no navigation
     if (!st.ready) return; // wait for autowarm to restore the session

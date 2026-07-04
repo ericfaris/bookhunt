@@ -138,6 +138,24 @@ function dueWatches(watches, now, intervalMs) {
     .sort((x, y) => at(x) - at(y));
 }
 
+/**
+ * PURE: dueWatches, but list-origin watches (the new-release radar's) never
+ * re-check faster than `listFloorMs` no matter how tight the user's watchlist
+ * cadence is. Bestseller lists refresh weekly; a hand-added watch cadence of
+ * 15 minutes shouldn't multiply across dozens of accumulated list watches into
+ * a forum hammering. Merged result stays least-recently-checked first.
+ */
+function dueWatchesMixed(watches, now, intervalMs, listFloorMs) {
+  const all = watches || [];
+  const hand = dueWatches(all.filter((w) => w && w.source !== 'list'), now, intervalMs);
+  const listed = dueWatches(all.filter((w) => w && w.source === 'list'), now, Math.max(intervalMs, listFloorMs));
+  const at = (w) => {
+    const t = w.lastCheckedAt ? Date.parse(w.lastCheckedAt) : 0;
+    return Number.isNaN(t) ? 0 : t;
+  };
+  return [...hand, ...listed].sort((x, y) => at(x) - at(y));
+}
+
 module.exports = {
   readAll,
   add,
@@ -149,5 +167,6 @@ module.exports = {
   cleanWatchInput,
   cleanRecipientIds,
   dueWatches,
+  dueWatchesMixed,
   queryKey,
 };

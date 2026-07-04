@@ -332,6 +332,26 @@
       </section>
 
       <section class="set-section">
+        <h3>New-release radar</h3>
+        <p class="hint">Follows the NYT fiction bestseller lists and automatically watches, downloads, and shelves new entrants — with a digest email when there's news.</p>
+        <label class="set-toggle"><input id="setListsEnabled" type="checkbox" /> Watch bestseller lists</label>
+        <div class="set-cadence">
+          <label for="setListCadence">Check lists every</label>
+          <select id="setListCadence">
+            <option value="6">6 hours</option>
+            <option value="12">12 hours</option>
+            <option value="24">Daily</option>
+            <option value="168">Weekly</option>
+          </select>
+        </div>
+        <div class="set-lists-row">
+          <button id="setListsRun" class="ghost-btn" type="button">⟳ Check lists now</button>
+          <span id="setListsStatus" class="hint"></span>
+        </div>
+        <div id="setListsResult" class="set-test-result"></div>
+      </section>
+
+      <section class="set-section">
         <h3>Version</h3>
         <div id="setVersion" class="set-version">Checking…</div>
       </section>
