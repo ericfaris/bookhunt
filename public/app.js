@@ -1419,10 +1419,39 @@ function renderManageList() {
       await fetch('/api/recipients/' + r.id, { method: 'DELETE' });
       await loadRecipients();
     });
+    // Reader portal (issue #34): invite (emails their magic link), rotate the
+    // link if it leaks, and toggle their new-book emails.
+    const status = el('span', { className: 'hint recip-reader-status' },
+      r.readerToken ? (r.readerEnabled === false ? '🔕 shelf on, emails off' : '📖 shelf reader') : '');
+    const invite = el('button', { className: 'ghost-btn', type: 'button',
+      title: 'Email them their personal shelf link' }, r.readerToken ? '✉ Re-invite' : '✉ Invite');
+    invite.addEventListener('click', async () => {
+      invite.disabled = true;
+      invite.textContent = 'Sending…';
+      try {
+        const res = await fetch('/api/recipients/' + r.id + '/invite', { method: 'POST' });
+        const out = await res.json();
+        if (!res.ok) throw new Error(out.error || 'Invite failed');
+        invite.textContent = '✓ Invited';
+        await loadRecipients();
+      } catch (e) {
+        invite.disabled = false;
+        invite.textContent = '✕ ' + (e.message || 'Failed');
+      }
+    });
+    const rotate = r.readerToken
+      ? el('button', { className: 'ghost-btn', type: 'button',
+          title: 'New link — the old one stops working (use if a link leaks)' }, '♻')
+      : null;
+    if (rotate) rotate.addEventListener('click', async () => {
+      if (!window.confirm(`Give ${r.name} a new shelf link? Their old link stops working until you re-invite them.`)) return;
+      await fetch('/api/recipients/' + r.id + '/reader-token', { method: 'POST' });
+      await loadRecipients();
+    });
     ml.append(
       el('div', { className: 'manage-row' }, [
-        el('span', {}, `${r.name} · ${r.email}${r.kindleEmail ? ' · ' + r.kindleEmail : ''}`),
-        del,
+        el('span', {}, [`${r.name} · ${r.email}${r.kindleEmail ? ' · ' + r.kindleEmail : ''} `, status]),
+        el('span', { className: 'manage-actions' }, [invite, rotate, del]),
       ])
     );
   }

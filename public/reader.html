@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>Your BookHunt shelf</title>
+<style>
+  :root {
+    --bg: #f6f1e7; --surface: #fffdf8; --text: #1c2a56; --dim: #616a8c;
+    --border: #e7ddc8; --accent: #f1592a; --accent-hover: #d8481c; --good: #1f9d57;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #131a30; --surface: #1b2440; --text: #eef1fa; --dim: #9aa3c4; --border: #2b3557; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+    font-family: -apple-system, "Segoe UI", Roboto, sans-serif; }
+  .wrap { max-width: 720px; margin: 0 auto; padding: 20px 16px 60px; }
+  header { text-align: center; margin: 10px 0 22px; }
+  header .logo { font-size: 1.5rem; font-weight: 800; }
+  header .logo em { color: var(--accent); font-style: normal; }
+  header p { color: var(--dim); margin: 6px 0 0; font-size: 0.95rem; }
+  .note { background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
+    padding: 14px 16px; margin: 0 0 16px; font-size: 0.95rem; }
+  .note.warn { border-color: #c2871c; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 16px; }
+  .tile { background: var(--surface); border: 1px solid var(--border); border-radius: 14px;
+    padding: 12px; display: flex; flex-direction: column; gap: 8px; }
+  .cover { width: 100%; aspect-ratio: 2/3; object-fit: cover; border-radius: 8px;
+    background: var(--bg); box-shadow: 0 4px 14px rgba(0,0,0,0.15); }
+  .cover.ph { display: flex; align-items: center; justify-content: center; font-size: 2rem; }
+  .t { font-weight: 700; font-size: 0.9rem; line-height: 1.25; }
+  .a { color: var(--dim); font-size: 0.8rem; }
+  button.send { margin-top: auto; border: 0; border-radius: 9px; padding: 10px 8px;
+    font-size: 0.9rem; font-weight: 600; cursor: pointer;
+    background: var(--accent); color: #fff; }
+  button.send:hover:not(:disabled) { background: var(--accent-hover); }
+  button.send:disabled { opacity: 0.85; cursor: default; }
+  button.send.sent { background: var(--good); }
+  .err { color: #c0392b; font-size: 0.8rem; }
+  .center { text-align: center; padding: 40px 10px; color: var(--dim); }
+  footer { text-align: center; margin-top: 34px; font-size: 0.8rem; color: var(--dim); }
+  footer a { color: var(--dim); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="logo">Book<em>Hunt</em> 📚</div>
+    <p id="greet">Opening your shelf…</p>
+  </header>
+  <div id="banner"></div>
+  <div id="main" class="center">Loading…</div>
+  <footer id="foot" hidden>
+    Tap “Send to my Kindle” and the book arrives in your Kindle library in a few minutes.<br>
+    <a href="#" id="unsub">Stop the new-book emails</a>
+  </footer>
+</div>
+<script src="/reader/app.js"></script>
+</body>
+</html>

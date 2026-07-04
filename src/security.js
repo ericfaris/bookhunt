@@ -173,6 +173,12 @@ function cloudflareAccess() {
   }
   console.log(`[security] Cloudflare Access verification ON (team ${TEAM_DOMAIN})`);
   return async (req, res, next) => {
+    // The reader portal (issue #34) is the one deliberate hole in the CF wall:
+    // readers aren't in the Access policy, so /reader/* is bypassed at the edge
+    // (path-scoped CF bypass app) and guarded by per-recipient magic-link
+    // tokens in src/reader.js instead — scoped to "view covers + send to own
+    // Kindle", constant-time lookup, rate-limited, 404 on bad tokens.
+    if (req.path === '/reader' || req.path.startsWith('/reader/')) return next();
     const token = tokenFromHeaders(req.headers);
     if (!token) return res.status(401).json({ error: 'Unauthorized' });
     try {

@@ -32,6 +32,7 @@ const watcher = require('./watcher');
 const settings = require('./settings');
 const lists = require('./lists');
 const listwatcher = require('./listwatcher');
+const reader = require('./reader');
 
 const PORT = process.env.PORT || 3000;
 const app = express();
@@ -59,6 +60,60 @@ app.use(express.json({ limit: '64kb' }));
 // Per-IP rate limit on the API. Generous enough for normal use (searches and
 // downloads are few and slow) but caps hammering/abuse if the front gate fails.
 app.use('/api', security.rateLimiter({ windowMs: 60_000, max: 120 }));
+
+// --- Reader portal (issue #34) ----------------------------------------------
+// Magic-link book picker for recipients — the ONLY surface outside Cloudflare
+// Access (path-scoped CF bypass app at the edge; cloudflareAccess() skips it
+// origin-side). Auth = per-recipient token, resolved constant-time; invalid
+// tokens 404 so the route doesn't confirm which tokens exist. Tighter rate
+// limit than the operator API: readers browse and tap, they don't hammer.
+app.use('/reader', security.rateLimiter({ windowMs: 60_000, max: 40 }));
+
+app.get('/reader', (_req, res) => {
+  res.setHeader('Cache-Control', 'no-cache');
+  res.sendFile(path.join(__dirname, '..', 'public', 'reader.html'));
+});
+
+// The page's script must live under /reader/* too — anywhere else and the CF
+// Access wall (which readers can't pass) would block it.
+app.get('/reader/app.js', (_req, res) => {
+  res.setHeader('Cache-Control', 'no-cache');
+  res.sendFile(path.join(__dirname, '..', 'public', 'reader.js'));
+});
+
+app.get('/reader/api/books', async (req, res) => {
+  const r = reader.byToken(String(req.query.t || ''));
+  if (!r) return res.status(404).json({ error: 'Not found' });
+  try {
+    const books = await reader.booksForReader(r);
+    res.json({ name: r.name, kindleSet: !!r.kindleEmail, days: reader.RECENT_DAYS, books });
+  } catch (err) {
+    console.error('Reader books failed:', err);
+    res.status(500).json({ error: 'Could not load the shelf.' });
+  }
+});
+
+app.post('/reader/api/send', async (req, res) => {
+  const { t, id } = req.body || {};
+  const r = reader.byToken(String(t || ''));
+  if (!r) return res.status(404).json({ error: 'Not found' });
+  if (!id || typeof id !== 'string') return res.status(400).json({ error: 'Missing book id.' });
+  try {
+    const out = await reader.sendToReader(r, id);
+    res.json({ ok: true, title: out.title });
+  } catch (err) {
+    const status = err.code === 'no-kindle' ? 409 : err.code === 'gone' ? 410 : 500;
+    if (status === 500) console.error('Reader send failed:', err);
+    res.status(status).json({ error: err.message });
+  }
+});
+
+app.post('/reader/api/unsubscribe', (req, res) => {
+  const r = reader.byToken(String((req.body || {}).t || ''));
+  if (!r) return res.status(404).json({ error: 'Not found' });
+  reader.setReaderEnabled(r.id, false);
+  res.json({ ok: true });
+});
 
 // --- /warm: live browser view (noVNC) --------------------------------------
 // The container runs Chromium headed under Xvfb; x11vnc + websockify expose it
@@ -707,6 +762,32 @@ app.delete('/api/recipients/:id', (req, res) => {
   const removed = recipients.remove(req.params.id);
   if (!removed) return res.status(404).json({ error: 'Recipient not found.' });
   res.json({ ok: true });
+});
+
+// --- Reader portal management (operator side, behind CF Access) --------------
+// Invite emails the recipient their magic link (minting a token if needed and
+// re-enabling their new-book emails).
+app.post('/api/recipients/:id/invite', async (req, res) => {
+  try {
+    const r = await reader.invite(req.params.id);
+    res.json({ ok: true, link: reader.readerLink(r) });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// Rotate the token: the old link dies instantly (leaked-link kill switch).
+app.post('/api/recipients/:id/reader-token', (req, res) => {
+  const r = reader.rotateToken(req.params.id);
+  if (!r) return res.status(404).json({ error: 'Recipient not found.' });
+  res.json({ ok: true, link: reader.readerLink(r) });
+});
+
+// Toggle whether they receive new-book emails (their link keeps working).
+app.post('/api/recipients/:id/reader', (req, res) => {
+  const r = reader.setReaderEnabled(req.params.id, !!(req.body || {}).enabled);
+  if (!r) return res.status(404).json({ error: 'Recipient not found.' });
+  res.json({ ok: true, readerEnabled: r.readerEnabled });
 });
 
 // --- Recipient groups (presets) ---------------------------------------------

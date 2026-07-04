@@ -1086,6 +1086,8 @@ img.lib-cover { overflow: hidden; }
 .set-channel { font-size: 0.88rem; }
 .set-channel.on { color: var(--good); }
 .set-channel.off { color: var(--text-dim); }
+.manage-actions { display: flex; gap: 0.35rem; align-items: center; flex-shrink: 0; }
+.recip-reader-status { white-space: nowrap; }
 .set-toggle { display: flex; align-items: center; gap: 0.5rem; margin-top: 0.4rem; font-size: 0.9rem; cursor: pointer; }
 .set-toggle input { cursor: pointer; }
 .set-lists-row { display: flex; align-items: center; gap: 0.6rem; margin-top: 0.5rem; flex-wrap: wrap; }

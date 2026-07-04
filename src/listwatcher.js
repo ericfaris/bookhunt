@@ -232,6 +232,7 @@ function scheduleDigestSoon(delayMs = Number(process.env.LISTS_DIGEST_DEBOUNCE_M
     _digestTimer = null;
     try {
       await sendDigest();
+      await require('./reader').notifyNewBooks(); // readers hear about acquisitions too
     } catch (err) {
       console.warn('[lists] digest failed: %s', err.message);
     }
@@ -247,6 +248,11 @@ async function tick() {
   _inFlight = true;
   try {
     await run();
+    // Reader portal (issue #34): tell subscribed readers about newly shelved
+    // books — radar acquisitions AND manual downloads. Self-throttled per
+    // reader, so the hourly tick is a safe place to fire it.
+    const notified = await require('./reader').notifyNewBooks();
+    if (notified) console.log('[reader] new-book emails sent to %d reader(s)', notified);
   } catch (err) {
     console.warn('[lists] tick failed:', err.message);
   } finally {

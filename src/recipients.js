@@ -134,6 +134,6 @@ function removeGroup(id) {
 }
 
 module.exports = {
-  readAll, add, remove, byIds,
+  readAll, writeAll, add, remove, byIds,
   readGroups, addGroup, removeGroup, cleanGroupInput,
 };

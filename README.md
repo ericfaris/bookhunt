@@ -184,9 +184,25 @@ Cloudflare Access is the front gate, but the origin no longer trusts it blindly.
 
 > The single most important setting is `CF_ACCESS_AUD` + `CF_ACCESS_TEAM_DOMAIN`. Set them in `.env` so the origin verifies Cloudflare's signature itself — Access on its own can be bypassed if someone finds the raw tunnel hostname.
 
----
+### Reader portal — letting `/reader/*` past Access
 
-## How search works
+The reader portal (magic-link book picker, issue #34) is for people who are **not** in your Access policy — Darla, April, anyone you invite. They can't pass the Cloudflare login, so `/reader/*` must be exempted at the edge:
+
+1. **Zero Trust** → **Access** → **Applications** → **Add an application** → **Self-hosted**
+2. **Application domain**: `bookhunt.mooseflip.com` with **Path** = `reader` (this makes it a *path-scoped* app that takes precedence over the site-wide one)
+3. Add a single policy: **Action: Bypass**, **Include: Everyone**
+4. Save.
+
+That's the only manual step. The origin still guards `/reader/*` itself: `src/security.js` skips the CF JWT check for that path, and `src/reader.js` requires a valid per-recipient token instead (constant-time lookup, rate-limited, 404 on bad tokens). A reader token's entire authority is *view recent covers + send to that recipient's own Kindle* — no downloads, no settings, no other readers. If a link leaks, hit **♻** next to the recipient (in Manage recipients) to rotate their token; the old link dies immediately.
+
+Set `PUBLIC_BASE_URL` in `.env` (defaults to `https://bookhunt.mooseflip.com`) so the links in reader emails point at the right origin.
+
+### Reader portal (`/reader`) — the one deliberate hole in the wall
+
+The reader portal (issue #34) lets invited readers open a passwordless magic link and send books to their own Kindle. Readers aren't in the Access policy, so `/reader/*` must **bypass** Cloudflare Access at the edge — one manual step:
+
+1. [dash.cloudflare.com](https://dash.cloudflare.com) → **Zero Trust** → **Access** → **Applications** → **Add an application** → **Self-hosted**
+2. **Application domain**: `bookhunt.moo
 
 1. **Pass 1 — title search** (up to 5 pages of results), scoped to the eBooks forum and its subforums (`fid[]=106&sc=1`). When both title and author are given, both go into the query so it lands directly on the match. Filtered to ePUB, fuzzy-matched, deduplicated by URL.
 2. **Collection detection.** Posts with `Collection`, `Complete Works`, `&`, `Series`, or `Omnibus` in the title are crawled (max 3) and their content scanned line-by-line for a title match.
