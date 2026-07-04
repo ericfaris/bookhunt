@@ -21,6 +21,12 @@ const smtp = require('./smtp');
 
 const TICK_MS = Number(process.env.LISTS_TICK_MS) || 3600000; // hourly wake; runs when the pull is due
 
+// Politeness backstop: the Amazon/Goodreads charts churn much faster than the
+// NYT lists, so unchecked accumulation could grow into a hundred daily forum
+// searches. Above this many ACTIVE list watches, new entrants are skipped
+// (recorded in the digest) rather than watched.
+const LIST_MAX_ACTIVE = Number(process.env.LIST_MAX_ACTIVE) || 75;
+
 function operatorEmail() {
   // Same resolution as the watcher/autowarm: explicit override → CF-Access
   // email → SMTP identity.
@@ -60,53 +66,71 @@ async function run({ force = false } = {}) {
     Date.now() - Date.parse(state.lastRunAt) >= settings.getListPullIntervalMs();
   if (!due) return { skipped: 'not due yet' };
 
-  const summary = { pulled: [], seeded: [], watching: [], owned: [], expired: [], errors: [] };
+  const summary = { pulled: [], seeded: [], watching: [], owned: [], skipped: [], expired: [], errors: [] };
 
-  for (const list of lists.NYT_LISTS) {
+  // Politeness cap counter — includes watches created earlier in this run so a
+  // burst across sources can't blow past the limit.
+  let activeListWatches = watchlist.readAll().filter((w) => w.source === 'list' && w.status === 'active').length;
+
+  for (const source of lists.sources()) {
+    if (!source.configured) continue;
     let entries;
     try {
-      entries = await lists.fetchList(list.id);
+      entries = await source.fetch();
     } catch (err) {
-      console.warn('[lists] pull failed for %s: %s', list.id, err.message);
-      summary.errors.push({ list: list.label, error: err.message });
+      console.warn('[lists] pull failed for %s: %s', source.id, err.message);
+      summary.errors.push({ list: source.label, error: err.message });
       continue; // keep the old snapshot so nothing is treated as "new" next time
     }
-    summary.pulled.push({ list: list.label, count: entries.length });
+    summary.pulled.push({ list: source.label, count: entries.length });
 
-    const prev = state.snapshots[list.id];
+    const prev = state.snapshots[source.id];
     if (!prev) {
-      // First ever pull: baseline only. Acting on it would dump the whole
-      // current list into the watchlist at once.
-      summary.seeded.push(list.label);
+      // First ever pull of this source: baseline only. Acting on it would dump
+      // the whole current list into the watchlist at once.
+      summary.seeded.push(source.label);
     } else {
-      for (const entry of lists.newEntrants(prev.keys, entries)) {
+      const prevKeys = (prev.entries || []).map(lists.entryKey);
+      for (const entry of lists.newEntrants(prevKeys, entries)) {
         const key = lists.entryKey(entry);
-        if (state.seen[key]) continue; // handled via another list / earlier week
+        // The seen map is updated as we go, so a book surfacing on several
+        // sources in the SAME run is still processed exactly once.
+        if (state.seen[key]) continue;
         if (inLibrary(entry)) {
-          state.seen[key] = { at: new Date().toISOString(), list: list.label, disposition: 'owned' };
+          state.seen[key] = { at: new Date().toISOString(), list: source.label, disposition: 'owned' };
           summary.owned.push(entry.title);
+          continue;
+        }
+        if (activeListWatches >= LIST_MAX_ACTIVE) {
+          state.seen[key] = { at: new Date().toISOString(), list: source.label, disposition: 'skipped' };
+          state.pendingEvents.push({
+            at: new Date().toISOString(), type: 'skipped',
+            title: entry.title, author: entry.author, list: source.label,
+          });
+          summary.skipped.push(entry.title);
           continue;
         }
         try {
           const watch = watchlist.add({ title: entry.title, author: entry.author, sort: 'newest' });
           watchlist.update(watch.id, {
             source: 'list',
-            listLabel: list.label,
-            tags: [...lists.LIST_TAGS, list.label.startsWith('NYT') ? 'NYT Fiction' : list.label],
+            listLabel: source.label,
+            tags: [...lists.LIST_TAGS, source.tag],
           });
-          state.seen[key] = { at: new Date().toISOString(), list: list.label, disposition: 'watching' };
+          activeListWatches++;
+          state.seen[key] = { at: new Date().toISOString(), list: source.label, disposition: 'watching' };
           state.pendingEvents.push({
             at: new Date().toISOString(), type: 'watching',
-            title: entry.title, author: entry.author, list: list.label,
+            title: entry.title, author: entry.author, list: source.label,
           });
           summary.watching.push(entry.title);
         } catch (err) {
           console.warn('[lists] could not watch "%s": %s', entry.title, err.message);
-          summary.errors.push({ list: list.label, error: `${entry.title}: ${err.message}` });
+          summary.errors.push({ list: source.label, error: `${entry.title}: ${err.message}` });
         }
       }
     }
-    state.snapshots[list.id] = { pulledAt: new Date().toISOString(), keys: entries.map(lists.entryKey) };
+    state.snapshots[source.id] = { pulledAt: new Date().toISOString(), entries };
   }
 
   // Expire list watches that never matched.
@@ -130,9 +154,9 @@ async function run({ force = false } = {}) {
   }
 
   console.log(
-    '[lists] run done — %d watching, %d owned, %d expired, digest %s',
-    summary.watching.length, summary.owned.length, summary.expired.length,
-    summary.digested ? 'sent' : 'skipped'
+    '[lists] run done — %d watching, %d owned, %d skipped, %d expired, digest %s',
+    summary.watching.length, summary.owned.length, summary.skipped.length, summary.expired.length,
+    summary.digested ? 'sent' : 'not sent'
   );
   return summary;
 }
@@ -144,6 +168,7 @@ const SECTIONS = [
   { type: 'watching', head: '👀 Now watching (not on Mobilism yet)', line: (e) => `${e.title}${e.author ? ' — ' + e.author : ''} (${e.list})` },
   { type: 'unverified', head: '⚠ Found but couldn’t verify — not added', line: (e) => `${e.title}${e.author ? ' — ' + e.author : ''}` },
   { type: 'expired', head: '🕰 Stopped watching (never appeared)', line: (e) => `${e.title}${e.author ? ' — ' + e.author : ''}` },
+  { type: 'skipped', head: '⏸ Skipped — watch queue is full', line: (e) => `${e.title}${e.author ? ' — ' + e.author : ''} (${e.list})` },
 ];
 
 /** PURE: pending events → { subject, text, html } (null when nothing to say). */
@@ -169,7 +194,7 @@ function buildDigest(events) {
       evs.map((e) => `<li>${escapeHtml(s.line(e))}</li>`).join('') + '</ul>'
     );
   }
-  htmlParts.push('<p style="color:#888;font-size:12px;margin-top:20px">Sourced from the NYT fiction bestseller lists. Unwanted books are one 🗑 away in the Library.</p></div>');
+  htmlParts.push('<p style="color:#888;font-size:12px;margin-top:20px">Sourced from NYT bestseller, Amazon new-release, and Goodreads popular fiction lists. Unwanted books are one 🗑 away in the Library.</p></div>');
   return { subject, text: textParts.join('\n\n'), html: htmlParts.join('') };
 }
 

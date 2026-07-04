@@ -68,11 +68,109 @@ test('newEntrants: empty previous snapshot treats everything as new', () => {
   assert.equal(newEntrants([], week1).length, 2);
 });
 
-test('entryKey: case-insensitive identity, aligned with watchlist.queryKey', () => {
-  const { queryKey } = require('../src/watchlist');
+test('entryKey: case-insensitive identity', () => {
   const e = { title: 'Theo of Golden', author: 'Allen Levi' };
   assert.equal(entryKey(e), entryKey({ title: 'THEO OF GOLDEN', author: 'allen levi' }));
-  assert.equal(entryKey(e), queryKey(e));
+});
+
+// The dedupe the radar lives on: the same book spelled differently across
+// sources must resolve to one identity.
+test('entryKey: cross-source spellings of the same book agree', () => {
+  const nytStyle = { title: 'Whistler', author: 'Ann Patchett' };
+  assert.equal(entryKey({ title: 'Whistler: A Novel', author: 'Ann Patchett' }), entryKey(nytStyle));
+  assert.equal(entryKey({ title: 'Whistler (Deluxe Edition)', author: 'Patchett, Ann' }), entryKey(nytStyle));
+  assert.equal(entryKey({ title: 'Whistler', author: 'Ann Patchett and Someone Else' }), entryKey(nytStyle));
+  assert.notEqual(entryKey({ title: 'Whistler', author: 'Someone Different' }), entryKey(nytStyle));
+});
+
+test('entryKey: folds diacritics and punctuation', () => {
+  assert.equal(
+    entryKey({ title: 'Beartown!', author: 'Fredrik Backman' }),
+    entryKey({ title: 'Beartöwn', author: 'fredrik BACKMAN' })
+  );
+});
+
+// --- cleanTitle / authorLastName ---------------------------------------------
+
+test('cleanTitle: strips subtitles and series parentheticals', () => {
+  const { cleanTitle } = require('../src/lists');
+  assert.equal(cleanTitle('The Calamity Club: A Novel'), 'The Calamity Club');
+  assert.equal(cleanTitle('Tempting Venom: An Enemies to Lovers MM Hockey Romance (Vipers Book 3)'), 'Tempting Venom');
+  assert.equal(cleanTitle('The Exquisite Torment of Loving Your Enemy (Dearly Beloathed, #2)'), 'The Exquisite Torment of Loving Your Enemy');
+  assert.equal(cleanTitle('Whistler'), 'Whistler');
+});
+
+test('authorLastName: collaborations, suffixes, and Last-First order', () => {
+  const { authorLastName } = require('../src/lists');
+  assert.equal(authorLastName('Ann Patchett'), 'patchett');
+  assert.equal(authorLastName('Patchett, Ann'), 'patchett');
+  assert.equal(authorLastName('James Patterson and Bill Clinton'), 'patterson');
+  assert.equal(authorLastName('Sammy Davis Jr.'), 'davis');
+  assert.equal(authorLastName(''), '');
+});
+
+// --- source parsers (fixtures) --------------------------------------------------
+
+test('amazon.parse: per-item scoping pairs titles with authors', () => {
+  const { parse } = require('../src/listsources/amazon');
+  const item = (i, title, author) =>
+    `<div id="p13n-asin-index-${i}"><span class="_x_p13n-sc-css-line-clamp-1_y">${title}</span>` +
+    (author ? `<span class="_x_p13n-sc-css-line-clamp-1_y">${author}</span>` : '') + '</div>';
+  const html = item(0, 'The Calamity Club: A Novel', 'Kathryn Stockett') +
+    item(1, 'Orphan Title', '') + // author missing must not shift later pairings
+    item(2, 'Whistler: A Novel', 'Ann Patchett');
+  const out = parse(html);
+  assert.deepEqual(out, [
+    { title: 'The Calamity Club', author: 'Kathryn Stockett' },
+    { title: 'Orphan Title', author: '' },
+    { title: 'Whistler', author: 'Ann Patchett' },
+  ]);
+});
+
+test('amazon.parse: a bot page yields zero entries (fetch turns that into an error)', () => {
+  const { parse } = require('../src/listsources/amazon');
+  assert.deepEqual(parse('<html><body>Oops! Something went wrong.</body></html>'), []);
+});
+
+test('goodreads.parse: reads books + authors out of __NEXT_DATA__', () => {
+  const { parse } = require('../src/listsources/goodreads');
+  const apollo = {
+    'Contributor:1': { name: 'Christina  Lauren' },
+    'Book:11': { titleComplete: 'The Romance Revival', primaryContributorEdge: { node: { __ref: 'Contributor:1' } } },
+    'Book:12': { titleComplete: 'Solo Story (Series, #2)' }, // no contributor
+    'Query': {},
+  };
+  const html = `<script id="__NEXT_DATA__" type="application/json">${JSON.stringify({ props: { pageProps: { apolloState: apollo } } })}</script>`;
+  assert.deepEqual(parse(html), [
+    { title: 'The Romance Revival', author: 'Christina Lauren' },
+    { title: 'Solo Story', author: '' },
+  ]);
+});
+
+test('goodreads.parse: throws on a page without __NEXT_DATA__', () => {
+  const { parse } = require('../src/listsources/goodreads');
+  assert.throws(() => parse('<html>redesigned</html>'), /markup change/);
+});
+
+// --- state migration (v1 → v2) ---------------------------------------------------
+
+test('migrateState: v1 key-array snapshots and seen map survive the key-scheme change', () => {
+  const { migrateState } = require('../src/lists');
+  const v1 = {
+    snapshots: { 'hardcover-fiction': { pulledAt: 'T', keys: ['theo of golden|allen levi'] } },
+    seen: { 'theo of golden|allen levi': { at: 'T', disposition: 'watching' } },
+    pendingEvents: [],
+    lastRunAt: 'T',
+  };
+  const v2 = migrateState(v1);
+  assert.equal(v2.v, 2);
+  const entries = v2.snapshots['hardcover-fiction'].entries;
+  assert.deepEqual(entries, [{ title: 'theo of golden', author: 'allen levi' }]);
+  // The migrated snapshot must key identically to a fresh pull of the same book,
+  // or migration itself would flood the watchlist with "new" entrants.
+  assert.equal(entryKey(entries[0]), entryKey({ title: 'Theo of Golden', author: 'Allen Levi' }));
+  assert.ok(v2.seen[entryKey({ title: 'Theo of Golden', author: 'Allen Levi' })]);
+  assert.equal(migrateState(v2), v2, 'already-migrated state passes through');
 });
 
 // --- expiry ---------------------------------------------------------------------

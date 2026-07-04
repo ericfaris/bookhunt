@@ -1,28 +1,32 @@
 'use strict';
 
-// New-release list radar (issue #33): pull fiction bestseller lists on a
-// schedule, diff them against the previous pull, and surface only the NEW
-// entrants — the listwatcher turns those into watchlist watches that the
-// existing watcher acquires autonomously. State (list snapshots, which books
-// we've already handled, and pending digest events) lives in lists.json
+// New-release list radar (issue #33): pull fiction bestseller/new-release
+// lists on a schedule, diff them against the previous pull, and surface only
+// the NEW entrants — the listwatcher turns those into watchlist watches that
+// the existing watcher acquires autonomously. State (list snapshots, which
+// books we've already handled, and pending digest events) lives in lists.json
 // (gitignored, bind-mounted in Docker), same posture as watchlist.json.
 //
-// Phase 1 source: the NYT Books API (official, free key via NYT_API_KEY).
-// Lists refresh weekly, so the diff is what makes the schedule safe to run
-// daily: an unchanged list yields no entrants, no watches, no email.
-// The pure helpers (titleCase, normalizeEntry, entryKey, newEntrants,
-// expiredListWatches) are exported for unit testing without the network.
+// Sources are pluggable modules under src/listsources/ (same pattern as
+// notify channels): NYT Books API (Phase 1 anchor), plus scraped Amazon and
+// Goodreads charts (Phase 2) — each breaks independently. Lists refresh
+// weekly-ish, so the diff is what makes the schedule safe to run daily: an
+// unchanged list yields no entrants, no watches, no email.
+//
+// DEDUPE: the same book appears across sources spelled differently
+// ("WHISTLER" on NYT, "Whistler: A Novel" on Amazon), so identity is
+// entryKey = cleaned title + first author's last name. The `seen` map keyed
+// this way guarantees a book is processed once, ever, across all sources.
 
 const fs = require('fs');
 const path = require('path');
 
-const FILE = path.join(__dirname, '..', 'lists.json');
+const util = require('./listsources/util');
+const nyt = require('./listsources/nyt');
+const amazon = require('./listsources/amazon');
+const goodreads = require('./listsources/goodreads');
 
-// The fiction lists we follow. `id` is the NYT list name in their URL scheme.
-const NYT_LISTS = [
-  { id: 'combined-print-and-e-book-fiction', label: 'NYT Combined Print & E-Book Fiction' },
-  { id: 'hardcover-fiction', label: 'NYT Hardcover Fiction' },
-];
+const FILE = path.join(__dirname, '..', 'lists.json');
 
 // A list book that never appears on Mobilism shouldn't be watched forever.
 const LIST_WATCH_MAX_AGE_MS = Number(process.env.LIST_WATCH_MAX_AGE_MS) || 56 * 24 * 3600 * 1000; // 8 weeks
@@ -30,39 +34,31 @@ const LIST_WATCH_MAX_AGE_MS = Number(process.env.LIST_WATCH_MAX_AGE_MS) || 56 * 
 // Tags stamped onto auto-acquired books so the Library's tag chips group them.
 const LIST_TAGS = ['New release'];
 
+/** Every registered source, in pull order: { id, label, tag, configured, fetch }. */
+function sources() {
+  return [...nyt.sources(), ...amazon.sources(), ...goodreads.sources()];
+}
+
 function isConfigured() {
-  return !!process.env.NYT_API_KEY;
+  return sources().some((s) => s.configured);
 }
 
 // --- pure helpers ------------------------------------------------------------
 
-/** PURE: NYT titles arrive ALL-CAPS ("THEO OF GOLDEN") — title-case them so
- *  searches, emails, and the Library read naturally. Small connector words stay
- *  lowercase mid-title; hyphenated parts are cased per segment. */
-const SMALL_WORDS = new Set(['a', 'an', 'and', 'as', 'at', 'but', 'by', 'for', 'in', 'nor', 'of', 'on', 'or', 'so', 'the', 'to', 'up', 'yet']);
-function titleCase(s) {
-  const words = String(s || '').trim().toLowerCase().split(/\s+/);
-  // Capitalize at word start and after hyphens — NOT after apostrophes, which
-  // would mangle possessives ("Hitchhiker'S"). O'Brien-style names lose out,
-  // but the search is case-insensitive so only display is affected.
-  const cap = (w) => w.replace(/(^|-)(\p{L})/gu, (m, sep, ch) => sep + ch.toUpperCase());
-  return words
-    .map((w, i) => (i > 0 && i < words.length - 1 && SMALL_WORDS.has(w) ? w : cap(w)))
-    .join(' ');
-}
+const { titleCase, cleanTitle, authorLastName } = util;
 
-/** PURE: one NYT book payload → the {title, author} shape the search pipeline
- *  wants. Returns null for junk rows (no title). */
-function normalizeEntry(book) {
-  const title = titleCase((book && book.title) || '');
-  const author = String((book && book.author) || '').trim();
-  return title ? { title, author } : null;
-}
-
-/** PURE: case-insensitive identity of an entry — same shape as
- *  watchlist.queryKey so dedupe agrees across both stores. */
+/** PURE: cross-source identity of an entry. Title is cleaned (subtitle/series
+ *  noise stripped), diacritics folded, punctuation dropped; author reduces to
+ *  the first author's last name so byline variations agree. */
 function entryKey(e) {
-  return `${(e.title || '').toLowerCase()}|${(e.author || '').toLowerCase()}`;
+  const t = cleanTitle((e && e.title) || '')
+    .toLowerCase()
+    .normalize('NFKD')
+    .replace(/\p{M}/gu, '')
+    .replace(/[^\p{L}\p{N}\s]/gu, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return `${t}|${authorLastName((e && e.author) || '')}`;
 }
 
 /** PURE: entries in `next` whose key wasn't in the previous snapshot. */
@@ -81,19 +77,42 @@ function expiredListWatches(watches, now, maxAgeMs = LIST_WATCH_MAX_AGE_MS) {
 }
 
 // --- state -------------------------------------------------------------------
-// { snapshots: { <listId>: { pulledAt, keys[] } },
+// { v: 2,
+//   snapshots: { <sourceId>: { pulledAt, entries: [{title, author}] } },
 //   seen: { <entryKey>: { at, list, disposition } },   // handled once, ever
 //   pendingEvents: [ { type, title, author, list, url, at } ],
 //   lastRunAt }
+
+/** PURE: v1 state (snapshot key arrays "title|author", seen keyed the same)
+ *  → v2 (snapshots store entries; keys derive from entryKey so the key scheme
+ *  can evolve without a re-baseline flood). */
+function migrateState(state) {
+  if (!state || state.v >= 2) return state;
+  const splitKey = (k) => {
+    const i = String(k).lastIndexOf('|');
+    return { title: String(k).slice(0, i), author: String(k).slice(i + 1) };
+  };
+  const snapshots = {};
+  for (const [id, snap] of Object.entries(state.snapshots || {})) {
+    snapshots[id] = snap && Array.isArray(snap.keys)
+      ? { pulledAt: snap.pulledAt, entries: snap.keys.map(splitKey) }
+      : snap;
+  }
+  const seen = {};
+  for (const [k, v] of Object.entries(state.seen || {})) {
+    seen[entryKey(splitKey(k))] = v;
+  }
+  return { ...state, v: 2, snapshots, seen };
+}
 
 function readState() {
   try {
     const data = JSON.parse(fs.readFileSync(FILE, 'utf8'));
     if (data && typeof data === 'object' && !Array.isArray(data)) {
-      return { snapshots: {}, seen: {}, pendingEvents: [], lastRunAt: null, ...data };
+      return migrateState({ snapshots: {}, seen: {}, pendingEvents: [], lastRunAt: null, ...data });
     }
   } catch { /* fresh state */ }
-  return { snapshots: {}, seen: {}, pendingEvents: [], lastRunAt: null };
+  return { v: 2, snapshots: {}, seen: {}, pendingEvents: [], lastRunAt: null };
 }
 
 // Atomic-with-fallback write (atomic rename can fail on Docker bind mounts).
@@ -126,32 +145,23 @@ function drainEvents() {
   return events;
 }
 
-// --- NYT fetch -----------------------------------------------------------------
-
-async function fetchList(listId) {
-  const url = `https://api.nytimes.com/svc/books/v3/lists/current/${encodeURIComponent(listId)}.json?api-key=${encodeURIComponent(process.env.NYT_API_KEY || '')}`;
-  const res = await fetch(url, { signal: AbortSignal.timeout(30000) });
-  if (!res.ok) throw new Error(`NYT API responded ${res.status} for ${listId}`);
-  const data = await res.json();
-  const books = (data && data.results && data.results.books) || [];
-  return books.map(normalizeEntry).filter(Boolean);
-}
-
 module.exports = {
-  NYT_LISTS,
   LIST_TAGS,
   LIST_WATCH_MAX_AGE_MS,
+  sources,
   isConfigured,
-  fetchList,
   readState,
   writeState,
   recordEvent,
   drainEvents,
   // exported for unit tests
   titleCase,
-  normalizeEntry,
+  cleanTitle,
+  authorLastName,
   entryKey,
   newEntrants,
   expiredListWatches,
+  migrateState,
+  normalizeEntry: nyt.normalizeEntry,
   FILE,
 };
