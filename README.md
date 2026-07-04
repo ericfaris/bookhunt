@@ -160,6 +160,22 @@ cloudflared tunnel route dns youtube-rss bookhunt.mooseflip.com
 sudo systemctl restart cloudflared
 ```
 
+### Cloudflare API token (for API-driven changes)
+
+The tunnel cert at `~/.cloudflared/cert.pem` is scoped to **Tunnel + DNS only** — it cannot manage Cloudflare Access apps (verified: the Access API rejects it). For API-driven work on Access, DNS, or tunnels, a standing scoped token lives outside the repo at:
+
+```
+~/.config/cloudflare/mooseflip.token      # mode 600, gitignored by virtue of living outside any repo
+```
+
+Scopes granted on the **mooseflip** account (`13887f102c0b8baa1f9b10450c4550f0`, zone `e0b2d5fd3686b6bf2ad68341dfbc3632`): **Cloudflare Tunnel → Edit**, **DNS → Edit**, **Access: Apps and Policies → Edit**. Use it as `Authorization: Bearer $(cat ~/.config/cloudflare/mooseflip.token)`. Revoke/rotate at dash.cloudflare.com → My Profile → API Tokens.
+
+> To (re)create the file without the token touching a shell history or a chat transcript, run this in a **real terminal** (not via a chat `!` prefix):
+> ```bash
+> mkdir -p ~/.config/cloudflare && umask 077
+> read -rs CFT && printf '%s' "$CFT" > ~/.config/cloudflare/mooseflip.token; unset CFT
+> ```
+
 ### Securing with Cloudflare Access
 
 The app has no user accounts of its own — Cloudflare Access is the front door. To restrict access to your email only, add a Cloudflare Access application:
