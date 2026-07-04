@@ -402,30 +402,155 @@ async function runPremiumDownload(topicUrl, onProgress = () => {}, targetTitle) 
 }
 
 /**
+ * Rank a saved download by how convincingly it is the wanted book:
+ *   3 → verified ePUB whose embedded title doesn't contradict the target (accepted)
+ *   2 → verified ePUB but the embedded title is clearly a DIFFERENT book
+ *   1 → saved but failed the ePUB structure check
+ *   0 → nothing saved
+ * `titleMatch !== false` (true or null) counts as acceptable, matching how the
+ * UI and watcher treat a missing embedded title.
+ */
+function downloadRank(saved) {
+  if (!saved) return 0;
+  if (saved.verified && saved.titleMatch !== false) return 3;
+  if (saved.verified) return 2;
+  return 1;
+}
+
+/**
  * Mirror orchestration — separated from Playwright so it can be unit-tested.
- * Tries each link via `attempt(link)`, STOPS at the first that returns a saved
- * file, collects failures in `errors`, and lets a fatal (account-level) error
- * abort the whole run. `attempt` resolves to { filename, savePath, verified,
- * size } on success, or throws on failure (set err.fatal = true to abort).
+ * Tries each link via `attempt(link)` until one yields a download that PASSES
+ * VERIFICATION (a valid ePUB whose embedded title doesn't contradict the
+ * target — downloadRank 3). A mirror that merely saves a file is not enough:
+ * a save that fails the structure check or embeds the wrong book's title is
+ * kept only as a best-so-far fallback while the remaining mirrors are tried,
+ * so one bad mirror can't mask a correct later one. Superseded fallback files
+ * are deleted from disk and recorded in `errors`; if no mirror verifies, the
+ * best fallback is still returned (the caller/UI flags it as unverified).
+ * Failures land in `errors`, and a fatal (account-level) error aborts the run.
+ * `attempt` resolves to { filename, savePath, verified, titleMatch, size } on
+ * success, or throws on failure (set err.fatal = true to abort).
  * `onProgress` (optional) is notified as each mirror is tried / fails.
  */
 async function runMirrors(links, attempt, onProgress = () => {}) {
-  const downloads = [];
   const errors = [];
+  let fallback = null; // best rejected save so far: { entry, rank, reason }
+  const discard = (entry, reason) => {
+    if (entry.savePath) { try { fs.unlinkSync(entry.savePath); } catch { /* best effort */ } }
+    errors.push({ url: entry.url, error: reason });
+  };
   for (let i = 0; i < links.length; i++) {
     const link = links[i];
     onProgress({ step: 'mirror', index: i + 1, total: links.length, host: link.host });
     try {
       const saved = await attempt(link);
-      downloads.push({ ...saved, url: link.url, timestamp: new Date().toISOString() });
-      break; // mirrors: one good download is enough
+      const entry = { ...saved, url: link.url, timestamp: new Date().toISOString() };
+      const rank = downloadRank(saved);
+      if (rank >= 3) {
+        if (fallback) discard(fallback.entry, fallback.reason);
+        return { downloads: [entry], errors };
+      }
+      // Saved, but it isn't (verifiably) the right book. Report it, keep the
+      // best such file as a fallback, and keep trying the remaining mirrors.
+      const reason = saved.verified === false
+        ? 'Saved a file that failed the ePUB check — tried the next mirror'
+        : `Saved an ePUB whose embedded title (“${saved.embeddedTitle || '?'}”) is a different book — tried the next mirror`;
+      onProgress({
+        step: 'mirror-mismatch', host: link.host, index: i + 1, total: links.length,
+        verified: !!saved.verified, embeddedTitle: saved.embeddedTitle,
+      });
+      if (!fallback || rank > fallback.rank) {
+        if (fallback) discard(fallback.entry, fallback.reason);
+        fallback = { entry, rank, reason };
+      } else {
+        discard(entry, reason);
+      }
     } catch (err) {
-      if (err.fatal) throw err; // account-level — abort remaining mirrors
+      if (err.fatal) {
+        // Account-level — abort remaining mirrors; don't leave an orphaned
+        // rejected file behind.
+        if (fallback && fallback.entry.savePath) { try { fs.unlinkSync(fallback.entry.savePath); } catch { /* best effort */ } }
+        throw err;
+      }
       onProgress({ step: 'mirror-failed', host: link.host, error: err.message });
       errors.push({ url: link.url, error: err.message });
     }
   }
-  return { downloads, errors };
+  return { downloads: fallback ? [fallback.entry] : [], errors };
+}
+
+/**
+ * Candidate-post orchestration (batch mode): when a search entry matched
+ * SEVERAL forum posts, try each post in order until one yields a download that
+ * passes verification (downloadRank 3 — a valid ePUB that isn't verifiably a
+ * different book). `attempt(candidate, index)` runs the full premium download
+ * for one post and resolves to its { downloads, errors, title, description }.
+ * A post whose best download fails verification is kept as a best-so-far
+ * fallback (an inferior rival's file is deleted from disk); a post that throws
+ * non-fatally is recorded and skipped. Fatal / needWarm errors abort the run —
+ * they're account/session-level, so no other post could succeed either.
+ *
+ * Returns { result, errors, tried } where `result` is the accepted (or best-
+ * fallback) download result — null when nothing was tried — and `errors`
+ * aggregates every candidate's mirror errors plus candidate-level failures.
+ * Throws the last candidate error when EVERY candidate threw.
+ */
+async function runCandidates(candidates, attempt, onProgress = () => {}) {
+  const list = Array.isArray(candidates) ? candidates : [];
+  const errors = [];
+  let best = null; // { result, rank, url }
+  let lastError = null;
+  let tried = 0;
+  const discardFiles = (result) => {
+    for (const d of (result && result.downloads) || []) {
+      if (d.savePath) { try { fs.unlinkSync(d.savePath); } catch { /* best effort */ } }
+    }
+  };
+  for (let i = 0; i < list.length; i++) {
+    const cand = list[i];
+    tried++;
+    // Only announce candidates when there's actually a list to walk — a plain
+    // single-post download shouldn't grow a new progress step.
+    if (list.length > 1) {
+      onProgress({ step: 'candidate', index: i + 1, total: list.length, title: cand.title || '', url: cand.url });
+    }
+    let result;
+    try {
+      result = await attempt(cand, i);
+    } catch (err) {
+      if (err.fatal || err.needWarm) {
+        if (best) discardFiles(best.result);
+        throw err;
+      }
+      lastError = err;
+      errors.push({ url: cand.url, error: err.message });
+      onProgress({ step: 'candidate-failed', index: i + 1, total: list.length, error: err.message });
+      continue;
+    }
+    errors.push(...((result && result.errors) || []));
+    const downloadsOf = (r) => ((r && r.downloads) || []);
+    const rank = downloadRank(downloadsOf(result)[0]);
+    if (!best || rank > best.rank) {
+      if (best) {
+        if (downloadsOf(best.result).length) {
+          errors.push({ url: best.url, error: 'Download did not verify as the right book — a later match replaced it' });
+        }
+        discardFiles(best.result);
+      }
+      best = { result, rank, url: cand.url };
+    } else {
+      if (downloadsOf(result).length) {
+        errors.push({ url: cand.url, error: 'Download did not verify as the right book — kept the earlier match' });
+      }
+      discardFiles(result);
+    }
+    if (rank >= 3) break; // verified the right book — stop looking
+  }
+  if (!best) {
+    if (lastError) throw lastError; // every candidate failed outright
+    return { result: null, errors, tried };
+  }
+  return { result: best.result, errors, tried };
 }
 
 /**
@@ -667,6 +792,8 @@ module.exports = {
   ensurePremiumLogin,
   assertAccountActive,
   runMirrors,
+  runCandidates,
+  downloadRank,
   makeAbbr,
   sectionMatchesTitle,
   selectPremiumLinks,

@@ -353,13 +353,31 @@ app.post('/api/premium/creds', (req, res) => {
 // stays a normal 401 (the client checks /api/premium/status first); everything
 // after the stream opens — including needWarm and fatal errors — is delivered as
 // an SSE `error` event, since the HTTP status is already committed.
+// Bound how many candidate posts one download request may walk (batch mode
+// sends every match for an entry) — each is a full scrape, so cap the work.
+const MAX_DOWNLOAD_CANDIDATES = 10;
+
 app.post('/api/download', async (req, res) => {
-  const { url, title, searchedTitle, author, cover } = req.body || {};
+  const { url, title, searchedTitle, author, cover, candidates } = req.body || {};
   if (!url) return res.status(400).json({ error: 'Missing post url.' });
   // The topic URL is navigated to in the authenticated browser session, so only
   // allow forum (mobilism.org) http(s) URLs — never an attacker-chosen origin.
   if (!isForumUrl(url)) {
     return res.status(400).json({ error: 'Refusing that URL — must be a Mobilism forum link.' });
+  }
+  // Optional fallback candidates (batch mode): the OTHER search matches for the
+  // same entry, tried in order when a post yields no verified, title-matching
+  // download. Each is navigated in the same authenticated session, so every one
+  // gets the same forum-only guard as the primary URL.
+  const posts = [{ url, title: typeof title === 'string' ? title : '' }];
+  for (const c of Array.isArray(candidates) ? candidates : []) {
+    const cUrl = c && typeof c.url === 'string' ? c.url : '';
+    if (!cUrl || posts.some((p) => p.url === cUrl)) continue;
+    if (!isForumUrl(cUrl)) {
+      return res.status(400).json({ error: 'Refusing a candidate URL — must be a Mobilism forum link.' });
+    }
+    posts.push({ url: cUrl, title: typeof c.title === 'string' ? c.title.slice(0, 300) : '' });
+    if (posts.length >= MAX_DOWNLOAD_CANDIDATES) break;
   }
   if (!downloader.hasPremiumCreds()) {
     return res.status(401).json({ error: 'Premium credentials required.', needCreds: true });
@@ -374,21 +392,30 @@ app.post('/api/download', async (req, res) => {
   const send = (event) => res.write(`data: ${JSON.stringify(event)}\n\n`);
 
   try {
-    const result = await downloader.premiumDownload(url, send, searchedTitle || title);
+    // Walk the candidate posts until one yields a VERIFIED, title-matching
+    // download (runCandidates keeps the best fallback when none verifies).
+    // Progress events — including per-candidate 'candidate' frames — stream
+    // straight through to the client.
+    const { result, errors } = await downloader.runCandidates(
+      posts,
+      (cand) => downloader.premiumDownload(cand.url, send, searchedTitle || title),
+      send
+    );
+    const downloads = (result && result.downloads) || [];
     // The cover passed from the client is scraped from the forum post's first
     // image, which is unreliable — for a multi-book set post it's a DIFFERENT
     // book (the bug that put "The Dead Romantics" on "The Someday Garden"). Prefer
     // a title+author-verified catalog cover (gated + disk-cached); fall back to
     // the scraped one only when the catalog has nothing.
-    const bookTitle = searchedTitle || title || result.title;
+    const bookTitle = searchedTitle || title || (result && result.title);
     let resolvedCover = cover || null;
     try {
       const catalogCover = await covers.resolveCover({ title: bookTitle, author });
       if (catalogCover) resolvedCover = catalogCover;
     } catch { /* keep the scraped cover */ }
-    for (const d of result.downloads) {
+    for (const d of downloads) {
       const stored = history.logDownload({
-        title: searchedTitle || title || result.title,
+        title: searchedTitle || title || (result && result.title),
         author: author || '',
         cover: resolvedCover,
         filename: d.filename,
@@ -400,7 +427,13 @@ app.post('/api/download', async (req, res) => {
       });
       d.id = stored.id; // safe handle the client passes back to /api/send
     }
-    send({ step: 'done', downloads: result.downloads, errors: result.errors, title: result.title, description: result.description || '' });
+    send({
+      step: 'done',
+      downloads,
+      errors,
+      title: (result && result.title) || title || '',
+      description: (result && result.description) || '',
+    });
   } catch (err) {
     console.error('Download failed:', err.detail || err); // full text kept server-side
     const info = messages.classifyError(err, { needWarm: !!err.needWarm });

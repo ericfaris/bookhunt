@@ -1160,6 +1160,14 @@ function handleDownloadEvent(ev, result) {
       stopFetchTimer();
       setStep('fetch', 'fail', `${ev.host || 'mirror'}: ${ev.error}`);
       break;
+    case 'mirror-mismatch':
+      // A file was saved but failed verification — the server is moving on to
+      // the next mirror, so show why rather than leaving the ✓/⚠ ambiguous.
+      stopFetchTimer();
+      setStep('verify', 'warn', ev.verified
+        ? `Got “${ev.embeddedTitle || '?'}” — wrong book, trying the next mirror…`
+        : 'File failed the ePUB check — trying the next mirror…');
+      break;
     // Giving Thanks (issue #25) — best-effort, never a hard failure.
     case 'thanking':
       setStep('thank', 'active', 'Clicking “Thank You”…');
@@ -2978,11 +2986,17 @@ function setNote(note, kind, text) {
 
 // Drives one book through /api/download and reflects progress on its row. On
 // success it stamps the row's downloadId and reveals a per-book "Send" button.
+// When the entry matched several posts, ALL of them ride along as fallback
+// candidates (chosen one first) so the server keeps looking — and verifying —
+// until one post yields the right book, instead of giving up on the first.
 async function downloadOneBatch(r, chosen, note) {
+  const fallbacks = (r.candidates || [])
+    .filter((c) => c !== chosen && c.premium && c.url)
+    .map((c) => ({ url: c.url, title: c.title }));
   const res = await fetch('/api/download', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ url: chosen.url, title: chosen.title, searchedTitle: r.entry.title }),
+    body: JSON.stringify({ url: chosen.url, title: chosen.title, searchedTitle: r.entry.title, candidates: fallbacks }),
   });
   if (res.status === 401) {
     const data = await res.json().catch(() => ({}));
@@ -2997,9 +3011,12 @@ async function downloadOneBatch(r, chosen, note) {
   let finished = false;
   await consumeSSE(res, (ev) => {
     switch (ev.step) {
+      case 'candidate': setNote(note, 'working', `⏳ Match ${ev.index}/${ev.total}${ev.title ? ' · ' + ev.title : ''}`); break;
+      case 'candidate-failed': setNote(note, 'working', `⏳ Match ${ev.index}/${ev.total} failed — trying the next…`); break;
       case 'reading-post': setNote(note, 'working', '⏳ Reading post…'); break;
       case 'mirrors-found': setNote(note, 'working', `⏳ ${ev.total} mirror${ev.total === 1 ? '' : 's'} found`); break;
       case 'mirror': setNote(note, 'working', `⏳ Mirror ${ev.index}/${ev.total}${ev.host ? ' · ' + ev.host : ''}`); break;
+      case 'mirror-mismatch': setNote(note, 'working', '⏳ That file wasn’t the right book — trying the next mirror…'); break;
       case 'downloading': setNote(note, 'working', `⏳ Downloading${ev.host ? ' from ' + ev.host : ''}…`); break;
       case 'verifying': setNote(note, 'working', '⏳ Verifying the ePUB…'); break;
       case 'done': {
