@@ -245,6 +245,10 @@ function start() {
   // First tick shortly after boot so a restart doesn't postpone a due pull.
   const boot = setTimeout(tick, 15000);
   if (boot.unref) boot.unref();
+  // The digest debounce timer is in-memory: a restart between an acquisition
+  // and its flush would silently park the news until the next daily run. Flush
+  // any events that survived the restart soon after boot instead.
+  if ((lists.readState().pendingEvents || []).length) scheduleDigestSoon(120000);
   console.log(
     `[lists] new-release radar on — pull every ${settings.getListPullIntervalHours()}h (configurable in Settings)`
   );
