@@ -176,19 +176,42 @@ async function booksForReader(recipient) {
 
 // --- sending ---------------------------------------------------------------------
 
+// Per-reader send throttle: bounds what a leaked link can do to its own
+// owner's Kindle (the only thing it CAN do). Generous for a human picking
+// books, hostile to a script. In-memory — resets on restart, which is fine
+// for an abuse bound.
+const SEND_LIMIT = Number(process.env.READER_SEND_LIMIT) || 15;
+const SEND_WINDOW_MS = Number(process.env.READER_SEND_WINDOW_MS) || 3600000; // per hour
+const _sendLog = new Map(); // recipientId -> [timestamps]
+
+/** PURE-ish (injectable now): record + check one send against the throttle. */
+function sendAllowed(recipientId, now = Date.now(), log = _sendLog) {
+  const cutoff = now - SEND_WINDOW_MS;
+  const times = (log.get(recipientId) || []).filter((t) => t > cutoff);
+  if (times.length >= SEND_LIMIT) { log.set(recipientId, times); return false; }
+  times.push(now);
+  log.set(recipientId, times);
+  return true;
+}
+
 /**
  * Push one book to the reader's own Kindle. The download entry is resolved
- * server-side from the id (never a client path), must live inside
- * DOWNLOAD_PATH, and the destination is ALWAYS the recipient's stored Kindle
- * address — the token cannot aim a send anywhere else.
+ * server-side from the id (never a client path), must be a VERIFIED download
+ * living inside DOWNLOAD_PATH, and the destination is ALWAYS the recipient's
+ * stored Kindle address — the token cannot aim a send anywhere else.
  */
 async function sendToReader(recipient, downloadId) {
   const downloader = require('./downloader'); // lazy: avoids cycle via watcher
   if (!recipient.kindleEmail) {
     throw Object.assign(new Error('No Kindle address is saved for you yet — ask Eric to add it.'), { code: 'no-kindle' });
   }
+  if (!sendAllowed(recipient.id)) {
+    throw Object.assign(new Error('That’s a lot of books at once! Give it an hour and try again.'), { code: 'throttled' });
+  }
   const entry = history.readAll().find((e) => e.id === downloadId && e.type === 'download');
-  if (!entry || !entry.savePath) throw Object.assign(new Error('That book is no longer available.'), { code: 'gone' });
+  if (!entry || !entry.savePath || !entry.verified) {
+    throw Object.assign(new Error('That book is no longer available.'), { code: 'gone' });
+  }
   if (!downloader.isSafeEpubPath(entry.savePath, downloader.DOWNLOAD_PATH)) {
     throw Object.assign(new Error('That book is no longer available.'), { code: 'gone' });
   }
@@ -445,6 +468,7 @@ module.exports = {
   // exported for unit tests
   recentBooks,
   sentTo,
+  sendAllowed,
   buildNewBooksEmail,
   buildInviteEmail,
   newToken,

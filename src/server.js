@@ -69,6 +69,13 @@ app.use('/api', security.rateLimiter({ windowMs: 60_000, max: 120 }));
 // limit than the operator API: readers browse and tap, they don't hammer.
 app.use('/reader', security.rateLimiter({ windowMs: 60_000, max: 40 }));
 
+// Reader API responses are personal (name, books, sent-state) and the URLs
+// carry the token — never let a browser or intermediary cache them.
+app.use('/reader/api', (_req, res, next) => {
+  res.setHeader('Cache-Control', 'no-store');
+  next();
+});
+
 app.get('/reader', (_req, res) => {
   res.setHeader('Cache-Control', 'no-cache');
   res.sendFile(path.join(__dirname, '..', 'public', 'reader.html'));
@@ -119,7 +126,7 @@ app.post('/reader/api/send', async (req, res) => {
     const out = await reader.sendToReader(r, id);
     res.json({ ok: true, title: out.title });
   } catch (err) {
-    const status = err.code === 'no-kindle' ? 409 : err.code === 'gone' ? 410 : 500;
+    const status = err.code === 'no-kindle' ? 409 : err.code === 'gone' ? 410 : err.code === 'throttled' ? 429 : 500;
     if (status === 500) console.error('Reader send failed:', err);
     res.status(status).json({ error: err.message });
   }

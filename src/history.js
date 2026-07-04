@@ -50,9 +50,14 @@ function logSearch({ title, author, sort, resultCount }) {
 }
 
 /** Record a completed download. `author`/`cover` (when known from the search
- *  result) ride along so the Library can show a cover without a fresh lookup. */
+ *  result) ride along so the Library can show a cover without a fresh lookup.
+ *  The title is cleaned at ingest (forum-topic artifacts like "(.ePUB)" /
+ *  "… by Author" / leading "- " stripped) so the Library, reader shelf, and
+ *  emails never show scraper noise. */
 function logDownload({ title, author, filename, savePath, url, mode, verified, size, cover }) {
-  return add({ type: 'download', title, author, filename, savePath, url, mode, verified, size, cover });
+  const titles = require('./titles');
+  const clean = titles.displayTitle({ title, author, filename });
+  return add({ type: 'download', title: clean, author, filename, savePath, url, mode, verified, size, cover });
 }
 
 /**

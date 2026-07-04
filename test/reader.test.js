@@ -38,6 +38,20 @@ test('sentTo: matches the app’s to-as-names convention, case-insensitively', (
   assert.equal(sentTo({ sends: [] }, { name: 'Darla' }), false);
 });
 
+// --- send throttle (leaked-link blast-radius bound) --------------------------------
+
+test('sendAllowed: caps sends per reader per window, recovers after it', () => {
+  const { sendAllowed } = require('../src/reader');
+  const log = new Map();
+  const t0 = Date.parse('2026-07-04T12:00:00Z');
+  for (let i = 0; i < 15; i++) {
+    assert.equal(sendAllowed('darla', t0 + i * 1000, log), true, `send ${i + 1} allowed`);
+  }
+  assert.equal(sendAllowed('darla', t0 + 16000, log), false, '16th send throttled');
+  assert.equal(sendAllowed('april', t0 + 16000, log), true, 'other readers unaffected');
+  assert.equal(sendAllowed('darla', t0 + 3700000, log), true, 'window expiry frees the reader');
+});
+
 // --- tokens & links --------------------------------------------------------------
 
 test('newToken: long, urlsafe, unique', () => {

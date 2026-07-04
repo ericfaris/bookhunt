@@ -104,8 +104,20 @@
     } catch { /* ignore */ }
   };
 
-  // Arriving from the email's "Stop these emails" link.
-  if (qs.get('unsub') === '1') $('#unsub').click();
+  // Arriving from the email's "Stop these emails" link: ask, don't act.
+  // Auto-firing the unsubscribe here would let email link-scanners (which
+  // sometimes execute JS) silently unsubscribe readers just by prefetching.
+  if (qs.get('unsub') === '1') {
+    const yes = el('button', { className: 'add', type: 'button', textContent: 'Yes, stop the emails' });
+    const no = el('button', { className: 'plain', type: 'button', textContent: 'Keep them' });
+    const bar = el('div', { className: 'note' }, [
+      el('div', { style: 'margin-bottom:10px' }, 'Stop the new-book emails? Your shelf link keeps working either way.'),
+      yes, ' ', no,
+    ]);
+    yes.onclick = () => { bar.remove(); $('#unsub').click(); };
+    no.onclick = () => bar.remove();
+    $('#banner').append(bar);
+  }
 })();
 
 // A gentle, dismissable "Add BookHunt to your home screen" hint. Written for
