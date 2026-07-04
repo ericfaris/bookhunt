@@ -186,6 +186,8 @@ Cloudflare Access is the front gate, but the origin no longer trusts it blindly.
 
 ### Reader portal — letting `/reader/*` past Access
 
+> **Already configured** (2026-07-04): a path-scoped app `Bookhunt Reader (public bypass)` for `bookhunt.mooseflip.com/reader` with a Bypass/Everyone policy is live (Access app id `2ffcea40-e197-456d-8d23-71c43b893fc6`). The steps below are the reference for re-creating it if it's ever removed.
+
 The reader portal (magic-link book picker, issue #34) is for people who are **not** in your Access policy — Darla, April, anyone you invite. They can't pass the Cloudflare login, so `/reader/*` must be exempted at the edge:
 
 1. **Zero Trust** → **Access** → **Applications** → **Add an application** → **Self-hosted**
