@@ -435,8 +435,14 @@ function downloadRank(saved) {
 async function runMirrors(links, attempt, onProgress = () => {}) {
   const errors = [];
   let fallback = null; // best rejected save so far: { entry, rank, reason }
-  const discard = (entry, reason) => {
-    if (entry.savePath) { try { fs.unlinkSync(entry.savePath); } catch { /* best effort */ } }
+  // `keep` is the entry that superseded the discarded one. Every attempt saves
+  // under the same title-derived filename, so the loser's savePath is often the
+  // SAME path the winner's file now lives at — unlinking it would delete the
+  // winner. Record the error either way; only unlink a path the winner doesn't own.
+  const discard = (entry, reason, keep) => {
+    if (entry.savePath && !(keep && keep.savePath === entry.savePath)) {
+      try { fs.unlinkSync(entry.savePath); } catch { /* best effort */ }
+    }
     errors.push({ url: entry.url, error: reason });
   };
   for (let i = 0; i < links.length; i++) {
@@ -447,7 +453,7 @@ async function runMirrors(links, attempt, onProgress = () => {}) {
       const entry = { ...saved, url: link.url, timestamp: new Date().toISOString() };
       const rank = downloadRank(saved);
       if (rank >= 3) {
-        if (fallback) discard(fallback.entry, fallback.reason);
+        if (fallback) discard(fallback.entry, fallback.reason, entry);
         return { downloads: [entry], errors };
       }
       // Saved, but it isn't (verifiably) the right book. Report it, keep the
@@ -460,10 +466,10 @@ async function runMirrors(links, attempt, onProgress = () => {}) {
         verified: !!saved.verified, embeddedTitle: saved.embeddedTitle,
       });
       if (!fallback || rank > fallback.rank) {
-        if (fallback) discard(fallback.entry, fallback.reason);
+        if (fallback) discard(fallback.entry, fallback.reason, entry);
         fallback = { entry, rank, reason };
       } else {
-        discard(entry, reason);
+        discard(entry, reason, fallback.entry);
       }
     } catch (err) {
       if (err.fatal) {
@@ -501,9 +507,18 @@ async function runCandidates(candidates, attempt, onProgress = () => {}) {
   let best = null; // { result, rank, url }
   let lastError = null;
   let tried = 0;
-  const discardFiles = (result) => {
+  // Same collision guard as runMirrors' discard: every candidate saves under the
+  // same title-derived filename, so a superseded candidate's savePath is often
+  // the SAME path the kept candidate's file now lives at. Never unlink a path
+  // the kept result (`keep`) owns.
+  const discardFiles = (result, keep) => {
+    const keepPaths = new Set(
+      ((keep && keep.downloads) || []).map((d) => d && d.savePath).filter(Boolean)
+    );
     for (const d of (result && result.downloads) || []) {
-      if (d.savePath) { try { fs.unlinkSync(d.savePath); } catch { /* best effort */ } }
+      if (d.savePath && !keepPaths.has(d.savePath)) {
+        try { fs.unlinkSync(d.savePath); } catch { /* best effort */ }
+      }
     }
   };
   for (let i = 0; i < list.length; i++) {
@@ -535,14 +550,14 @@ async function runCandidates(candidates, attempt, onProgress = () => {}) {
         if (downloadsOf(best.result).length) {
           errors.push({ url: best.url, error: 'Download did not verify as the right book — a later match replaced it' });
         }
-        discardFiles(best.result);
+        discardFiles(best.result, result);
       }
       best = { result, rank, url: cand.url };
     } else {
       if (downloadsOf(result).length) {
         errors.push({ url: cand.url, error: 'Download did not verify as the right book — kept the earlier match' });
       }
-      discardFiles(result);
+      discardFiles(result, best.result);
     }
     if (rank >= 3) break; // verified the right book — stop looking
   }

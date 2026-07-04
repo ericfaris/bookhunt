@@ -306,6 +306,46 @@ test('runCandidates: fatal and needWarm errors abort the walk immediately', asyn
   }
 });
 
+// Every attempt saves under the same title-derived filename, so a superseded
+// download's savePath is often the SAME path the winner's file now lives at.
+// Discarding the loser must not delete the winner's file (the "Project Hail
+// Mary" bug: the verified epub vanished because candidate 1's rejected record
+// pointed at the very path candidate 2 had just verified).
+test('runMirrors: discarding a superseded fallback never deletes the winner at the same path', async () => {
+  const sharedPath = tmpFile('book.epub');
+  const { fn } = scriptedAttempt([
+    { file: { filename: 'book.epub', savePath: sharedPath, verified: false } },
+    { file: { filename: 'book.epub', savePath: sharedPath, verified: true, titleMatch: true } },
+  ]);
+  const { downloads, errors } = await runMirrors(links, fn);
+  assert.equal(downloads[0].verified, true);
+  assert.equal(fs.existsSync(sharedPath), true, 'the verified winner’s file survives the fallback discard');
+  assert.ok(errors.some((e) => e.url === 'a'), 'the rejected mirror is still recorded');
+});
+
+test('runCandidates: replacing a fallback candidate never deletes the winner at the same path', async () => {
+  const sharedPath = tmpFile('book.epub');
+  const { fn } = scriptedCandidates([
+    { result: { downloads: [{ filename: 'book.epub', savePath: sharedPath, verified: false }], errors: [], title: 'Bad' } },
+    { result: { downloads: [{ filename: 'book.epub', savePath: sharedPath, verified: true, titleMatch: true }], errors: [], title: 'The Right Book' } },
+  ]);
+  const { result, errors } = await runCandidates(posts, fn);
+  assert.equal(result.title, 'The Right Book');
+  assert.equal(fs.existsSync(sharedPath), true, 'the verified winner’s file survives the fallback discard');
+  assert.ok(errors.some((e) => e.url === posts[0].url && /replaced it/i.test(e.error)));
+});
+
+test('runCandidates: discarding an inferior later candidate never deletes the kept file at the same path', async () => {
+  const sharedPath = tmpFile('book.epub');
+  const { fn } = scriptedCandidates([
+    { result: { downloads: [{ filename: 'book.epub', savePath: sharedPath, verified: true, titleMatch: false }], errors: [], title: 'Wrong' } },
+    { result: { downloads: [{ filename: 'book.epub', savePath: sharedPath, verified: false }], errors: [], title: 'Bad' } },
+  ]);
+  const { result } = await runCandidates(posts, fn);
+  assert.equal(result.title, 'Wrong', 'the earlier, better fallback is kept');
+  assert.equal(fs.existsSync(sharedPath), true, 'the kept fallback’s file survives the rival discard');
+});
+
 test('runCandidates: a single post emits no candidate progress frames (back-compat)', async () => {
   const { fn } = scriptedCandidates([{ result: verifiedResult }]);
   const events = [];
