@@ -208,7 +208,21 @@ test('buildDigest: sections and counts reflect the events', () => {
   assert.match(msg.text, /Now watching[\s\S]*Brand New Book — Fresh Author \(NYT Hardcover Fiction\)/);
   assert.match(msg.text, /couldn.t verify[\s\S]*Fuzzy File/);
   assert.match(msg.text, /Stopped watching[\s\S]*Never Showed/);
-  assert.match(msg.html, /<li>Theo of Golden — Allen Levi<\/li>/);
+  // added/watching render as cover rows (title + author·list), the rest as lists
+  assert.match(msg.html, /Theo of Golden<\/p>[\s\S]*?Allen Levi/);
+  assert.match(msg.html, /Fresh Author · NYT Hardcover Fiction/);
+  assert.match(msg.html, /<li>Never Showed — Ghost Writer<\/li>/);
+});
+
+test('buildDigest: a cover URL becomes an inline CID image + attachment', () => {
+  const msg = buildDigest([
+    { type: 'added', title: 'With Cover', author: 'A', cover: 'https://covers.example/c.jpg' },
+    { type: 'watching', title: 'No Cover', author: 'B', list: 'L' },
+  ]);
+  assert.equal(msg.attachments.length, 1);
+  assert.equal(msg.attachments[0].path, 'https://covers.example/c.jpg');
+  assert.match(msg.html, new RegExp(`cid:${msg.attachments[0].cid}`));
+  assert.match(msg.html, /📖/); // the coverless book gets the placeholder
 });
 
 test('buildDigest: escapes HTML in titles', () => {

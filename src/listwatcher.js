@@ -18,6 +18,7 @@ const library = require('./library');
 const booktags = require('./booktags');
 const settings = require('./settings');
 const smtp = require('./smtp');
+const covers = require('./covers');
 
 const TICK_MS = Number(process.env.LISTS_TICK_MS) || 3600000; // hourly wake; runs when the pull is due
 
@@ -164,14 +165,21 @@ async function run({ force = false } = {}) {
 // --- digest email ------------------------------------------------------------
 
 const SECTIONS = [
-  { type: 'added', head: '📚 Added to your Library', line: (e) => `${e.title}${e.author ? ' — ' + e.author : ''}` },
-  { type: 'watching', head: '👀 Now watching (not on Mobilism yet)', line: (e) => `${e.title}${e.author ? ' — ' + e.author : ''} (${e.list})` },
-  { type: 'unverified', head: '⚠ Found but couldn’t verify — not added', line: (e) => `${e.title}${e.author ? ' — ' + e.author : ''}` },
-  { type: 'expired', head: '🕰 Stopped watching (never appeared)', line: (e) => `${e.title}${e.author ? ' — ' + e.author : ''}` },
-  { type: 'skipped', head: '⏸ Skipped — watch queue is full', line: (e) => `${e.title}${e.author ? ' — ' + e.author : ''} (${e.list})` },
+  { type: 'added', head: 'Added to your Library', line: (e) => `${e.title}${e.author ? ' — ' + e.author : ''}` },
+  { type: 'watching', head: 'Now watching — not yet available on Mobilism', line: (e) => `${e.title}${e.author ? ' — ' + e.author : ''} (${e.list})` },
+  { type: 'unverified', head: 'Found but couldn’t verify — not added', line: (e) => `${e.title}${e.author ? ' — ' + e.author : ''}` },
+  { type: 'expired', head: 'Stopped watching — never became available', line: (e) => `${e.title}${e.author ? ' — ' + e.author : ''}` },
+  { type: 'skipped', head: 'Skipped — watch queue is full', line: (e) => `${e.title}${e.author ? ' — ' + e.author : ''} (${e.list})` },
 ];
 
-/** PURE: pending events → { subject, text, html } (null when nothing to say). */
+// Sections whose books get a cover thumbnail (the interesting ones); the
+// housekeeping sections (unverified/expired/skipped) stay as plain lists.
+const COVER_SECTIONS = new Set(['added', 'watching']);
+
+/** PURE: pending events → { subject, text, html, attachments } (null when
+ *  nothing to say). Events may carry a `cover` URL (see sendDigest); covers
+ *  ride as inline CID images so they render even when a client blocks remote
+ *  images, matching the reader emails. */
 function buildDigest(events) {
   const byType = (t) => (events || []).filter((e) => e.type === t);
   if (!events || !events.length) return null;
@@ -181,21 +189,58 @@ function buildDigest(events) {
   const bits = [];
   if (added) bits.push(`${added} added`);
   if (watching) bits.push(`${watching} now watched`);
-  const subject = `📖 BookHunt new releases — ${bits.length ? bits.join(', ') : 'list activity'}`;
+  const subject = `BookHunt new releases — ${bits.length ? bits.join(', ') : 'activity summary'}`;
 
   const textParts = [];
-  const htmlParts = ['<div style="font-family:sans-serif;max-width:640px">', '<h2 style="margin:0 0 12px">BookHunt new-release radar</h2>'];
+  const bodyRows = [];
+  const attachments = [];
   for (const s of SECTIONS) {
     const evs = byType(s.type);
     if (!evs.length) continue;
     textParts.push(`${s.head}\n${evs.map((e) => `  • ${s.line(e)}`).join('\n')}`);
-    htmlParts.push(
-      `<h3 style="margin:16px 0 6px">${s.head}</h3><ul style="margin:0;padding-left:20px">` +
-      evs.map((e) => `<li>${escapeHtml(s.line(e))}</li>`).join('') + '</ul>'
-    );
+    const head = `<p style="margin:0 0 8px;font-size:15px;font-weight:700;color:#1c2a56">${s.head}</p>`;
+    if (COVER_SECTIONS.has(s.type)) {
+      const rows = evs.map((e) => {
+        let coverCell;
+        if (/^https?:\/\//i.test(String(e.cover || ''))) {
+          const cid = `cover${attachments.length}@radar`;
+          attachments.push({ filename: `cover${attachments.length}.jpg`, path: e.cover, cid });
+          coverCell = `<img src="cid:${cid}" alt="" width="54"
+            style="width:54px;height:auto;display:block;border-radius:7px;box-shadow:0 3px 10px rgba(0,0,0,0.18)">`;
+        } else {
+          coverCell = `<div style="width:54px;height:80px;border-radius:7px;
+            background:linear-gradient(135deg,#1c2a56,#2a3a72);text-align:center;line-height:80px;font-size:24px">📖</div>`;
+        }
+        const sub = [e.author, e.list].filter(Boolean).join(' · ');
+        return `<tr>
+          <td valign="top" width="54" style="padding:0 16px 14px 0">${coverCell}</td>
+          <td valign="top" style="padding:0 0 14px">
+            <p style="margin:0 0 3px;font-size:15px;font-weight:700;color:#1c2a56;line-height:1.3">${escapeHtml(e.title)}</p>
+            ${sub ? `<p style="margin:0;font-size:13px;color:#6b727e;line-height:1.4">${escapeHtml(sub)}</p>` : ''}
+          </td>
+        </tr>`;
+      }).join('');
+      bodyRows.push(
+        `<tr><td style="padding:14px 28px 0">${head}` +
+        `<table role="presentation" cellpadding="0" cellspacing="0" width="100%">${rows}</table></td></tr>`
+      );
+    } else {
+      bodyRows.push(
+        `<tr><td style="padding:14px 28px 0">${head}` +
+        `<ul style="margin:0;padding-left:20px;font-size:14px;color:#6b727e;line-height:1.7">` +
+        evs.map((e) => `<li>${escapeHtml(s.line(e))}</li>`).join('') + '</ul></td></tr>'
+      );
+    }
   }
-  htmlParts.push('<p style="color:#888;font-size:12px;margin-top:20px">Sourced from NYT bestseller, Amazon new-release, and Goodreads popular fiction lists. Unwanted books are one 🗑 away in the Library.</p></div>');
-  return { subject, text: textParts.join('\n\n'), html: htmlParts.join('') };
+  bodyRows.push('<tr><td style="padding:0 0 18px"></td></tr>');
+  const { emailShell } = require('./reader'); // lazy, matching this module's style
+  const html = emailShell(
+    'New-release radar',
+    bodyRows.join(''),
+    'Compiled from the NYT bestseller, Amazon new-release, and Goodreads popular fiction lists. To remove a title, delete it from your Library.',
+    'Automated digest from your BookHunt server'
+  );
+  return { subject, text: textParts.join('\n\n'), html, attachments };
 }
 
 function escapeHtml(s) {
@@ -208,6 +253,13 @@ async function sendDigest() {
   const to = operatorEmail();
   if (!to) return false;
   const events = lists.drainEvents();
+  // Enrich the cover-worthy events with a cover URL (disk-cached lookup;
+  // resolveCover never throws — a miss just leaves the placeholder).
+  for (const e of events) {
+    if (COVER_SECTIONS.has(e.type) && !e.cover) {
+      e.cover = await covers.resolveCover({ title: e.title, author: e.author });
+    }
+  }
   const msg = buildDigest(events);
   if (!msg) return false;
   try {

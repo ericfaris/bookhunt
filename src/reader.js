@@ -251,8 +251,9 @@ function escapeHtml(s) {
 
 /** The BookHunt card shell: header band + body + footer, matching the notify
  *  email. `body` is the inner rows HTML; `footerNote` is optional small print
- *  (e.g. the unsubscribe line) shown above the standard signature. */
-function emailShell(subHeader, body, footerNote = '') {
+ *  (e.g. the unsubscribe line) shown above the signature. `signature` lets
+ *  operator-facing emails (e.g. the new-release digest) swap the reader one. */
+function emailShell(subHeader, body, footerNote = '', signature = 'Sent with ♥ by Eric via BookHunt') {
   return `
   <div style="margin:0;padding:24px 12px;background:${PAPER};
               font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif">
@@ -284,7 +285,7 @@ function emailShell(subHeader, body, footerNote = '') {
 
           <tr><td style="padding:16px 28px;background:#faf7f0;border-top:1px solid #ece5d6">
             ${footerNote ? `<p style="margin:0 0 6px;color:#9a93a1;font-size:11px">${footerNote}</p>` : ''}
-            <p style="margin:0;color:#9a93a1;font-size:11px">Sent with ♥ by Eric via BookHunt</p>
+            <p style="margin:0;color:#9a93a1;font-size:11px">${signature}</p>
           </td></tr>
 
         </table>
@@ -465,6 +466,7 @@ module.exports = {
   sendToReader,
   invite,
   notifyNewBooks,
+  emailShell, // shared branded card shell (also used by the radar digest)
   // exported for unit tests
   recentBooks,
   sentTo,
