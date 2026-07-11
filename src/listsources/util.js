@@ -49,6 +49,21 @@ function authorLastName(s) {
   return words[words.length - 1] || '';
 }
 
+/** PURE: cross-source identity of an entry. Title is cleaned (subtitle/series
+ *  noise stripped), diacritics folded, punctuation dropped; author reduces to
+ *  the first author's last name so byline variations agree. Lives here (not in
+ *  lists.js) so listsource modules can dedupe without a circular require. */
+function entryKey(e) {
+  const t = cleanTitle((e && e.title) || '')
+    .toLowerCase()
+    .normalize('NFKD')
+    .replace(/\p{M}/gu, '')
+    .replace(/[^\p{L}\p{N}\s]/gu, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return `${t}|${authorLastName((e && e.author) || '')}`;
+}
+
 /** PURE: decode the handful of HTML entities that appear in scraped titles. */
 function decodeEntities(s) {
   return String(s || '')
@@ -64,4 +79,4 @@ const SCRAPE_HEADERS = {
   'Accept-Language': 'en-US,en;q=0.9',
 };
 
-module.exports = { titleCase, cleanTitle, cleanAuthor, authorLastName, decodeEntities, SCRAPE_HEADERS };
+module.exports = { titleCase, cleanTitle, cleanAuthor, authorLastName, entryKey, decodeEntities, SCRAPE_HEADERS };

@@ -45,21 +45,7 @@ function isConfigured() {
 
 // --- pure helpers ------------------------------------------------------------
 
-const { titleCase, cleanTitle, authorLastName } = util;
-
-/** PURE: cross-source identity of an entry. Title is cleaned (subtitle/series
- *  noise stripped), diacritics folded, punctuation dropped; author reduces to
- *  the first author's last name so byline variations agree. */
-function entryKey(e) {
-  const t = cleanTitle((e && e.title) || '')
-    .toLowerCase()
-    .normalize('NFKD')
-    .replace(/\p{M}/gu, '')
-    .replace(/[^\p{L}\p{N}\s]/gu, '')
-    .replace(/\s+/g, ' ')
-    .trim();
-  return `${t}|${authorLastName((e && e.author) || '')}`;
-}
+const { titleCase, cleanTitle, authorLastName, entryKey } = util;
 
 /** PURE: entries in `next` whose key wasn't in the previous snapshot. */
 function newEntrants(prevKeys, next) {
