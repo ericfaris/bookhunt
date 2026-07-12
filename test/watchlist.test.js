@@ -2,8 +2,11 @@
 
 const { test } = require('node:test');
 const assert = require('node:assert');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
 
-const { cleanWatchInput, dueWatches, queryKey } = require('../src/watchlist');
+const { cleanWatchInput, dueWatches, queryKey, readJsonList, writeJsonList } = require('../src/watchlist');
 
 // Note: add/remove/update operate on the hardcoded repo-root watchlist.json
 // (bind-mounted into Docker), so they are deliberately NOT exercised here — doing
@@ -76,4 +79,58 @@ test('dueWatches: never-checked sorts before a long-ago check', () => {
 test('dueWatches: tolerates empty / undefined input', () => {
   assert.deepEqual(dueWatches(undefined, Date.now(), 1000), []);
   assert.deepEqual(dueWatches([], Date.now(), 1000), []);
+});
+
+// --- writeJsonList / readJsonList (write hardening) --------------------------
+// These operate exclusively on a temp file — never the live watchlist.json.
+
+function tmpFile(t) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'watchlist-test-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  return path.join(dir, 'watchlist.json');
+}
+
+test('writeJsonList: forced EXDEV rename failure still leaves valid JSON (acceptance #4)', (t) => {
+  const file = tmpFile(t);
+  const newList = [{ id: 'w_1', status: 'active' }, { id: 'w_2', status: 'fulfilled' }];
+  // Seed with something different so we can prove the new data landed.
+  fs.writeFileSync(file, JSON.stringify([{ id: 'old' }], null, 2), 'utf8');
+  const origRename = fs.renameSync;
+  fs.renameSync = () => { throw Object.assign(new Error('EXDEV: cross-device link not permitted'), { code: 'EXDEV' }); };
+  t.after(() => { fs.renameSync = origRename; });
+  writeJsonList(file, newList);
+  assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')), newList);
+  assert.equal(fs.existsSync(file + '.tmp'), false, 'verified tmp copy should be removed after a good fallback write');
+});
+
+test('readJsonList: interrupted fallback write is recoverable from tmp (acceptance #4)', (t) => {
+  const file = tmpFile(t);
+  const newList = [{ id: 'w_1', status: 'active' }];
+  // Simulate the crash state: complete data in .tmp, truncated garbage in target.
+  fs.writeFileSync(file + '.tmp', JSON.stringify(newList, null, 2), 'utf8');
+  fs.writeFileSync(file, '[{"id":"w_1", ', 'utf8');
+  assert.deepEqual(readJsonList(file), newList);
+  // The target itself must now be restored to valid JSON.
+  assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')), newList);
+});
+
+test('readJsonList: corrupt file with no/corrupt tmp returns [], missing file returns []', (t) => {
+  const file = tmpFile(t);
+  // Corrupt target, no tmp.
+  fs.writeFileSync(file, 'not json at all', 'utf8');
+  assert.deepEqual(readJsonList(file), []);
+  // Corrupt target, corrupt tmp.
+  fs.writeFileSync(file + '.tmp', 'also garbage', 'utf8');
+  assert.deepEqual(readJsonList(file), []);
+  // Missing file.
+  const missing = path.join(path.dirname(file), 'does-not-exist.json');
+  assert.deepEqual(readJsonList(missing), []);
+});
+
+test('writeJsonList → readJsonList: happy-path round-trip, no tmp left behind', (t) => {
+  const file = tmpFile(t);
+  const list = [{ id: 'w_1', status: 'active', title: 'Dune' }];
+  writeJsonList(file, list);
+  assert.deepEqual(readJsonList(file), list);
+  assert.equal(fs.existsSync(file + '.tmp'), false, 'rename path should not leave a tmp file');
 });

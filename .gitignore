@@ -6,6 +6,7 @@ recipient-groups.json
 booktags.json
 covers-cache.json
 watchlist.json
+watchlist.json.bak-*
 .browser-profile/
 *.log
 .DS_Store

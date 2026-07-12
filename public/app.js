@@ -2616,11 +2616,14 @@ async function openWatchlist() {
   await loadWatchlist();
 }
 
+let watchlistLoadSeq = 0; // stale-response guard: only the newest load may paint
 async function loadWatchlist() {
+  const seq = ++watchlistLoadSeq;
   const body = $('#watchlistBody');
   body.innerHTML = '<p class="hint">Loading…</p>';
   try {
     const data = await fetch('/api/watchlist').then((r) => r.json());
+    if (seq !== watchlistLoadSeq) return; // a newer load superseded this one
     const notice = $('#watchlistNotice');
     if (!data.emailReady) {
       notice.hidden = false;
@@ -2656,6 +2659,7 @@ async function loadWatchlist() {
     }
     renderWatchlist(data.watches || []);
   } catch (err) {
+    if (seq !== watchlistLoadSeq) return; // a newer load superseded this one
     body.innerHTML = '';
     body.append(el('p', { className: 'reup-msg error' }, err.message || 'Could not load the watchlist.'));
   }
@@ -2762,6 +2766,7 @@ function renderWatchlist(watches) {
 
       const toggle = el('button', { className: 'ghost-btn watch-icon-btn', type: 'button', title: w.status === 'paused' ? 'Resume' : 'Pause', 'aria-label': w.status === 'paused' ? 'Resume watch' : 'Pause watch' }, w.status === 'paused' ? '▶' : '⏸');
       toggle.addEventListener('click', async () => {
+        toggle.disabled = true;
         await fetch(`/api/watchlist/${w.id}/status`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -2773,6 +2778,7 @@ function renderWatchlist(watches) {
     } else {
       const again = el('button', { className: 'ghost-btn', type: 'button' }, 'Watch again');
       again.addEventListener('click', async () => {
+        again.disabled = true;
         await fetch(`/api/watchlist/${w.id}/status`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -2784,8 +2790,18 @@ function renderWatchlist(watches) {
     }
     const del = el('button', { className: 'ghost-btn watch-del watch-icon-btn', type: 'button', title: 'Remove', 'aria-label': 'Remove watch' }, '🗑');
     del.addEventListener('click', async () => {
-      await fetch(`/api/watchlist/${w.id}`, { method: 'DELETE' });
-      await loadWatchlist();
+      del.disabled = true; del.textContent = '…';
+      try {
+        const res = await fetch(`/api/watchlist/${w.id}`, { method: 'DELETE' });
+        if (!res.ok) throw new Error(`Remove failed (HTTP ${res.status}) — try again.`);
+        await loadWatchlist(); // {ok:false} body = already gone server-side; reload clears the stale row either way
+      } catch (err) {
+        const n = $('#watchlistNotice');
+        n.hidden = false;
+        n.className = 'reup-msg warn';
+        n.textContent = err.message || 'Could not remove the watch.';
+        del.disabled = false; del.textContent = '🗑';
+      }
     });
     actions.append(del);
 
