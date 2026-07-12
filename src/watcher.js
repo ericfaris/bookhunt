@@ -2,8 +2,9 @@
 
 // Background scheduler for the watchlist (issue #7). Periodically re-runs each
 // active watch through the SAME search pipeline as interactive search, and on the
-// first match notifies the user (email, with cover + thread link) and marks the
-// watch fulfilled.
+// first match notifies the user (email, with cover + thread link). A match whose
+// acquisition is verified AND positively title-matched removes the watch outright;
+// any weaker match (unverified, notify-only, or titleMatch null) marks it fulfilled.
 //
 // Politeness & safety:
 //  - Re-checks each watch at most every WATCH_CHECK_INTERVAL_MS (default 30 min).
@@ -66,7 +67,10 @@ function deliveryRecipients(watch) {
  * notify-only email with the thread link so nothing is ever silently dropped.
  * Always emails the operator. Never throws.
  *
- * Returns { downloaded, delivered, kindlePushed }.
+ * Returns { downloaded, delivered, kindlePushed, verifiedMatch }. `verifiedMatch`
+ * is true only when the accepted download passed the strict bar — verified AND
+ * positively title-matched — which is the watch-removal criterion (stricter than
+ * the delivery bar, which also accepts titleMatch === null).
  */
 async function autoDeliver(watch, top) {
   const book = {
@@ -149,12 +153,19 @@ async function autoDeliver(watch, top) {
     }
   }
 
-  return { downloaded: !!download, delivered, kindlePushed };
+  return {
+    downloaded: !!download,
+    delivered,
+    kindlePushed,
+    verifiedMatch: !!(download && download.verified === true && download.titleMatch === true),
+  };
 }
 
 /**
- * Run one watch through the search pipeline. On a match: notify + mark fulfilled.
- * Always records lastCheckedAt/checkCount. Returns { matched, notifyResults? }.
+ * Run one watch through the search pipeline. On a match: notify, then either
+ * remove the watch (verified + positively title-matched acquisition) or mark it
+ * fulfilled (any weaker match). Always records lastCheckedAt/checkCount on a
+ * no-match. Returns { matched, notifyResults? }.
  * Throws only on a hard search failure (caller records lastError).
  */
 async function checkWatch(watch) {
@@ -168,21 +179,27 @@ async function checkWatch(watch) {
 
   if (results && results.length) {
     const top = results[0];
-    let delivery = { downloaded: false, delivered: 0, kindlePushed: 0 };
+    let delivery = { downloaded: false, delivered: 0, kindlePushed: 0, verifiedMatch: false };
     try {
       delivery = await autoDeliver(watch, top);
     } catch (err) {
       console.warn('[watcher] delivery failed for %s: %s', watch.id, err.message);
     }
-    watchlist.update(watch.id, {
-      ...base,
-      status: 'fulfilled',
-      foundUrl: top.url || null,
-      foundAt: new Date().toISOString(),
-      delivered: delivery.delivered,
-      kindlePushed: delivery.kindlePushed,
-      downloaded: delivery.downloaded,
-    });
+    if (delivery.verifiedMatch) {
+      // Verified, positively title-matched acquisition: the watch has done its job —
+      // delete it outright rather than leaving a fulfilled row behind.
+      watchlist.remove(watch.id);
+    } else {
+      watchlist.update(watch.id, {
+        ...base,
+        status: 'fulfilled',
+        foundUrl: top.url || null,
+        foundAt: new Date().toISOString(),
+        delivered: delivery.delivered,
+        kindlePushed: delivery.kindlePushed,
+        downloaded: delivery.downloaded,
+      });
+    }
     try {
       history.add({
         type: 'watch-hit',
@@ -206,11 +223,12 @@ async function checkWatch(watch) {
       } catch { /* best effort */ }
     }
     console.log(
-      '[watcher] match for "%s" — %s, emailed %d, kindle %d',
+      '[watcher] match for "%s" — %s, emailed %d, kindle %d%s',
       watch.title || watch.author,
       delivery.downloaded ? 'downloaded' : 'notify-only',
       delivery.delivered,
-      delivery.kindlePushed
+      delivery.kindlePushed,
+      delivery.verifiedMatch ? ', watch removed' : ', watch fulfilled'
     );
     return { matched: true, delivery };
   }

@@ -5,6 +5,12 @@ const assert = require('node:assert');
 
 const { cleanWatchInput, dueWatches, queryKey } = require('../src/watchlist');
 
+// Note: add/remove/update operate on the hardcoded repo-root watchlist.json
+// (bind-mounted into Docker), so they are deliberately NOT exercised here — doing
+// so would clobber the live file. The auto-remove behavior (strict match → removed,
+// titleMatch null → fulfilled, titleMatch false → unchanged) is covered in
+// test/watcher.test.js via the watchlist.remove mock seam instead.
+
 // --- cleanWatchInput ---------------------------------------------------------
 
 test('cleanWatchInput: trims, defaults sort, normalizes recipientIds', () => {

@@ -10,6 +10,9 @@
 //   { id, title, author, sort, recipientIds[], status, createdAt,
 //     lastCheckedAt, checkCount, lastError, foundUrl, foundAt }
 //   status: 'active' | 'paused' | 'fulfilled'
+// A watch whose acquisition is verified AND positively title-matched is removed
+// outright by the watcher (src/watcher.js checkWatch) — 'fulfilled' persists only
+// for weaker matches (e.g. titleMatch null / notify-only).
 
 const fs = require('fs');
 const path = require('path');
