@@ -2229,30 +2229,67 @@ function renderLibraryCover(book) {
 }
 
 function renderLibraryBook(book) {
-  const badges = el('div', { className: 'badges' }, [
+  const sendCount = (book.sends && book.sends.length) || 0;
+
+  // One merged metaline: format/verified pills, size, date, missing-file chip,
+  // then tag pills. No 📦/📅 emoji — the values speak for themselves.
+  const metaline = el('div', { className: 'lib-metaline' }, [
     el('span', { className: 'badge' }, (book.mode === 'standard' ? 'External' : 'Premium')),
     book.verified ? el('span', { className: 'badge ok-badge' }, 'Verified ✓') : null,
+    book.size ? el('span', { className: 'lib-meta-bit' }, formatBytes(book.size)) : null,
+    book.acquiredAt ? el('span', { className: 'lib-meta-bit' }, formatDate(book.acquiredAt)) : null,
+    !book.filePresent ? el('span', { className: 'lib-warn-chip' }, '⚠ File removed') : null,
+    ...(book.tags || []).map((t) => el('span', { className: 'lib-tag' }, t)),
   ]);
 
-  const metaBits = [];
-  if (book.size) metaBits.push(el('span', {}, `📦 ${formatBytes(book.size)}`));
-  if (book.acquiredAt) metaBits.push(el('span', {}, `📅 ${formatDate(book.acquiredAt)}`));
-  const meta = el('div', { className: 'meta' }, metaBits);
-
-  // Inline send history.
+  // Full send history — lives in the drawer, collapsed by default.
   const sendsWrap = el('div', { className: 'lib-sends' });
-  if (!book.sends.length) {
+  if (!sendCount) {
     sendsWrap.append(el('div', { className: 'lib-notsent' }, 'Not sent yet'));
   } else {
-    sendsWrap.append(el('div', { className: 'lib-sends-head' }, `Sent ${book.sends.length}×`));
+    sendsWrap.append(el('div', { className: 'lib-sends-head' }, `Sent ${sendCount}×`));
     for (const s of book.sends) sendsWrap.append(renderSend(s));
   }
 
-  // Resend — reuses the send modal; disabled when the file is gone from disk.
-  const actions = el('div', { className: 'lib-actions' });
+  // Tags editor (moves into the drawer).
+  const editTags = el('button', { className: 'lib-tag-edit', type: 'button', title: 'Edit tags' },
+    (book.tags && book.tags.length) ? '✎ Tags' : '＋ Tag');
+  editTags.addEventListener('click', () => editBookTags(book));
+
+  // Drawer: filename + tags editor + full history, revealed by the chevron.
+  const drawer = el('div', { className: 'lib-drawer', hidden: true }, [
+    book.filename && book.filename !== book.title
+      ? el('div', { className: 'lib-filename hint' }, book.filename)
+      : null,
+    el('div', { className: 'lib-drawer-tags' }, [editTags]),
+    sendsWrap,
+  ]);
+
+  // One-line send summary + disclosure chevron.
+  let summaryText;
+  if (!sendCount) {
+    summaryText = 'Not sent yet';
+  } else {
+    const who = [...new Set(book.sends.flatMap((s) => s.to || []))].filter(Boolean).join(', ');
+    const last = book.sends.reduce((m, s) => (s.timestamp > m ? s.timestamp : m), book.sends[0].timestamp);
+    summaryText = `→ Sent to ${who || `${sendCount} reader(s)`} · last ${formatDate(last)}`;
+  }
+  const disclose = el('button', { className: 'lib-disclose', type: 'button', 'aria-expanded': 'false', 'aria-label': 'Show details' }, '⌄');
+  disclose.addEventListener('click', () => {
+    drawer.hidden = !drawer.hidden;
+    disclose.setAttribute('aria-expanded', String(!drawer.hidden));
+    disclose.classList.toggle('open', !drawer.hidden);
+  });
+  const sendSummary = el('div', { className: 'lib-send-summary' }, [
+    el('span', { className: 'lib-send-summary-text' + (sendCount ? '' : ' lib-notsent') }, summaryText),
+    disclose,
+  ]);
+
+  // Top-right action cluster: send/resend, optional re-download, delete.
+  const actions = el('div', { className: 'lib-row-actions' });
   if (book.filePresent) {
-    const resend = el('button', { className: 'primary-btn lib-resend', type: 'button' },
-      book.sends.length ? '📧 Resend' : '📧 Send to readers');
+    const resend = el('button', { className: 'primary-btn lib-send-btn', type: 'button', title: sendCount ? 'Resend' : 'Send to readers' },
+      sendCount ? '📧 Resend' : '📧 Send');
     resend.addEventListener('click', () =>
       openSendModal({
         downloadId: book.id,
@@ -2268,52 +2305,38 @@ function renderLibraryBook(book) {
       })
     );
     actions.append(resend);
-  } else {
-    actions.append(el('div', { className: 'lib-missing' }, '⚠ File removed from disk.'));
+  } else if (book.url && book.mode !== 'standard') {
     // Premium books can be fetched again from their forum thread.
-    if (book.url && book.mode !== 'standard') {
-      const rd = el('button', { className: 'ghost-btn lib-redownload', type: 'button' }, '⬇ Re-download');
-      rd.addEventListener('click', () => redownloadBook(book));
-      actions.append(rd);
-    }
+    const rd = el('button', { className: 'ghost-btn lib-icon-btn lib-redownload', type: 'button', title: 'Re-download', 'aria-label': 'Re-download' }, '⬇');
+    rd.addEventListener('click', () => redownloadBook(book));
+    actions.append(rd);
   }
-  const del = el('button', { className: 'ghost-btn lib-del-btn', type: 'button', title: 'Remove from library' }, '🗑 Delete');
+  const del = el('button', { className: 'ghost-btn lib-icon-btn lib-del-btn', type: 'button', title: 'Remove from library', 'aria-label': 'Remove from library' }, '🗑');
   del.addEventListener('click', () => deleteLibraryBook(book));
   actions.append(del);
 
-  // Tags / collections row.
-  const tagsRow = el('div', { className: 'lib-tags' });
-  for (const t of (book.tags || [])) tagsRow.append(el('span', { className: 'lib-tag' }, t));
-  const editTags = el('button', { className: 'lib-tag-edit', type: 'button', title: 'Edit tags' },
-    (book.tags && book.tags.length) ? '✎ Tags' : '＋ Tag');
-  editTags.addEventListener('click', () => editBookTags(book));
-  tagsRow.append(editTags);
-
-  // Multi-select checkbox.
-  const select = el('input', { type: 'checkbox', className: 'lib-select', 'aria-label': `Select ${book.title || book.filename}` });
+  // Multi-select checkbox — hover-revealed over the cover.
+  const select = el('input', { type: 'checkbox', className: 'lib-select lib-row-select', 'aria-label': `Select ${book.title || book.filename}` });
   select.checked = librarySelection.has(book.id);
+  const row = el('div', { className: 'lib-book' + (select.checked ? ' selected' : '') }, [
+    el('div', { className: 'lib-cover-cell' }, [buildEditableCover(book), select]),
+    el('div', { className: 'lib-main' }, [
+      el('h3', { className: 'lib-title' }, book.title || book.filename || 'Untitled'),
+      book.author ? el('div', { className: 'lib-author' }, book.author) : null,
+      metaline,
+      sendSummary,
+    ]),
+    actions,
+    drawer,
+  ]);
   select.addEventListener('change', () => {
     if (select.checked) librarySelection.add(book.id);
     else librarySelection.delete(book.id);
+    row.classList.toggle('selected', select.checked);
     updateLibActionBar();
   });
 
-  const main = el('div', { className: 'lib-main' }, [
-    el('h3', { className: 'lib-title' }, book.title || book.filename || 'Untitled'),
-    book.author ? el('div', { className: 'lib-author' }, book.author) : null,
-    book.filename && book.filename !== book.title
-      ? el('div', { className: 'lib-filename hint' }, book.filename)
-      : null,
-    badges,
-    meta,
-    tagsRow,
-  ]);
-
-  return el('div', { className: 'lib-book' }, [
-    el('div', { className: 'lib-top' }, [select, buildEditableCover(book), main]),
-    sendsWrap,
-    actions,
-  ]);
+  return row;
 }
 
 // A library cover the user can fix when it's wrong. Shows the cover (lazy/stored)
@@ -2613,9 +2636,23 @@ async function loadWatchlist() {
     // (Re)render the add-form recipient chooser.
     const addBox = $('#watchAddRecipients');
     addBox.innerHTML = '';
-    if (watchRecipientsList.length) {
+    if (watchRecipientsList.length && watchRecipientsList.length <= 3) {
       addBox.append(el('span', { className: 'watch-recip-label' }, 'Send to:'));
       for (const node of recipientCheckboxes(new Set())) addBox.append(node);
+    } else if (watchRecipientsList.length) {
+      // >3 recipients: tuck the checkbox strip behind a live-counting toggle so
+      // the add form stays compact.
+      const strip = el('div', { className: 'watch-recipients-strip', hidden: true });
+      strip.append(el('span', { className: 'watch-recip-label' }, 'Send to:'));
+      for (const node of recipientCheckboxes(new Set())) strip.append(node);
+      const toggle = el('button', { className: 'watch-recip-edit', type: 'button', 'aria-expanded': 'false' }, 'Send to: 0 selected ⌄');
+      const updateLabel = () => {
+        const n = strip.querySelectorAll('input:checked').length;
+        toggle.textContent = `Send to: ${n} selected ${strip.hidden ? '⌄' : '⌃'}`;
+      };
+      strip.addEventListener('change', updateLabel);
+      toggle.addEventListener('click', () => { strip.hidden = !strip.hidden; toggle.setAttribute('aria-expanded', String(!strip.hidden)); updateLabel(); });
+      addBox.append(toggle, strip);
     }
     renderWatchlist(data.watches || []);
   } catch (err) {
@@ -2635,7 +2672,7 @@ function watchStatusBadge(w) {
   const badge = el('span', { className: 'badge ' + cls }, label);
   // List-origin watches carry a provenance badge so hand-added ones stand out.
   if (w.source !== 'list') return badge;
-  return el('span', {}, [badge, el('span', { className: 'badge', title: w.listLabel || 'From a bestseller list' }, '📈 List')]);
+  return el('span', { className: 'watch-badges' }, [badge, el('span', { className: 'badge', title: w.listLabel || 'From a bestseller list' }, '📈 List')]);
 }
 
 function renderWatchlist(watches) {
@@ -2658,16 +2695,26 @@ function renderWatchlist(watches) {
       watchStatusBadge(w),
     ]);
 
-    const bits = [];
-    if (w.status === 'fulfilled' && w.foundUrl) {
-      bits.push(el('a', { href: w.foundUrl, target: '_blank', rel: 'noopener' }, 'Open the match ↗'));
-    }
+    // Status line — always rendered. Either the last-checked summary, or a
+    // warn-colored error chip when the last check failed.
     const checked = w.lastCheckedAt ? `checked ${formatDate(w.lastCheckedAt)} · ${w.checkCount || 0}×` : 'not checked yet';
-    bits.push(el('span', { className: 'hint' }, w.lastError ? `⚠ ${w.lastError}` : checked));
-    if (w.status === 'fulfilled' && (w.delivered || w.kindlePushed)) {
-      bits.push(el('span', { className: 'hint' }, `· sent to ${w.delivered || 0}${w.kindlePushed ? `, ${w.kindlePushed} to Kindle` : ''}`));
+    const statusLine = el('div', { className: 'watch-status-line' }, [
+      w.lastError
+        ? el('span', { className: 'watch-error-chip', title: w.lastError }, `⚠ ${w.lastError}`)
+        : el('span', {}, checked),
+    ]);
+
+    // Delivery line — only for fulfilled watches: the match link + send counts.
+    let deliveryLine = null;
+    if (w.status === 'fulfilled') {
+      const dbits = [];
+      if (w.foundUrl) dbits.push(el('a', { href: w.foundUrl, target: '_blank', rel: 'noopener' }, 'Open the match ↗'));
+      if (w.delivered || w.kindlePushed) {
+        dbits.push(el('span', {}, `sent to ${w.delivered || 0}${w.kindlePushed ? `, ${w.kindlePushed} to Kindle` : ''}`));
+      }
+      if (dbits.length) deliveryLine = el('div', { className: 'watch-delivery-line' }, dbits);
     }
-    const meta = el('div', { className: 'watch-meta' }, bits);
+    const metaLines = [statusLine, deliveryLine].filter(Boolean);
 
     // Recipients this watch auto-delivers to (Kindle + notification on a match).
     const ids = Array.isArray(w.recipientIds) ? w.recipientIds : [];
@@ -2713,7 +2760,7 @@ function renderWatchlist(watches) {
       });
       actions.append(checkBtn);
 
-      const toggle = el('button', { className: 'ghost-btn', type: 'button' }, w.status === 'paused' ? 'Resume' : 'Pause');
+      const toggle = el('button', { className: 'ghost-btn watch-icon-btn', type: 'button', title: w.status === 'paused' ? 'Resume' : 'Pause', 'aria-label': w.status === 'paused' ? 'Resume watch' : 'Pause watch' }, w.status === 'paused' ? '▶' : '⏸');
       toggle.addEventListener('click', async () => {
         await fetch(`/api/watchlist/${w.id}/status`, {
           method: 'POST',
@@ -2735,15 +2782,15 @@ function renderWatchlist(watches) {
       });
       actions.append(again);
     }
-    const del = el('button', { className: 'ghost-btn watch-del', type: 'button' }, 'Remove');
+    const del = el('button', { className: 'ghost-btn watch-del watch-icon-btn', type: 'button', title: 'Remove', 'aria-label': 'Remove watch' }, '🗑');
     del.addEventListener('click', async () => {
       await fetch(`/api/watchlist/${w.id}`, { method: 'DELETE' });
       await loadWatchlist();
     });
     actions.append(del);
 
-    const main = el('div', { className: 'watch-row-main' }, [head, meta, recipLine, editor, actions]);
-    body.append(el('div', { className: 'watch-row' }, [buildWatchCover(w), main]));
+    const main = el('div', { className: 'watch-row-main' }, [head, ...metaLines, recipLine, editor]);
+    body.append(el('div', { className: 'watch-row' }, [buildWatchCover(w), main, actions]));
   }
 }
 
