@@ -90,8 +90,17 @@ function tmpFile(t) {
   return path.join(dir, 'watchlist.json');
 }
 
+// The tmp companion lives in the shared os.tmpdir() (see tmpPathFor in
+// src/watchlist.js — /app is root-owned in production, so a tmp file can't be
+// created next to the target there). Since it's shared, tests must clean it up
+// explicitly rather than relying on tmpFile()'s per-test directory removal.
+function tmpCompanion(file) {
+  return path.join(os.tmpdir(), path.basename(file) + '.tmp');
+}
+
 test('writeJsonList: forced EXDEV rename failure still leaves valid JSON (acceptance #4)', (t) => {
   const file = tmpFile(t);
+  t.after(() => fs.rmSync(tmpCompanion(file), { force: true }));
   const newList = [{ id: 'w_1', status: 'active' }, { id: 'w_2', status: 'fulfilled' }];
   // Seed with something different so we can prove the new data landed.
   fs.writeFileSync(file, JSON.stringify([{ id: 'old' }], null, 2), 'utf8');
@@ -100,14 +109,15 @@ test('writeJsonList: forced EXDEV rename failure still leaves valid JSON (accept
   t.after(() => { fs.renameSync = origRename; });
   writeJsonList(file, newList);
   assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')), newList);
-  assert.equal(fs.existsSync(file + '.tmp'), false, 'verified tmp copy should be removed after a good fallback write');
+  assert.equal(fs.existsSync(tmpCompanion(file)), false, 'verified tmp copy should be removed after a good fallback write');
 });
 
 test('readJsonList: interrupted fallback write is recoverable from tmp (acceptance #4)', (t) => {
   const file = tmpFile(t);
+  t.after(() => fs.rmSync(tmpCompanion(file), { force: true }));
   const newList = [{ id: 'w_1', status: 'active' }];
-  // Simulate the crash state: complete data in .tmp, truncated garbage in target.
-  fs.writeFileSync(file + '.tmp', JSON.stringify(newList, null, 2), 'utf8');
+  // Simulate the crash state: complete data in the tmp companion, truncated garbage in target.
+  fs.writeFileSync(tmpCompanion(file), JSON.stringify(newList, null, 2), 'utf8');
   fs.writeFileSync(file, '[{"id":"w_1", ', 'utf8');
   assert.deepEqual(readJsonList(file), newList);
   // The target itself must now be restored to valid JSON.
@@ -116,11 +126,12 @@ test('readJsonList: interrupted fallback write is recoverable from tmp (acceptan
 
 test('readJsonList: corrupt file with no/corrupt tmp returns [], missing file returns []', (t) => {
   const file = tmpFile(t);
+  t.after(() => fs.rmSync(tmpCompanion(file), { force: true }));
   // Corrupt target, no tmp.
   fs.writeFileSync(file, 'not json at all', 'utf8');
   assert.deepEqual(readJsonList(file), []);
   // Corrupt target, corrupt tmp.
-  fs.writeFileSync(file + '.tmp', 'also garbage', 'utf8');
+  fs.writeFileSync(tmpCompanion(file), 'also garbage', 'utf8');
   assert.deepEqual(readJsonList(file), []);
   // Missing file.
   const missing = path.join(path.dirname(file), 'does-not-exist.json');
@@ -129,8 +140,29 @@ test('readJsonList: corrupt file with no/corrupt tmp returns [], missing file re
 
 test('writeJsonList → readJsonList: happy-path round-trip, no tmp left behind', (t) => {
   const file = tmpFile(t);
+  t.after(() => fs.rmSync(tmpCompanion(file), { force: true }));
   const list = [{ id: 'w_1', status: 'active', title: 'Dune' }];
   writeJsonList(file, list);
   assert.deepEqual(readJsonList(file), list);
-  assert.equal(fs.existsSync(file + '.tmp'), false, 'rename path should not leave a tmp file');
+  assert.equal(fs.existsSync(tmpCompanion(file)), false, 'rename path should not leave a tmp file');
+});
+
+test('writeJsonList: EACCES creating the tmp companion still falls back safely (production regression guard)', (t) => {
+  const file = tmpFile(t);
+  t.after(() => fs.rmSync(tmpCompanion(file), { force: true }));
+  const newList = [{ id: 'w_1', status: 'active' }];
+  fs.writeFileSync(file, JSON.stringify([{ id: 'old' }], null, 2), 'utf8');
+  const origWrite = fs.writeFileSync;
+  let calls = 0;
+  fs.writeFileSync = (dest, ...rest) => {
+    calls += 1;
+    // Fail only the very first write attempt (the tmp companion) with EACCES,
+    // matching the real /app-is-root-owned production failure — let every
+    // later call (the in-place fallback write) go through normally.
+    if (calls === 1) throw Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' });
+    return origWrite(dest, ...rest);
+  };
+  t.after(() => { fs.writeFileSync = origWrite; });
+  writeJsonList(file, newList);
+  assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')), newList);
 });

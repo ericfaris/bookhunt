@@ -15,6 +15,7 @@
 // for weaker matches (e.g. titleMatch null / notify-only).
 
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 
 const FILE = path.join(__dirname, '..', 'watchlist.json');
@@ -25,12 +26,23 @@ function clean(s) {
   return typeof s === 'string' ? s.trim().slice(0, MAX_LEN) : '';
 }
 
+// The tmp copy lives in the OS temp dir, not beside the target. /app is
+// root-owned in production (only the bind-mounted files themselves are
+// writable by the uid-1000 process, not new files in that directory), so a
+// tmp file created next to the target would fail with EACCES before we ever
+// got to the rename/fallback logic. os.tmpdir() (e.g. /tmp) is world-writable
+// in the container, so the tmp copy — and therefore the crash-recovery
+// guarantee below — can always be created.
+function tmpPathFor(file) {
+  return path.join(os.tmpdir(), path.basename(file) + '.tmp');
+}
+
 // Hardened read with recovery. A missing file returns [] (first run). But a file
 // that EXISTS yet fails to parse is treated as a possibly-interrupted write: we
-// try the sibling `.tmp` (a verified copy writeJsonList leaves behind on any
-// fallback-write interruption), restore it in place if it parses to an array, and
-// only then fall back to [] — so a half-written target no longer silently empties
-// the whole watchlist.
+// try the tmp copy (written to os.tmpdir(), see tmpPathFor — a verified copy
+// writeJsonList leaves behind on any fallback-write interruption), restore it in
+// place if it parses to an array, and only then fall back to [] — so a
+// half-written target no longer silently empties the whole watchlist.
 function readJsonList(file) {
   let raw;
   try {
@@ -44,7 +56,7 @@ function readJsonList(file) {
   } catch {
     // File exists but is corrupt — try to recover from the tmp copy.
     try {
-      const tmp = JSON.parse(fs.readFileSync(file + '.tmp', 'utf8'));
+      const tmp = JSON.parse(fs.readFileSync(tmpPathFor(file), 'utf8'));
       if (Array.isArray(tmp)) {
         fs.writeFileSync(file, JSON.stringify(tmp, null, 2), 'utf8');
         return tmp;
@@ -56,32 +68,39 @@ function readJsonList(file) {
 
 // Hardened write. Atomic rename can fail on Docker bind mounts (the live
 // watchlist.json is a single-file bind mount, so renameSync onto it throws
-// EXDEV — cross-device link). We therefore write+verify a `.tmp` copy first, try
-// the atomic rename, and on ANY rename failure fall back to an in-place
-// writeFileSync + read-back verification, only unlinking the verified tmp copy
-// once the target is confirmed good. If the fallback write or its verification
-// throws, the tmp file is deliberately left behind as a recovery copy (readJsonList
-// restores it). Never replace the file via rename in production: swapping the inode
+// EXDEV — cross-device link). We therefore write+verify a tmp copy first (in
+// os.tmpdir(), see tmpPathFor — creating a new file in /app itself would throw
+// EACCES in production before we ever reached the rename), try the atomic
+// rename, and on ANY failure along the way (creating the tmp copy, verifying
+// it, or the rename itself) fall back to an in-place writeFileSync + read-back
+// verification, only unlinking the verified tmp copy once the target is
+// confirmed good. If the fallback write or its verification throws, the tmp
+// file is deliberately left behind as a recovery copy (readJsonList restores
+// it). Never replace the file via rename in production: swapping the inode
 // desyncs the single-file bind mount (same gotcha as lists.json).
 function writeJsonList(file, list) {
   const data = JSON.stringify(list, null, 2);
-  const tmp = file + '.tmp';
-  // Write the tmp copy and verify it parses to a same-length string before we
-  // touch the target, guarding against a partial tmp write.
-  fs.writeFileSync(tmp, data, 'utf8');
-  const tmpBack = fs.readFileSync(tmp, 'utf8');
-  JSON.parse(tmpBack);
-  if (tmpBack.length !== data.length) throw new Error('watchlist tmp write verification failed');
+  const tmp = tmpPathFor(file);
   try {
-    fs.renameSync(tmp, file); // atomic fast path (local dev / tests)
+    // Write the tmp copy and verify it parses to a same-length string before we
+    // touch the target, guarding against a partial tmp write.
+    fs.writeFileSync(tmp, data, 'utf8');
+    const tmpBack = fs.readFileSync(tmp, 'utf8');
+    JSON.parse(tmpBack);
+    if (tmpBack.length !== data.length) throw new Error('watchlist tmp write verification failed');
+    fs.renameSync(tmp, file); // atomic fast path (local dev / tests, same device as tmp)
+    return;
   } catch {
-    // EXDEV on the bind mount (or anything else): in-place fallback, verified.
-    fs.writeFileSync(file, data, 'utf8');
-    const back = fs.readFileSync(file, 'utf8');
-    JSON.parse(back); // throws → tmp is kept as the recovery copy
-    if (back.length !== data.length) throw new Error('watchlist write verification failed');
-    fs.unlinkSync(tmp); // only remove the recovery copy once the target is good
+    // Couldn't create/verify the tmp copy, or the rename failed (EXDEV on the
+    // bind mount, or anything else): in-place fallback, verified, directly on
+    // the target file — writable because it's an existing bind-mounted file
+    // this process owns, unlike creating a new file in a root-owned directory.
   }
+  fs.writeFileSync(file, data, 'utf8');
+  const back = fs.readFileSync(file, 'utf8');
+  JSON.parse(back); // throws → surfaces as an error
+  if (back.length !== data.length) throw new Error('watchlist write verification failed');
+  try { fs.unlinkSync(tmp); } catch {} // best-effort; may not exist if the tmp write itself failed
 }
 
 function readAll() {
