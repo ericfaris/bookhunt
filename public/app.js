@@ -2121,6 +2121,75 @@ function makeCoverPlaceholder() {
   return el('div', { className: 'lib-cover placeholder' }, '📖');
 }
 
+// Lazy blurb loading: mirrors the cover machinery above, but fetches a book's
+// synopsis via /api/meta and paints it with buildSynopsis. One observer drives
+// every slot; each carries its title/author on dataset. Uses a viewport root
+// (no `root` option) so the single observer works for both the Library panel
+// and the Watchlist modal, which live in different scroll containers.
+const blurbCache = new Map(); // 'title|author' (lowercased) -> description | null
+const blurbObserver = ('IntersectionObserver' in window)
+  ? new IntersectionObserver((entries, obs) => {
+      for (const entry of entries) {
+        if (entry.isIntersecting) {
+          obs.unobserve(entry.target);
+          loadBlurb(entry.target);
+        }
+      }
+    }, { rootMargin: '200px' })
+  : null;
+
+async function loadBlurb(slot) {
+  const title = slot.dataset.title || '';
+  const author = slot.dataset.author || '';
+  const key = `${title}|${author}`.toLowerCase();
+
+  let desc = blurbCache.get(key);
+  if (desc === undefined) {
+    try {
+      const params = new URLSearchParams();
+      if (title) params.set('title', title);
+      if (author) params.set('author', author);
+      const data = await fetch(`/api/meta?${params.toString()}`).then((r) => r.json());
+      desc = data.description || null;
+    } catch {
+      desc = null;
+    }
+    blurbCache.set(key, desc);
+  }
+  // The slot may have been re-rendered away by a filter change or a watchlist
+  // action; only paint if it's still in the DOM, and guard against a stray
+  // double-invocation duplicating the synopsis.
+  if (desc && slot.isConnected && slot.childElementCount === 0) {
+    slot.append(buildSynopsis(desc));
+  }
+}
+
+// Build a blurb slot for a row. Returns null when there's nothing to look up
+// (no title and no author). A cached hit paints synchronously (instant on
+// drawer re-opens, no network); otherwise the slot is observed and fills in
+// once it scrolls into view. Empty slots render nothing (see .lib-blurb CSS).
+function makeBlurbSlot(title, author) {
+  title = title || '';
+  author = author || '';
+  if (!title.trim() && !author.trim()) return null;
+
+  const slot = el('div', { className: 'lib-blurb' });
+  slot.dataset.title = title;
+  slot.dataset.author = author;
+
+  const key = `${title}|${author}`.toLowerCase();
+  const cached = blurbCache.get(key);
+  if (typeof cached === 'string') {
+    slot.append(buildSynopsis(cached)); // known blurb → paint now, no fetch
+    return slot;
+  }
+  if (cached === null) return slot; // known-empty → no fetch, no content
+
+  if (blurbObserver) blurbObserver.observe(slot);
+  else loadBlurb(slot); // no IO support → just fetch now
+  return slot;
+}
+
 // Shimmer placeholders while the library loads — keeps the drawer from flashing
 // empty (and reduced-motion users get a static muted block, see CSS).
 function renderLibrarySkeleton() {
@@ -2324,6 +2393,7 @@ function renderLibraryBook(book) {
       el('h3', { className: 'lib-title' }, book.title || book.filename || 'Untitled'),
       book.author ? el('div', { className: 'lib-author' }, book.author) : null,
       metaline,
+      makeBlurbSlot(book.title || '', book.author || ''),
       sendSummary,
     ]),
     actions,
@@ -2805,7 +2875,7 @@ function renderWatchlist(watches) {
     });
     actions.append(del);
 
-    const main = el('div', { className: 'watch-row-main' }, [head, ...metaLines, recipLine, editor]);
+    const main = el('div', { className: 'watch-row-main' }, [head, makeBlurbSlot(w.title || '', w.author || ''), ...metaLines, recipLine, editor]);
     body.append(el('div', { className: 'watch-row' }, [buildWatchCover(w), main, actions]));
   }
 }

@@ -1100,6 +1100,20 @@ img.lib-cover { overflow: hidden; }
   color: var(--accent); font-size: 0.8rem; font-weight: 600;
 }
 .synopsis-toggle:hover { text-decoration: underline; }
+
+/* Row-context blurbs (Library rows + Watchlist) — lighter than the search-card
+   synopsis: smaller type, 2-line clamp, no trailing margin. */
+.lib-blurb { margin-top: 0.45rem; }
+/* An empty slot collapses to nothing (no margin, no box height) but stays in the
+   layout flow — using display:none would hide it from the IntersectionObserver,
+   which never reports a display:none target as intersecting, so the blurb would
+   never lazy-load. */
+.lib-blurb:empty { margin: 0; }
+.lib-blurb .synopsis { margin: 0; }
+.lib-blurb .synopsis-text { font-size: 0.8rem; }
+.lib-blurb .synopsis-text.clamped { -webkit-line-clamp: 2; }
+.lib-blurb .synopsis-toggle { font-size: 0.75rem; }
+
 .cover.zoomable { cursor: zoom-in; }
 
 /* Cover slot: wrapper that fills the card's cover column so a set result can
