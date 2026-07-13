@@ -22,7 +22,7 @@ const covers = require('./covers');
 
 const TICK_MS = Number(process.env.LISTS_TICK_MS) || 3600000; // hourly wake; runs when the pull is due
 
-// Politeness backstop: the Amazon/Goodreads charts churn much faster than the
+// Politeness backstop: the scraped Goodreads pages churn much faster than the
 // NYT lists, so unchecked accumulation could grow into a hundred daily forum
 // searches. Above this many ACTIVE list watches, new entrants are skipped
 // (recorded in the digest) rather than watched.
@@ -237,7 +237,7 @@ function buildDigest(events) {
   const html = emailShell(
     'New-release radar',
     bodyRows.join(''),
-    'Compiled from the NYT bestseller, Amazon new-release, and Goodreads popular fiction lists. To remove a title, delete it from your Library.',
+    'Compiled from the NYT bestseller and Goodreads adult-fiction lists. To remove a title, delete it from your Library.',
     'Automated digest from your BookHunt server'
   );
   return { subject, text: textParts.join('\n\n'), html, attachments };

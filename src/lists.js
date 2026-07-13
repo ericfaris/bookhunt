@@ -8,13 +8,13 @@
 // (gitignored, bind-mounted in Docker), same posture as watchlist.json.
 //
 // Sources are pluggable modules under src/listsources/ (same pattern as
-// notify channels): NYT Books API (Phase 1 anchor), plus scraped Amazon and
-// Goodreads charts (Phase 2) — each breaks independently. Lists refresh
-// weekly-ish, so the diff is what makes the schedule safe to run daily: an
-// unchanged list yields no entrants, no watches, no email.
+// notify channels): NYT Books API (Phase 1 anchor), plus two scraped Goodreads
+// adult-fiction genre pages (Phase 2) — each breaks independently. Lists
+// refresh weekly-ish, so the diff is what makes the schedule safe to run daily:
+// an unchanged list yields no entrants, no watches, no email.
 //
 // DEDUPE: the same book appears across sources spelled differently
-// ("WHISTLER" on NYT, "Whistler: A Novel" on Amazon), so identity is
+// ("WHISTLER" on NYT, "Whistler: A Novel" on a scraped list), so identity is
 // entryKey = cleaned title + first author's last name. The `seen` map keyed
 // this way guarantees a book is processed once, ever, across all sources.
 
@@ -23,7 +23,6 @@ const path = require('path');
 
 const util = require('./listsources/util');
 const nyt = require('./listsources/nyt');
-const amazon = require('./listsources/amazon');
 const goodreads = require('./listsources/goodreads');
 
 const FILE = path.join(__dirname, '..', 'lists.json');
@@ -36,7 +35,7 @@ const LIST_TAGS = ['New release'];
 
 /** Every registered source, in pull order: { id, label, tag, configured, fetch }. */
 function sources() {
-  return [...nyt.sources(), ...amazon.sources(), ...goodreads.sources()];
+  return [...nyt.sources(), ...goodreads.sources()];
 }
 
 function isConfigured() {
