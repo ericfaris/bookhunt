@@ -3,7 +3,9 @@
 const fs = require('fs');
 const path = require('path');
 
-const HISTORY_FILE = path.join(__dirname, '..', 'history.json');
+// Overridable so tests can exercise the real read/mutate/write cycle against a
+// temp file instead of the live history. Unset in production → the real file.
+const HISTORY_FILE = process.env.HISTORY_FILE || path.join(__dirname, '..', 'history.json');
 
 function readAll() {
   try {
@@ -30,17 +32,36 @@ function writeAll(entries) {
 }
 
 /**
+ * Read-modify-write in ONE synchronous step, against a FRESH read of the file.
+ *
+ * Never do `const e = readAll(); await something(); writeAll(e);` — the snapshot
+ * goes stale across the await and writing it back silently erases every entry
+ * appended in that window (a watcher auto-download, a Kindle send, a search).
+ * Do the slow work first, then call mutate() with the result.
+ *
+ * `fn` receives the fresh entries and may mutate them in place, return a
+ * replacement array, or return false to abort without writing. Returns the
+ * persisted array.
+ */
+function mutate(fn) {
+  const entries = readAll();
+  const out = fn(entries);
+  if (out === false || out === null) return entries; // nothing to persist
+  const next = Array.isArray(out) ? out : entries;
+  writeAll(next);
+  return next;
+}
+
+/**
  * Append an entry and persist. Returns the stored entry (with id + timestamp).
  */
 function add(entry) {
-  const entries = readAll();
   const stored = {
     id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
     timestamp: new Date().toISOString(),
     ...entry,
   };
-  entries.unshift(stored);
-  writeAll(entries);
+  mutate((entries) => { entries.unshift(stored); });
   return stored;
 }
 
@@ -70,4 +91,4 @@ function logNotify({ downloadId, title, filename, to, kindlePushed, channels }) 
   return add({ type: 'notify', downloadId, title, filename, to, kindlePushed, channels });
 }
 
-module.exports = { readAll, writeAll, add, logSearch, logDownload, logNotify };
+module.exports = { readAll, writeAll, mutate, add, logSearch, logDownload, logNotify };

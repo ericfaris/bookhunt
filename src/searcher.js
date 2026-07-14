@@ -697,6 +697,22 @@ function collectionResult(detail, row, matchedTitle, matchedAuthor) {
   };
 }
 
+/**
+ * PURE: build the result for a scanned post, whichever pass found it.
+ *
+ * A set/collection post names the SET in its title ("Kings Of Mafia Series") and
+ * its scraped image is the set's FIRST book — both wrong for the single book we
+ * searched for, even though the post genuinely contains it. Such a post must
+ * therefore always be emitted as a collectionResult (which carries the searched
+ * title and drops the misleading cover), never as a plain result. Emitting one
+ * as a plain result is what filed "Saved By A God" in the Library under the set's
+ * name, with the set's cover art.
+ */
+function resultForRow(detail, row, { title, author, source }) {
+  if (isCollection((row && row.title) || '')) return collectionResult(detail, row, title, author);
+  return publicResult(detail, source, row);
+}
+
 // ---------------------------------------------------------------------------
 // Search orchestration
 // ---------------------------------------------------------------------------
@@ -860,7 +876,9 @@ async function runSearch({ title, author, sort = 'newest' }, onProgress, signal)
       ) {
         continue;
       }
-      results.push(publicResult(detail, 'Author fallback', row));
+      // A set post reached via THIS pass is still a set — flag it like the other
+      // passes do, instead of emitting it as a plain result under the set's name.
+      results.push(resultForRow(detail, row, { title, author, source: 'Author fallback' }));
     }
   }
 
@@ -893,5 +911,6 @@ module.exports = {
   titleDeclaresNonEpub,
   titleLooksLikeAudiobook,
   collectionResult,
+  resultForRow,
   throwIfCancelled,
 };

@@ -122,3 +122,41 @@ test('titleDeclaresNonEpub: also skips audiobook-tagged titles with no extension
   assert.equal(titleDeclaresNonEpub('Project Hail Mary by Andy Weir [AB]'), true);
   assert.equal(titleDeclaresNonEpub('The Martian (Audiobook)'), true);
 });
+
+// --- resultForRow: a set post is a set, whichever pass found it --------------
+// Regression: the author-fallback pass emitted set posts as PLAIN results, so a
+// book dug out of "Kings Of Mafia Series by Michelle Heard" was filed under the
+// set's title with the set's cover art instead of the book we searched for.
+const { resultForRow } = require('../src/searcher');
+
+const setDetail = {
+  title: 'Kings Of Mafia Series',
+  author: 'Michelle Heard',
+  description: 'Book 1: Tempted by the Devil\nBook 2: Saved By A God',
+  size: '2.4 MB',
+  url: 'https://forum.mobilism.org/t5414877',
+  cover: 'https://images.mobilism.org/set-first-book.jpg', // the SET's first book
+  premium: true,
+  postlinks: [],
+};
+
+test('resultForRow: a collection row is flagged as a set and carries the searched book', () => {
+  const r = resultForRow(setDetail, { title: 'Kings Of Mafia Series by Michelle Heard (.ePUB)' }, {
+    title: 'Saved By A God', author: 'Michelle Heard', source: 'Author fallback',
+  });
+  assert.equal(r.collection, true, 'must be flagged as a set');
+  assert.equal(r.setTitle, 'Kings Of Mafia Series');
+  assert.equal(r.matchedTitle, 'Saved By A God', 'carries the book we actually wanted');
+  assert.equal(r.matchedAuthor, 'Michelle Heard');
+  assert.equal(r.cover, null, "the set's first-book art must never ride along as this book's cover");
+});
+
+test('resultForRow: a plain book row stays a plain result, cover intact', () => {
+  const detail = { ...setDetail, title: 'A Voice in the Dark', cover: 'https://images.mobilism.org/voice.jpg' };
+  const r = resultForRow(detail, { title: 'A Voice in the Dark by Barbara Nickless (.ePUB)' }, {
+    title: 'A Voice in the Dark', author: 'Barbara Nickless', source: 'Author fallback',
+  });
+  assert.ok(!r.collection, 'not a set');
+  assert.equal(r.source, 'Author fallback');
+  assert.equal(r.cover, 'https://images.mobilism.org/voice.jpg', "a real book post's image IS its cover");
+});

@@ -24,6 +24,7 @@ const downloader = require('./downloader');
 const kindle = require('./kindle');
 const booktags = require('./booktags');
 const lists = require('./lists');
+const covers = require('./covers');
 
 const TICK_MS = Number(process.env.WATCH_TICK_MS) || 300000; // wake every 5 min
 // List-origin watches never re-check faster than this, whatever the user's
@@ -73,14 +74,28 @@ function deliveryRecipients(watch) {
  * the delivery bar, which also accepts titleMatch === null).
  */
 async function autoDeliver(watch, top) {
+  // Record the book we WATCHED FOR, not the forum post's title. A set post
+  // ("Kings Of Mafia Series by Michelle Heard") legitimately CONTAINS the book —
+  // the downloader digs the right ePUB out of it — but its title names the set
+  // and its scraped image is the set's first book. Preferring top.title here is
+  // what put "Kings Of Mafia Series" in the Library when the radar had acquired
+  // "Saved By A God". The interactive path (server.js) already prefers the
+  // searched title; this mirrors it.
   const book = {
-    title: top.title || watch.title,
-    author: top.author || watch.author,
-    cover: top.cover || null,
+    title: watch.title || top.matchedTitle || top.title,
+    author: watch.author || top.author,
+    cover: null,
     description: top.description || '',
     link: top.url || null,
     watch: true,
   };
+  // Same reasoning for the cover: prefer a title+author-verified catalog cover,
+  // and fall back to the scraped post image only for a non-set post, where it is
+  // actually this book's cover.
+  try {
+    book.cover = await covers.resolveCover({ title: book.title, author: book.author });
+  } catch { /* fall through */ }
+  if (!book.cover && !top.collection) book.cover = top.cover || null;
   const targets = deliveryRecipients(watch);
 
   // 1) Try an autonomous, verified premium download.
@@ -203,8 +218,8 @@ async function checkWatch(watch) {
     try {
       history.add({
         type: 'watch-hit',
-        title: top.title || watch.title,
-        author: top.author || watch.author,
+        title: watch.title || top.matchedTitle || top.title,
+        author: watch.author || top.author,
         url: top.url || null,
         status: 'fulfilled',
       });

@@ -675,7 +675,14 @@ app.get('/api/library', (_req, res) => {
 // drop its download + correlated send entries from history. Tags for that file
 // are dropped too. Idempotent-ish: a missing file still clears the history rows.
 app.delete('/api/library/:id', (req, res) => {
-  const { entries, savePath, removed } = library.removeBook(history.readAll(), req.params.id);
+  let savePath = null;
+  let removed = false;
+  history.mutate((entries) => {
+    const r = library.removeBook(entries, req.params.id);
+    savePath = r.savePath;
+    removed = r.removed;
+    return removed ? r.entries : false; // nothing found → don't rewrite the file
+  });
   if (!removed) return res.status(404).json({ error: 'Library book not found.' });
   let fileDeleted = false;
   if (savePath && downloader.isSafeEpubPath(savePath, downloader.DOWNLOAD_PATH)) {
@@ -686,7 +693,6 @@ app.delete('/api/library/:id', (req, res) => {
       console.error('Library delete: file removal failed:', err.message);
     }
   }
-  history.writeAll(entries);
   try { booktags.setTags(savePath, []); } catch { /* best effort */ }
   res.json({ ok: true, fileDeleted });
 });
@@ -705,8 +711,7 @@ app.put('/api/library/:id/tags', (req, res) => {
 //     bypassed, by title+author). The new cover is written to EVERY download
 //     entry for the same file so re-downloads stay consistent. Returns the cover.
 app.put('/api/library/:id/cover', async (req, res) => {
-  const entries = history.readAll();
-  const target = entries.find((e) => e.id === req.params.id && e.type === 'download' && e.savePath);
+  const target = history.readAll().find((e) => e.id === req.params.id && e.type === 'download' && e.savePath);
   if (!target) return res.status(404).json({ error: 'Library book not found.' });
 
   let cover = typeof (req.body && req.body.cover) === 'string' ? req.body.cover.trim() : '';
@@ -726,11 +731,15 @@ app.put('/api/library/:id/cover', async (req, res) => {
     }
   }
 
+  // Apply the cover against a FRESH read — the catalog lookup above is a network
+  // round-trip, and a snapshot taken before it would be stale by now: writing it
+  // back would erase anything the watcher/radar appended while we waited.
   const keyPath = path.resolve(target.savePath);
-  for (const e of entries) {
-    if (e.type === 'download' && e.savePath && path.resolve(e.savePath) === keyPath) e.cover = cover;
-  }
-  history.writeAll(entries);
+  history.mutate((entries) => {
+    for (const e of entries) {
+      if (e.type === 'download' && e.savePath && path.resolve(e.savePath) === keyPath) e.cover = cover;
+    }
+  });
   res.json({ ok: true, cover });
 });
 

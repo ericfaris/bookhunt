@@ -9,8 +9,10 @@
 const fs = require('fs');
 const path = require('path');
 
-const FILE = path.join(__dirname, '..', 'recipients.json');
-const GROUPS_FILE = path.join(__dirname, '..', 'recipient-groups.json');
+// Overridable so tests can exercise the real read/mutate/write cycle against a
+// temp file instead of the live recipients. Unset in production → the real files.
+const FILE = process.env.RECIPIENTS_FILE || path.join(__dirname, '..', 'recipients.json');
+const GROUPS_FILE = process.env.RECIPIENT_GROUPS_FILE || path.join(__dirname, '..', 'recipient-groups.json');
 
 function readAll() {
   try {
@@ -37,6 +39,26 @@ function writeJsonAtomic(file, value) {
     fs.writeFileSync(file, data, 'utf8');
     try { fs.unlinkSync(tmp); } catch {}
   }
+}
+
+/**
+ * Read-modify-write in ONE synchronous step, against a FRESH read of the file.
+ *
+ * Never do `const l = readAll(); await something(); writeAll(l);` — the snapshot
+ * goes stale across the await and writing it back reverts every recipient added,
+ * edited, or deleted in that window. Do the slow work (sending mail, resolving a
+ * cover) first, then call mutate() with the result.
+ *
+ * `fn` receives the fresh list and may mutate it in place, return a replacement
+ * array, or return false to abort without writing. Returns the persisted list.
+ */
+function mutate(fn) {
+  const list = readAll();
+  const out = fn(list);
+  if (out === false || out === null) return list; // nothing to persist
+  const next = Array.isArray(out) ? out : list;
+  writeAll(next);
+  return next;
 }
 
 // Cap field length so a hostile client can't bloat recipients.json, and cap the
@@ -134,6 +156,6 @@ function removeGroup(id) {
 }
 
 module.exports = {
-  readAll, writeAll, add, remove, byIds,
+  readAll, writeAll, mutate, add, remove, byIds,
   readGroups, addGroup, removeGroup, cleanGroupInput,
 };

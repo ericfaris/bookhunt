@@ -76,34 +76,39 @@ function buildManifest(token) {
 
 /** Ensure a recipient has a reader token (lazily minted, persisted). */
 function ensureToken(id) {
-  const list = recipients.readAll();
-  const r = list.find((x) => x.id === id);
-  if (!r) return null;
-  if (!r.readerToken) {
+  let found = null;
+  recipients.mutate((list) => {
+    const r = list.find((x) => x.id === id);
+    if (!r) return false;
+    found = r;
+    if (r.readerToken) return false; // already has one — don't rewrite the file
     r.readerToken = newToken();
     if (r.readerEnabled === undefined) r.readerEnabled = true;
-    recipients.writeAll(list);
-  }
-  return r;
+  });
+  return found;
 }
 
 /** Rotate a recipient's token — the old magic link stops working immediately. */
 function rotateToken(id) {
-  const list = recipients.readAll();
-  const r = list.find((x) => x.id === id);
-  if (!r) return null;
-  r.readerToken = newToken();
-  recipients.writeAll(list);
-  return r;
+  let found = null;
+  recipients.mutate((list) => {
+    const r = list.find((x) => x.id === id);
+    if (!r) return false;
+    r.readerToken = newToken();
+    found = r;
+  });
+  return found;
 }
 
 function setReaderEnabled(id, enabled) {
-  const list = recipients.readAll();
-  const r = list.find((x) => x.id === id);
-  if (!r) return null;
-  r.readerEnabled = !!enabled;
-  recipients.writeAll(list);
-  return r;
+  let found = null;
+  recipients.mutate((list) => {
+    const r = list.find((x) => x.id === id);
+    if (!r) return false;
+    r.readerEnabled = !!enabled;
+    found = r;
+  });
+  return found;
 }
 
 /**
@@ -421,7 +426,6 @@ async function notifyNewBooks() {
   if (!recent.length) return 0;
   const list = recipients.readAll();
   let sentCount = 0;
-  let dirty = false;
   for (const r of list) {
     if (!r.readerToken || r.readerEnabled === false || !r.email) continue;
     const last = Date.parse(r.readerNotifiedAt || '') || 0;
@@ -442,14 +446,21 @@ async function notifyNewBooks() {
       }
       const msg = buildNewBooksEmail(r, books);
       await smtp.getTransport().sendMail({ from: smtp.FROM, to: r.email, ...msg });
-      r.readerNotifiedAt = new Date(now).toISOString();
-      dirty = true;
+      // Stamp this ONE recipient against a fresh read, right after their send.
+      // `list` is only a snapshot of who to email: the sends above take seconds
+      // each, so writing the whole snapshot back at the end would revert every
+      // recipient added, edited, or deleted while we were sending — and would
+      // resurrect a recipient deleted mid-loop.
+      recipients.mutate((fresh) => {
+        const target = fresh.find((x) => x.id === r.id);
+        if (!target) return false; // deleted while we were sending — let it stay deleted
+        target.readerNotifiedAt = new Date(now).toISOString();
+      });
       sentCount++;
     } catch (err) {
       console.warn('[reader] notify failed for %s: %s', r.email, err.message);
     }
   }
-  if (dirty) recipients.writeAll(list);
   return sentCount;
 }
 
