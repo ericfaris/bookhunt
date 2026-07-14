@@ -188,4 +188,25 @@ function findInLibrary(books, { title, author } = {}, opts = {}) {
   return scored.map((s) => s.book);
 }
 
-module.exports = { buildLibrary, removeBook, authorFromFilename, findInLibrary, LIBRARY_TITLE_THRESHOLD };
+/**
+ * Is this {title, author} already on the shelf? Builds the live Library from the
+ * on-disk history + tags and matches it with findInLibrary. Shared by the
+ * new-release radar (never re-acquire an owned book) and the manual watch API
+ * (don't let the user watch something they already have). Fails OPEN — if the
+ * lookup throws, returns false so the caller proceeds; the worst case is
+ * watching a book you own, which the watcher's own verification catches, rather
+ * than silently dropping a legitimate watch. Lazy-requires history/booktags to
+ * avoid a load-time dependency cycle through the pure builder above.
+ */
+function ownsBook(entry) {
+  try {
+    const history = require('./history');
+    const booktags = require('./booktags');
+    const books = buildLibrary(history.readAll(), (p) => booktags.readStore()[booktags.keyFor(p)] || []);
+    return findInLibrary(books, entry).length > 0;
+  } catch {
+    return false;
+  }
+}
+
+module.exports = { buildLibrary, removeBook, authorFromFilename, findInLibrary, ownsBook, LIBRARY_TITLE_THRESHOLD };

@@ -172,7 +172,9 @@ test('goodreads.sources: two genre-page sources with the expected ids/tag', () =
   const { sources } = require('../src/listsources/goodreads');
   const s = sources();
   assert.equal(s.length, 2);
-  assert.deepEqual(s.map((x) => x.id), ['goodreads-most-read-adult-fiction', 'goodreads-new-releases-adult-fiction']);
+  // New Releases is listed first so it gets first claim on the per-pull intake
+  // budget (priority 2) ahead of the churnier Most Read page (priority 3).
+  assert.deepEqual(s.map((x) => x.id), ['goodreads-new-releases-adult-fiction', 'goodreads-most-read-adult-fiction']);
   for (const x of s) {
     assert.equal(x.tag, 'Goodreads Adult Fiction');
     assert.equal(x.configured, true);
@@ -291,4 +293,60 @@ test('clampListHours: clamps to bounds and falls back on junk', () => {
   assert.equal(clampListHours(10000), MAX_LIST_HOURS);
   assert.equal(clampListHours('nope'), DEFAULT_LIST_HOURS);
   assert.equal(clampListHours(24), 24);
+});
+
+// --- source priority (spend the per-pull intake budget on the best lists first) ---
+
+test('sources: ordered NYT → Goodreads New Releases → Goodreads Most Read', () => {
+  const { sources } = require('../src/lists');
+  const ids = sources().map((s) => s.id);
+  const nr = ids.indexOf('goodreads-new-releases-adult-fiction');
+  const mr = ids.indexOf('goodreads-most-read-adult-fiction');
+  // Every NYT source (priority 1) precedes both Goodreads pages.
+  const firstGoodreads = Math.min(nr, mr);
+  const lastNyt = ids.reduce((acc, id, i) => (id.startsWith('goodreads-') ? acc : i), -1);
+  assert.ok(lastNyt < firstGoodreads, 'NYT sources come before Goodreads');
+  assert.ok(nr < mr, 'New Releases is consumed before Most Read');
+});
+
+// --- classifyEntrant (the radar intake gate) --------------------------------------
+
+test('classifyEntrant: an owned book is never watched, whatever the counters', () => {
+  const { classifyEntrant } = require('../src/listwatcher');
+  assert.equal(
+    classifyEntrant({ owned: true, activeCount: 0, maxActive: 40, watchedThisRun: 0, maxPerRun: 10 }),
+    'owned'
+  );
+});
+
+test('classifyEntrant: a full standing pool hard-stops (skip-full) before the per-run budget', () => {
+  const { classifyEntrant } = require('../src/listwatcher');
+  assert.equal(
+    classifyEntrant({ owned: false, activeCount: 40, maxActive: 40, watchedThisRun: 0, maxPerRun: 10 }),
+    'skip-full'
+  );
+});
+
+test('classifyEntrant: a spent per-pull budget defers (retried next pull), not skip-full', () => {
+  const { classifyEntrant } = require('../src/listwatcher');
+  assert.equal(
+    classifyEntrant({ owned: false, activeCount: 5, maxActive: 40, watchedThisRun: 10, maxPerRun: 10 }),
+    'defer'
+  );
+});
+
+test('classifyEntrant: room in both budgets → watch', () => {
+  const { classifyEntrant } = require('../src/listwatcher');
+  assert.equal(
+    classifyEntrant({ owned: false, activeCount: 5, maxActive: 40, watchedThisRun: 3, maxPerRun: 10 }),
+    'watch'
+  );
+});
+
+test('buildDigest: skipped section shows the per-title reason note', () => {
+  const msg = buildDigest([
+    { type: 'skipped', title: 'Flooded Book', author: 'A', list: 'Goodreads Most Read (Adult Fiction)', note: 'daily intake limit reached' },
+  ]);
+  assert.ok(msg.text.includes('daily intake limit reached'));
+  assert.ok(msg.html.includes('daily intake limit reached'));
 });

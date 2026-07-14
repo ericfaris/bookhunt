@@ -333,7 +333,7 @@
 
       <section class="set-section">
         <h3>New-release radar</h3>
-        <p class="hint">Follows NYT bestseller, Amazon new-release, and Goodreads popular fiction lists — automatically watches, downloads, and shelves new entrants, with a digest email when there's news.</p>
+        <p class="hint">Follows NYT bestseller and Goodreads popular fiction lists — automatically watches, downloads, and shelves new entrants, with a digest email when there's news.</p>
         <label class="set-toggle"><input id="setListsEnabled" type="checkbox" /> Watch bestseller lists</label>
         <div class="set-cadence">
           <label for="setListCadence">Check lists every</label>
@@ -344,6 +344,17 @@
             <option value="168">Weekly</option>
           </select>
         </div>
+        <div class="set-cadence">
+          <label for="setListMaxPerRun">Add at most</label>
+          <select id="setListMaxPerRun">
+            <option value="5">5 books / check</option>
+            <option value="10">10 books / check</option>
+            <option value="15">15 books / check</option>
+            <option value="25">25 books / check</option>
+            <option value="50">50 books / check</option>
+          </select>
+        </div>
+        <p class="hint">Caps how many new books each check adds to your watchlist, so a busy list can't flood it — the rest carry over to the next check.</p>
         <div class="set-lists-row">
           <button id="setListsRun" class="ghost-btn" type="button">⟳ Check lists now</button>
           <span id="setListsStatus" class="hint"></span>

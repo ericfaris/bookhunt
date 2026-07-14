@@ -14,9 +14,13 @@
 
 const { cleanTitle, cleanAuthor, decodeEntities, SCRAPE_HEADERS } = require('./util');
 
+// `priority` orders sources for the per-pull intake cap (lower = consumed
+// first): "New Releases" is the higher-signal "acquire this now" list, so it
+// gets first claim on the day's intake budget ahead of the churnier, long-tail
+// "Most Read" page. NYT (see nyt.js) ranks ahead of both.
 const PAGES = [
-  { id: 'goodreads-most-read-adult-fiction', label: 'Goodreads Most Read (Adult Fiction)', url: 'https://www.goodreads.com/genres/most_read/adult-fiction' },
-  { id: 'goodreads-new-releases-adult-fiction', label: 'Goodreads New Releases (Adult Fiction)', url: 'https://www.goodreads.com/genres/new_releases/adult-fiction' },
+  { id: 'goodreads-new-releases-adult-fiction', label: 'Goodreads New Releases (Adult Fiction)', url: 'https://www.goodreads.com/genres/new_releases/adult-fiction', priority: 2 },
+  { id: 'goodreads-most-read-adult-fiction', label: 'Goodreads Most Read (Adult Fiction)', url: 'https://www.goodreads.com/genres/most_read/adult-fiction', priority: 3 },
 ];
 
 /** PURE: unescape a JS double-quoted string literal's body. Handles \" \/ \'
@@ -65,6 +69,7 @@ function sources() {
     label: p.label,
     tag: 'Goodreads Adult Fiction',
     configured: true,
+    priority: p.priority,
     fetch: () => fetchGenrePage(p.url),
   }));
 }

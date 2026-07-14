@@ -1645,6 +1645,7 @@ $('#setTestBtn').addEventListener('click', sendTestEmail);
 $('#setWatchCadence').addEventListener('change', saveWatchCadence);
 $('#setListsEnabled').addEventListener('change', saveListsSettings);
 $('#setListCadence').addEventListener('change', saveListsSettings);
+$('#setListMaxPerRun').addEventListener('change', saveListsSettings);
 $('#setListsRun').addEventListener('click', runListsNow);
 
 // Reflect the saved cadence in the dropdown; add a one-off option if the stored
@@ -1725,6 +1726,15 @@ function renderListsSettings(s) {
     cadence.append(el('option', { value: hours }, `${hours} hours`));
   }
   cadence.value = hours;
+  const perRun = $('#setListMaxPerRun');
+  if (perRun) {
+    perRun.disabled = !conf;
+    const n = String((s.settings && s.settings.listMaxPerRun) || 10);
+    if (![...perRun.options].some((o) => o.value === n)) {
+      perRun.append(el('option', { value: n }, `${n} books / check`));
+    }
+    perRun.value = n;
+  }
   if (!conf) {
     status.textContent = 'Needs NYT_API_KEY in .env.';
   } else if (s.lists && s.lists.lastRunAt) {
@@ -1745,6 +1755,7 @@ async function saveListsSettings() {
       body: JSON.stringify({
         listsEnabled: $('#setListsEnabled').checked,
         listPullIntervalHours: Number($('#setListCadence').value),
+        listMaxPerRun: Number($('#setListMaxPerRun').value),
       }),
     });
     if (!res.ok) throw new Error('Could not save');

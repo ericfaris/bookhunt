@@ -26,3 +26,20 @@ test('bounds are sane (min ≥ 5 min, max ≤ a week)', () => {
   assert.ok(settings.MIN_WATCH_MIN >= 5);
   assert.ok(settings.MAX_WATCH_MIN <= 7 * 24 * 60);
 });
+
+// --- per-pull intake cap (radar flood guard) ---------------------------------
+
+test('clampListPerRun: clamps to [MIN, MAX], rounds, and falls back on junk', () => {
+  assert.equal(settings.clampListPerRun(0), settings.MIN_LIST_PER_RUN);
+  assert.equal(settings.clampListPerRun(settings.MAX_LIST_PER_RUN + 5000), settings.MAX_LIST_PER_RUN);
+  assert.equal(settings.clampListPerRun(10), 10);
+  assert.equal(settings.clampListPerRun(9.6), 10);
+  assert.equal(settings.clampListPerRun('nope'), settings.DEFAULT_LIST_PER_RUN);
+  assert.equal(settings.clampListPerRun(undefined, 7), 7); // non-numeric → provided fallback
+});
+
+test('per-run bounds are sane (min ≥ 1, default within bounds)', () => {
+  assert.ok(settings.MIN_LIST_PER_RUN >= 1);
+  assert.ok(settings.DEFAULT_LIST_PER_RUN >= settings.MIN_LIST_PER_RUN);
+  assert.ok(settings.DEFAULT_LIST_PER_RUN <= settings.MAX_LIST_PER_RUN);
+});

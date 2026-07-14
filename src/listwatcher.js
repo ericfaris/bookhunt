@@ -13,9 +13,7 @@
 
 const lists = require('./lists');
 const watchlist = require('./watchlist');
-const history = require('./history');
 const library = require('./library');
-const booktags = require('./booktags');
 const settings = require('./settings');
 const smtp = require('./smtp');
 const covers = require('./covers');
@@ -25,8 +23,10 @@ const TICK_MS = Number(process.env.LISTS_TICK_MS) || 3600000; // hourly wake; ru
 // Politeness backstop: the scraped Goodreads pages churn much faster than the
 // NYT lists, so unchecked accumulation could grow into a hundred daily forum
 // searches. Above this many ACTIVE list watches, new entrants are skipped
-// (recorded in the digest) rather than watched.
-const LIST_MAX_ACTIVE = Number(process.env.LIST_MAX_ACTIVE) || 75;
+// (recorded in the digest) rather than watched. This is the standing-pool
+// ceiling; the per-pull intake cap (settings.getListMaxPerRun) smooths how fast
+// the pool fills, so this can stay modest.
+const LIST_MAX_ACTIVE = Number(process.env.LIST_MAX_ACTIVE) || 40;
 
 function operatorEmail() {
   // Same resolution as the watcher/autowarm: explicit override → CF-Access
@@ -43,14 +43,21 @@ function operatorEmail() {
   );
 }
 
-/** Is this book already on the shelf? (Never re-acquire library books.) */
-function inLibrary(entry) {
-  try {
-    const books = library.buildLibrary(history.readAll(), (p) => booktags.readStore()[booktags.keyFor(p)] || []);
-    return library.findInLibrary(books, entry).length > 0;
-  } catch {
-    return false; // fail open — worst case we watch a book we own
-  }
+/**
+ * PURE: decide what to do with one not-yet-seen new entrant, given the current
+ * counters. Ordering is the contract:
+ *   'owned'     — already on the shelf; never watch (checked first).
+ *   'skip-full' — standing watch pool is at the ceiling; hard stop (marked seen,
+ *                 not retried).
+ *   'defer'     — this pull's intake budget is spent; skip WITHOUT marking seen
+ *                 so the entrant is retried on the next pull.
+ *   'watch'     — create the watch.
+ */
+function classifyEntrant({ owned, activeCount, maxActive, watchedThisRun, maxPerRun }) {
+  if (owned) return 'owned';
+  if (activeCount >= maxActive) return 'skip-full';
+  if (watchedThisRun >= maxPerRun) return 'defer';
+  return 'watch';
 }
 
 /**
@@ -70,8 +77,14 @@ async function run({ force = false } = {}) {
   const summary = { pulled: [], seeded: [], watching: [], owned: [], skipped: [], expired: [], errors: [] };
 
   // Politeness cap counter — includes watches created earlier in this run so a
-  // burst across sources can't blow past the limit.
+  // burst across sources can't blow past the standing ceiling.
   let activeListWatches = watchlist.readAll().filter((w) => w.source === 'list' && w.status === 'active').length;
+
+  // Per-pull intake cap: bound how many watches THIS run creates so a churny
+  // Goodreads reshuffle can't add a dozen at once. Overflow is recorded as
+  // 'skipped' (with reason) but NOT marked seen, so it's re-evaluated next pull.
+  const maxPerRun = settings.getListMaxPerRun();
+  let watchedThisRun = 0;
 
   for (const source of lists.sources()) {
     if (!source.configured) continue;
@@ -92,20 +105,44 @@ async function run({ force = false } = {}) {
       summary.seeded.push(source.label);
     } else {
       const prevKeys = (prev.entries || []).map(lists.entryKey);
+      // Entries deferred by the per-pull intake cap this run — excluded from the
+      // snapshot below so they count as new entrants again next pull.
+      const deferredKeys = new Set();
       for (const entry of lists.newEntrants(prevKeys, entries)) {
         const key = lists.entryKey(entry);
         // The seen map is updated as we go, so a book surfacing on several
         // sources in the SAME run is still processed exactly once.
         if (state.seen[key]) continue;
-        if (inLibrary(entry)) {
+        const decision = classifyEntrant({
+          owned: library.ownsBook(entry),
+          activeCount: activeListWatches,
+          maxActive: LIST_MAX_ACTIVE,
+          watchedThisRun,
+          maxPerRun,
+        });
+        if (decision === 'owned') {
           state.seen[key] = { at: new Date().toISOString(), list: source.label, disposition: 'owned' };
           summary.owned.push(entry.title);
           continue;
         }
-        if (activeListWatches >= LIST_MAX_ACTIVE) {
+        if (decision === 'skip-full') {
+          // Standing pool is full — skip permanently (mark seen). Freed by the
+          // 8-week expiry, but we don't retry a specific title after that.
           state.seen[key] = { at: new Date().toISOString(), list: source.label, disposition: 'skipped' };
           state.pendingEvents.push({
-            at: new Date().toISOString(), type: 'skipped',
+            at: new Date().toISOString(), type: 'skipped', note: 'watch queue is full',
+            title: entry.title, author: entry.author, list: source.label,
+          });
+          summary.skipped.push(entry.title);
+          continue;
+        }
+        if (decision === 'defer') {
+          // Daily intake budget spent. DON'T mark seen and DON'T let the snapshot
+          // swallow it (deferredKeys, below) — so it re-surfaces as a new entrant
+          // on the next pull and gets another shot at a slot.
+          deferredKeys.add(key);
+          state.pendingEvents.push({
+            at: new Date().toISOString(), type: 'skipped', note: 'daily intake limit reached',
             title: entry.title, author: entry.author, list: source.label,
           });
           summary.skipped.push(entry.title);
@@ -119,6 +156,7 @@ async function run({ force = false } = {}) {
             tags: [...lists.LIST_TAGS, source.tag],
           });
           activeListWatches++;
+          watchedThisRun++;
           state.seen[key] = { at: new Date().toISOString(), list: source.label, disposition: 'watching' };
           state.pendingEvents.push({
             at: new Date().toISOString(), type: 'watching',
@@ -130,6 +168,13 @@ async function run({ force = false } = {}) {
           summary.errors.push({ list: source.label, error: `${entry.title}: ${err.message}` });
         }
       }
+      // Persist the pull, but drop the entries we deferred so they re-surface as
+      // new entrants next pull (see deferredKeys / the per-pull intake cap).
+      state.snapshots[source.id] = {
+        pulledAt: new Date().toISOString(),
+        entries: deferredKeys.size ? entries.filter((e) => !deferredKeys.has(lists.entryKey(e))) : entries,
+      };
+      continue;
     }
     state.snapshots[source.id] = { pulledAt: new Date().toISOString(), entries };
   }
@@ -169,7 +214,7 @@ const SECTIONS = [
   { type: 'watching', head: 'Now watching — not yet available on Mobilism', line: (e) => `${e.title}${e.author ? ' — ' + e.author : ''} (${e.list})` },
   { type: 'unverified', head: 'Found but couldn’t verify — not added', line: (e) => `${e.title}${e.author ? ' — ' + e.author : ''}` },
   { type: 'expired', head: 'Stopped watching — never became available', line: (e) => `${e.title}${e.author ? ' — ' + e.author : ''}` },
-  { type: 'skipped', head: 'Skipped — watch queue is full', line: (e) => `${e.title}${e.author ? ' — ' + e.author : ''} (${e.list})` },
+  { type: 'skipped', head: 'Skipped', line: (e) => `${e.title}${e.author ? ' — ' + e.author : ''} (${e.list}${e.note ? ' · ' + e.note : ''})` },
 ];
 
 // Sections whose books get a cover thumbnail (the interesting ones); the
@@ -337,4 +382,4 @@ function start() {
   );
 }
 
-module.exports = { start, tick, run, sendDigest, scheduleDigestSoon, buildDigest, operatorEmail };
+module.exports = { start, tick, run, sendDigest, scheduleDigestSoon, buildDigest, classifyEntrant, operatorEmail };

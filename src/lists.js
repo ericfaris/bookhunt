@@ -33,9 +33,15 @@ const LIST_WATCH_MAX_AGE_MS = Number(process.env.LIST_WATCH_MAX_AGE_MS) || 56 * 
 // Tags stamped onto auto-acquired books so the Library's tag chips group them.
 const LIST_TAGS = ['New release'];
 
-/** Every registered source, in pull order: { id, label, tag, configured, fetch }. */
+/** Every registered source, in pull order: { id, label, tag, configured,
+ *  priority, fetch }. Sorted by `priority` (lower first) so the per-pull intake
+ *  cap is spent on the highest-signal lists first — NYT, then Goodreads New
+ *  Releases, then Goodreads Most Read. Stable for equal priorities. */
 function sources() {
-  return [...nyt.sources(), ...goodreads.sources()];
+  return [...nyt.sources(), ...goodreads.sources()]
+    .map((s, i) => ({ s, i }))
+    .sort((a, b) => ((a.s.priority ?? 50) - (b.s.priority ?? 50)) || (a.i - b.i))
+    .map((x) => x.s);
 }
 
 function isConfigured() {

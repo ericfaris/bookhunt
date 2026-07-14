@@ -35,6 +35,7 @@ function sources() {
     label: l.label,
     tag: 'NYT Fiction',
     configured,
+    priority: 1, // most-curated source — first claim on the per-pull intake cap
     fetch: () => fetchList(l.id),
   }));
 }

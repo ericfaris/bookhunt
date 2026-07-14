@@ -106,6 +106,34 @@ function setListPullIntervalHours(v) {
   return hours;
 }
 
+// Per-pull intake cap. The Goodreads genre pages churn far faster than the NYT
+// lists, so a single daily pull can surface a dozen+ "new" entrants at once.
+// This bounds how many watches ONE pull creates; because pulls are daily by
+// default it is effectively a per-day cap. Overflow isn't lost — leftover
+// entrants are re-evaluated on the next pull (and noted in the digest).
+const MIN_LIST_PER_RUN = 1;
+const MAX_LIST_PER_RUN = 200; // matches the watchlist ceiling — an escape hatch, not a real limit
+const DEFAULT_LIST_PER_RUN = Number(process.env.LIST_MAX_PER_RUN) || 10;
+
+/** PURE: clamp arbitrary input to a valid per-pull intake cap. */
+function clampListPerRun(v, fallback = DEFAULT_LIST_PER_RUN) {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.min(MAX_LIST_PER_RUN, Math.max(MIN_LIST_PER_RUN, Math.round(n)));
+}
+
+function getListMaxPerRun() {
+  return clampListPerRun(readAll().listMaxPerRun, DEFAULT_LIST_PER_RUN);
+}
+
+function setListMaxPerRun(v) {
+  const n = clampListPerRun(v);
+  const all = readAll();
+  all.listMaxPerRun = n;
+  writeAll(all);
+  return n;
+}
+
 module.exports = {
   getWatchIntervalMin,
   getWatchIntervalMs,
@@ -115,13 +143,19 @@ module.exports = {
   getListPullIntervalHours,
   getListPullIntervalMs,
   setListPullIntervalHours,
+  getListMaxPerRun,
+  setListMaxPerRun,
   // exported for unit tests + UI bounds
   clampWatchMinutes,
   clampListHours,
+  clampListPerRun,
   MIN_WATCH_MIN,
   MAX_WATCH_MIN,
   DEFAULT_WATCH_MIN,
   MIN_LIST_HOURS,
   MAX_LIST_HOURS,
   DEFAULT_LIST_HOURS,
+  MIN_LIST_PER_RUN,
+  MAX_LIST_PER_RUN,
+  DEFAULT_LIST_PER_RUN,
 };

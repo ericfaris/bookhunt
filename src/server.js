@@ -608,7 +608,15 @@ app.get('/api/watchlist', (_req, res) => {
 
 app.post('/api/watchlist', (req, res) => {
   try {
-    const entry = watchlist.add(req.body || {});
+    // Don't watch a book you already own — same guard the new-release radar
+    // applies to auto-entrants, now on the manual path too. cleanWatchInput
+    // validates/normalizes; ownsBook fails open so a lookup error never blocks
+    // a legitimate watch.
+    const cleaned = watchlist.cleanWatchInput(req.body || {});
+    if (library.ownsBook(cleaned)) {
+      return res.status(409).json({ error: 'That book is already in your Library.', owned: true });
+    }
+    const entry = watchlist.add(cleaned);
     res.json(entry);
   } catch (err) {
     res.status(400).json({ error: err.message || 'Could not add the watch.' });
@@ -885,6 +893,9 @@ app.get('/api/status', async (_req, res) => {
       watchMaxMin: settings.MAX_WATCH_MIN,
       listsEnabled: settings.getListsEnabled(),
       listPullIntervalHours: settings.getListPullIntervalHours(),
+      listMaxPerRun: settings.getListMaxPerRun(),
+      listPerRunMin: settings.MIN_LIST_PER_RUN,
+      listPerRunMax: settings.MAX_LIST_PER_RUN,
     },
     lists: {
       configured: lists.isConfigured(),
@@ -906,6 +917,9 @@ app.post('/api/settings', (req, res) => {
   }
   if (body.listPullIntervalHours !== undefined) {
     out.listPullIntervalHours = settings.setListPullIntervalHours(body.listPullIntervalHours);
+  }
+  if (body.listMaxPerRun !== undefined) {
+    out.listMaxPerRun = settings.setListMaxPerRun(body.listMaxPerRun);
   }
   res.json({ ok: true, settings: { watchCheckIntervalMin: settings.getWatchIntervalMin(), ...out } });
 });
