@@ -12,3 +12,5 @@ watchlist.json.bak-*
 .DS_Store
 settings.json
 lists.json
+
+.claude/investigations/
