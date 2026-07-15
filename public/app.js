@@ -1647,6 +1647,7 @@ $('#setListsEnabled').addEventListener('change', saveListsSettings);
 $('#setListCadence').addEventListener('change', saveListsSettings);
 $('#setListMaxPerRun').addEventListener('change', saveListsSettings);
 $('#setListsRun').addEventListener('click', runListsNow);
+$('#setBackfillRun').addEventListener('click', startBackfill);
 
 // Reflect the saved cadence in the dropdown; add a one-off option if the stored
 // value isn't one of the presets (e.g. an env-set custom value).
@@ -1743,6 +1744,22 @@ function renderListsSettings(s) {
   } else {
     status.textContent = 'Not run yet.';
   }
+
+  const bf = (s.lists && s.lists.backfill) || {};
+  const backfillBtn = $('#setBackfillRun');
+  const backfillStatus = $('#setBackfillStatus');
+  if (backfillBtn) {
+    backfillBtn.disabled = !conf || bf.status === 'running';
+    if (!conf) {
+      backfillStatus.textContent = '';
+    } else if (bf.status === 'running') {
+      backfillStatus.textContent = `Backfilling… ${bf.watchedCount || 0} of ${bf.totalCount || 0} watched (${bf.remaining || 0} left)`;
+    } else if (bf.status === 'done' && bf.totalCount > 0) {
+      backfillStatus.textContent = `Backfill complete — ${bf.watchedCount || 0} added`;
+    } else {
+      backfillStatus.textContent = 'Not started';
+    }
+  }
 }
 
 async function saveListsSettings() {
@@ -1797,6 +1814,40 @@ async function runListsNow() {
     out.classList.add('err');
     out.textContent = err.message || 'Run failed.';
   } finally {
+    btn.disabled = false;
+    btn.textContent = label;
+  }
+}
+
+async function startBackfill() {
+  const btn = $('#setBackfillRun');
+  const out = $('#setListsResult');
+  out.className = 'set-test-result';
+  btn.disabled = true;
+  const label = btn.textContent;
+  btn.textContent = 'Starting…';
+  try {
+    const res = await fetch('/api/lists/backfill/start', { method: 'POST' });
+    const data = await res.json();
+    if (res.status === 409) {
+      out.classList.add('err');
+      out.textContent = data.error || 'Backfill already running.';
+    } else if (!res.ok) {
+      throw new Error(data.error || 'Backfill failed');
+    } else {
+      const bf = data.backfill || {};
+      out.classList.add('ok');
+      out.textContent = bf.totalCount
+        ? `✓ Backfill queued — ${bf.totalCount} book(s) to catch up, trickling in a few per day.`
+        : '✓ Nothing to backfill — everything on the list is already owned or watched.';
+    }
+    // Restore the label, but leave `disabled` to loadSettings()/renderListsSettings —
+    // it must stay disabled when the server just flipped status to 'running'.
+    btn.textContent = label;
+    await loadSettings();
+  } catch (err) {
+    out.classList.add('err');
+    out.textContent = err.message || 'Backfill failed.';
     btn.disabled = false;
     btn.textContent = label;
   }

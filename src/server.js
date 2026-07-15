@@ -897,11 +897,16 @@ app.get('/api/status', async (_req, res) => {
       listPerRunMin: settings.MIN_LIST_PER_RUN,
       listPerRunMax: settings.MAX_LIST_PER_RUN,
     },
-    lists: {
-      configured: lists.isConfigured(),
-      lastRunAt: lists.readState().lastRunAt,
-      watching: watchlist.readAll().filter((w) => w.source === 'list' && w.status === 'active').length,
-    },
+    lists: (() => {
+      const state = lists.readState();
+      const bf = state.backfill || lists.defaultBackfill();
+      return {
+        configured: lists.isConfigured(),
+        lastRunAt: state.lastRunAt,
+        watching: watchlist.readAll().filter((w) => w.source === 'list' && w.status === 'active').length,
+        backfill: { status: bf.status, totalCount: bf.totalCount, watchedCount: bf.watchedCount, remaining: (bf.queue || []).length },
+      };
+    })(),
   });
 });
 
@@ -936,6 +941,45 @@ app.post('/api/lists/run', async (_req, res) => {
     console.error('List run failed:', err);
     res.status(500).json({ error: err.message });
   }
+});
+
+// One-time Goodreads "Most Read" backfill: fetch the full current page, build
+// a filtered (not owned / not already watched) queue, and persist it. The
+// queue drains a few titles per day on the radar's normal tick — this
+// endpoint only builds and stores the queue; it doesn't watch anything itself.
+app.post('/api/lists/backfill/start', async (_req, res) => {
+  if (!lists.isConfigured()) {
+    return res.status(400).json({ error: 'New-release radar is not configured' });
+  }
+  const state = lists.readState();
+  if (state.backfill && state.backfill.status === 'running') {
+    return res.status(409).json({ error: 'Backfill already running' });
+  }
+  const src = lists.sources().find((s) => s.id === lists.BACKFILL_SOURCE_ID);
+  if (!src) return res.status(500).json({ error: 'Most Read source not found' });
+  let entries;
+  try {
+    entries = await src.fetch();
+  } catch (err) {
+    return res.status(502).json({ error: err.message });
+  }
+  const activeKeys = new Set(
+    watchlist.readAll().filter((w) => w.status === 'active').map(watchlist.queryKey)
+  );
+  const queue = lists.buildBackfillQueue(entries, { isOwned: library.ownsBook, activeKeys, keyOf: watchlist.queryKey });
+  state.backfill = {
+    ...lists.defaultBackfill(),
+    status: queue.length ? 'running' : 'done',
+    queue,
+    totalCount: queue.length,
+    startedAt: new Date().toISOString(),
+    finishedAt: queue.length ? null : new Date().toISOString(),
+  };
+  lists.writeState(state);
+  res.json({
+    ok: true,
+    backfill: { status: state.backfill.status, totalCount: state.backfill.totalCount, watchedCount: 0, remaining: queue.length },
+  });
 });
 
 // --- Send: notify recipients (+ optional Kindle push) -----------------------

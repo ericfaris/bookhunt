@@ -33,6 +33,28 @@ const LIST_WATCH_MAX_AGE_MS = Number(process.env.LIST_WATCH_MAX_AGE_MS) || 56 * 
 // Tags stamped onto auto-acquired books so the Library's tag chips group them.
 const LIST_TAGS = ['New release'];
 
+// One-time Goodreads "Most Read" backfill (issue #33 follow-up): the live
+// radar only ever watches NEW entrants on a diff, so books already on the
+// list before the radar started tracking it are never picked up. These
+// constants label backfill-origin watches distinctly (Watchlist/Library/
+// digest) from the live radar's own Most Read watches.
+const BACKFILL_TAG = 'Backfill';
+const BACKFILL_LABEL = 'Goodreads Most Read (Adult Fiction) — backfill';
+const BACKFILL_SOURCE_ID = 'goodreads-most-read-adult-fiction';
+
+/** Fresh backfill state (see readState()'s `backfill` key doc below). */
+function defaultBackfill() {
+  return {
+    status: 'idle', // 'idle' | 'running' | 'done'
+    queue: [], // [{ title, author }] — remaining, not-yet-resolved entries
+    totalCount: 0, // queue size at build time (fixed once running)
+    watchedCount: 0, // entries turned into watches so far
+    ownedCount: 0, // entries resolved as already-owned at drain time
+    startedAt: null,
+    finishedAt: null,
+  };
+}
+
 /** Every registered source, in pull order: { id, label, tag, configured,
  *  priority, fetch }. Sorted by `priority` (lower first) so the per-pull intake
  *  cap is spent on the highest-signal lists first — NYT, then Goodreads New
@@ -65,6 +87,24 @@ function expiredListWatches(watches, now, maxAgeMs = LIST_WATCH_MAX_AGE_MS) {
     const created = Date.parse(w.createdAt || '');
     return !Number.isNaN(created) && now - created >= maxAgeMs;
   });
+}
+
+/** PURE: current-page entries minus already-owned and already-actively-watched
+ *  books, deduped by queryKey. `isOwned(entry)` and `keyOf(entry)` are
+ *  injected; `activeKeys` is a Set of queryKey strings for existing ACTIVE
+ *  watches (any source). */
+function buildBackfillQueue(entries, { isOwned, activeKeys, keyOf }) {
+  const seenKeys = new Set();
+  const out = [];
+  for (const e of entries || []) {
+    if (!e || !e.title) continue;
+    if (isOwned(e)) continue;
+    const key = keyOf(e);
+    if (activeKeys.has(key) || seenKeys.has(key)) continue;
+    seenKeys.add(key);
+    out.push({ title: e.title, author: e.author });
+  }
+  return out;
 }
 
 // --- state -------------------------------------------------------------------
@@ -100,10 +140,10 @@ function readState() {
   try {
     const data = JSON.parse(fs.readFileSync(FILE, 'utf8'));
     if (data && typeof data === 'object' && !Array.isArray(data)) {
-      return migrateState({ snapshots: {}, seen: {}, pendingEvents: [], lastRunAt: null, ...data });
+      return migrateState({ snapshots: {}, seen: {}, pendingEvents: [], lastRunAt: null, backfill: defaultBackfill(), ...data });
     }
   } catch { /* fresh state */ }
-  return { v: 2, snapshots: {}, seen: {}, pendingEvents: [], lastRunAt: null };
+  return { v: 2, snapshots: {}, seen: {}, pendingEvents: [], lastRunAt: null, backfill: defaultBackfill() };
 }
 
 // Atomic-with-fallback write (atomic rename can fail on Docker bind mounts).
@@ -139,6 +179,10 @@ function drainEvents() {
 module.exports = {
   LIST_TAGS,
   LIST_WATCH_MAX_AGE_MS,
+  BACKFILL_TAG,
+  BACKFILL_LABEL,
+  BACKFILL_SOURCE_ID,
+  defaultBackfill,
   sources,
   isConfigured,
   readState,
@@ -152,6 +196,7 @@ module.exports = {
   entryKey,
   newEntrants,
   expiredListWatches,
+  buildBackfillQueue,
   migrateState,
   normalizeEntry: nyt.normalizeEntry,
   FILE,

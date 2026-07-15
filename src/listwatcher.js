@@ -28,6 +28,11 @@ const TICK_MS = Number(process.env.LISTS_TICK_MS) || 3600000; // hourly wake; ru
 // the pool fills, so this can stay modest.
 const LIST_MAX_ACTIVE = Number(process.env.LIST_MAX_ACTIVE) || 40;
 
+// One-time Most Read backfill (see lists.js): a smaller daily rate than the
+// live radar's per-pull intake cap, so the backfill only ever spends the
+// budget the live radar's new-entrant pass leaves unused each run.
+const BACKFILL_MAX_PER_RUN = Number(process.env.BACKFILL_MAX_PER_RUN) || 5;
+
 function operatorEmail() {
   // Same resolution as the watcher/autowarm: explicit override → CF-Access
   // email → SMTP identity.
@@ -58,6 +63,113 @@ function classifyEntrant({ owned, activeCount, maxActive, watchedThisRun, maxPer
   if (activeCount >= maxActive) return 'skip-full';
   if (watchedThisRun >= maxPerRun) return 'defer';
   return 'watch';
+}
+
+/**
+ * PURE: how many backfill entries to draw THIS run — the live radar's
+ * new-entrant pass claims the per-pull intake budget first; backfill spends
+ * only what's left over, capped at its own smaller daily rate and at what's
+ * actually queued. Never negative.
+ */
+function backfillDrawCount({ watchedThisRun, maxPerRun, backfillMaxPerRun, queueLength }) {
+  return Math.max(0, Math.min(backfillMaxPerRun, maxPerRun - watchedThisRun, queueLength));
+}
+
+/**
+ * PURE: decide what to do with one backfill queue entry. Mirrors
+ * classifyEntrant's owned/pool-full/watch branches, but deliberately DIVERGES
+ * on pool-full: backfill entries are 'defer' (retried next run), never the
+ * live radar's permanent 'skip-full' — a one-time catch-up queue shouldn't
+ * silently drop titles just because the standing pool was briefly full. The
+ * per-run intake budget itself is enforced by backfillDrawCount, not here.
+ */
+function classifyBackfillEntry({ owned, activeCount, maxActive }) {
+  if (owned) return 'owned';
+  if (activeCount >= maxActive) return 'defer';
+  return 'watch';
+}
+
+/**
+ * Drain the one-time Most Read backfill queue by up to this run's leftover
+ * intake budget. Not pure (I/O via watchlist/library), but every decision is
+ * delegated to backfillDrawCount/classifyBackfillEntry. `state.backfill` is
+ * mutated in place; the caller's single `lists.writeState(state)` persists it.
+ * Returns the updated `{ activeListWatches, watchedThisRun }` counters so the
+ * caller's politeness/intake bookkeeping stays accurate.
+ */
+function drainBackfill(state, summary, { activeListWatches, watchedThisRun, maxPerRun }) {
+  const backfill = state.backfill;
+  const draw = backfillDrawCount({
+    watchedThisRun,
+    maxPerRun,
+    backfillMaxPerRun: BACKFILL_MAX_PER_RUN,
+    queueLength: backfill.queue.length,
+  });
+
+  // Rebuild activeKeys fresh (not the queue-build-time snapshot) to catch
+  // watches added since — avoids double-watching / relabel-clobbering a
+  // hand-added watch (see watchlist.add()'s active-watch dedupe).
+  const activeKeys = new Set(
+    watchlist.readAll().filter((w) => w.status === 'active').map(watchlist.queryKey)
+  );
+
+  summary.backfilled = summary.backfilled || [];
+  let drawn = 0;
+  while (drawn < draw && backfill.queue.length) {
+    const entry = backfill.queue[0];
+    const key = watchlist.queryKey(entry);
+    if (activeKeys.has(key)) {
+      // Already actively watched (added since queue-build) — resolved,
+      // silently drop; don't relabel the existing watch.
+      backfill.queue.shift();
+      continue;
+    }
+    const decision = classifyBackfillEntry({
+      owned: library.ownsBook(entry),
+      activeCount: activeListWatches,
+      maxActive: LIST_MAX_ACTIVE,
+    });
+    if (decision === 'owned') {
+      backfill.queue.shift();
+      backfill.ownedCount++;
+      continue;
+    }
+    if (decision === 'defer') {
+      // Standing pool is full — nothing else will fit this run either.
+      break;
+    }
+    try {
+      const watch = watchlist.add({ title: entry.title, author: entry.author, sort: 'newest' });
+      watchlist.update(watch.id, {
+        source: 'list',
+        listLabel: lists.BACKFILL_LABEL,
+        tags: [lists.LIST_TAGS[0], lists.BACKFILL_TAG],
+      });
+      activeKeys.add(key);
+      activeListWatches++;
+      watchedThisRun++;
+      drawn++;
+      backfill.queue.shift();
+      backfill.watchedCount++;
+      state.pendingEvents.push({
+        at: new Date().toISOString(), type: 'watching',
+        title: entry.title, author: entry.author, list: lists.BACKFILL_LABEL,
+      });
+      summary.backfilled.push(entry.title);
+    } catch (err) {
+      console.warn('[lists] backfill could not watch "%s": %s', entry.title, err.message);
+      summary.errors.push({ list: lists.BACKFILL_LABEL, error: `${entry.title}: ${err.message}` });
+      break; // leave entry in queue; avoid a tight retry loop on a persistent error
+    }
+  }
+
+  if (backfill.queue.length === 0 && backfill.status === 'running') {
+    backfill.status = 'done';
+    backfill.finishedAt = new Date().toISOString();
+    state.pendingEvents.push({ at: new Date().toISOString(), type: 'backfill-done', count: backfill.watchedCount });
+  }
+
+  return { activeListWatches, watchedThisRun };
 }
 
 /**
@@ -179,6 +291,16 @@ async function run({ force = false } = {}) {
     state.snapshots[source.id] = { pulledAt: new Date().toISOString(), entries };
   }
 
+  // One-time Most Read backfill: drains AFTER the live radar's new-entrant
+  // loop above, so live entrants have already spent this run's intake budget
+  // (live-first priority — see backfillDrawCount). Only runs when a backfill
+  // queue is actually in progress.
+  if (state.backfill && state.backfill.status === 'running' && state.backfill.queue.length) {
+    const drained = drainBackfill(state, summary, { activeListWatches, watchedThisRun, maxPerRun });
+    activeListWatches = drained.activeListWatches;
+    watchedThisRun = drained.watchedThisRun;
+  }
+
   // Expire list watches that never matched.
   for (const w of lists.expiredListWatches(watchlist.readAll(), Date.now())) {
     watchlist.update(w.id, { status: 'expired' });
@@ -200,9 +322,9 @@ async function run({ force = false } = {}) {
   }
 
   console.log(
-    '[lists] run done — %d watching, %d owned, %d skipped, %d expired, digest %s',
+    '[lists] run done — %d watching, %d owned, %d skipped, %d expired, %d backfilled, digest %s',
     summary.watching.length, summary.owned.length, summary.skipped.length, summary.expired.length,
-    summary.digested ? 'sent' : 'not sent'
+    (summary.backfilled || []).length, summary.digested ? 'sent' : 'not sent'
   );
   return summary;
 }
@@ -212,6 +334,7 @@ async function run({ force = false } = {}) {
 const SECTIONS = [
   { type: 'added', head: 'Added to your Library', line: (e) => `${e.title}${e.author ? ' — ' + e.author : ''}` },
   { type: 'watching', head: 'Now watching — not yet available on Mobilism', line: (e) => `${e.title}${e.author ? ' — ' + e.author : ''} (${e.list})` },
+  { type: 'backfill-done', head: 'Backfill complete', line: (e) => `Most Read backfill finished — ${e.count || 0} added to your watchlist` },
   { type: 'unverified', head: 'Found but couldn’t verify — not added', line: (e) => `${e.title}${e.author ? ' — ' + e.author : ''}` },
   { type: 'expired', head: 'Stopped watching — never became available', line: (e) => `${e.title}${e.author ? ' — ' + e.author : ''}` },
   { type: 'skipped', head: 'Skipped', line: (e) => `${e.title}${e.author ? ' — ' + e.author : ''} (${e.list}${e.note ? ' · ' + e.note : ''})` },
@@ -382,4 +505,7 @@ function start() {
   );
 }
 
-module.exports = { start, tick, run, sendDigest, scheduleDigestSoon, buildDigest, classifyEntrant, operatorEmail };
+module.exports = {
+  start, tick, run, sendDigest, scheduleDigestSoon, buildDigest, classifyEntrant, operatorEmail,
+  backfillDrawCount, classifyBackfillEntry, drainBackfill, BACKFILL_MAX_PER_RUN,
+};
