@@ -1378,6 +1378,15 @@ async function openSendModal(ctx) {
 }
 function closeSendModal() { sendModal.hidden = true; sendCtx = null; }
 
+const recipientsModal = $('#recipientsModal');
+async function openRecipientsModal() {
+  await loadRecipients();     // refreshes recipientsCache + re-renders #manageList
+  recipientsModal.hidden = false;
+}
+function closeRecipientsModal() { recipientsModal.hidden = true; }
+$('#recipientsToggle').addEventListener('click', openRecipientsModal);
+$('#recipientsClose').addEventListener('click', closeRecipientsModal);
+
 async function loadChannels() {
   try {
     const s = await fetch('/api/notify/status').then((r) => r.json());
@@ -1413,6 +1422,10 @@ async function loadRecipients() {
 function renderManageList() {
   const ml = $('#manageList');
   ml.innerHTML = '';
+  if (!recipientsCache.length) {
+    ml.append(el('p', { className: 'hint' }, 'No recipients yet — add one above.'));
+    return;
+  }
   for (const r of recipientsCache) {
     const del = el('button', { className: 'ghost-btn', type: 'button' }, 'Delete');
     del.addEventListener('click', async () => {
@@ -1483,7 +1496,8 @@ function renderSendResults(results) {
 }
 
 $('#sendCancel').addEventListener('click', closeSendModal);
-$('#manageToggle').addEventListener('click', () => {
+$('#manageToggle').addEventListener('click', openRecipientsModal);
+$('#groupsToggle').addEventListener('click', () => {
   const p = $('#managePanel');
   p.hidden = !p.hidden;
 });
@@ -3414,7 +3428,7 @@ function hideStatus() { statusEl.hidden = true; }
 // surface, focus the first control when one opens, and restore focus to whatever
 // opened it on close. Surfaces are listed in dismissal priority (top-most first).
 // ---------------------------------------------------------------------------
-const FOCUS_SURFACES = ['#settingsModal', '#statusModal', '#sendModal', '#credModal', '#batchModal', '#downloadModal', '#libraryPanel', '#historyPanel'];
+const FOCUS_SURFACES = ['#settingsModal', '#statusModal', '#recipientsModal', '#sendModal', '#credModal', '#batchModal', '#downloadModal', '#libraryPanel', '#historyPanel'];
 let focusReturnEl = null;
 
 function focusablesIn(container) {
@@ -3483,6 +3497,7 @@ document.addEventListener('keydown', (e) => {
   if (lb && !lb.hidden) return closeLightbox();
   if (!$('#settingsModal').hidden) return closeSettings();
   if (!$('#statusModal').hidden) return closeStatus();
+  if (!recipientsModal.hidden) return closeRecipientsModal();
   if (!sendModal.hidden) return closeSendModal();
   if (!credModal.hidden) return closeCredModal();
   if (!batchModal.hidden) { batchModal.hidden = true; return; }

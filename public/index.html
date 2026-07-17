@@ -45,6 +45,7 @@
       <button id="watchlistToggle" class="ghost-btn" type="button" title="Watchlist — get notified when a book shows up">🔔 Watchlist</button>
       <button id="historyToggle" class="ghost-btn" type="button">History</button>
       <button id="statusToggle" class="ghost-btn" type="button" title="Session, downloads & channels">Status</button>
+      <button id="recipientsToggle" class="ghost-btn" type="button" title="Manage recipients &amp; reader invites">👥 Recipients</button>
       <button id="settingsToggle" class="ghost-btn" type="button" title="Settings" aria-label="Settings">⚙</button>
     </div>
   </header>
@@ -262,23 +263,13 @@
 
       <div class="modal-actions">
         <button type="button" id="manageToggle" class="ghost-btn">Manage recipients</button>
+        <button type="button" id="groupsToggle" class="ghost-btn">Groups</button>
         <span class="spacer"></span>
         <button type="button" id="sendCancel" class="ghost-btn">Close</button>
         <button type="button" id="sendGo" class="primary-btn">Send</button>
       </div>
 
       <div id="managePanel" hidden>
-        <h3>Recipients</h3>
-        <form id="recipForm" class="recip-form">
-          <input id="rName" placeholder="Name" autocomplete="off" />
-          <input id="rEmail" type="email" placeholder="Email (notification)" autocomplete="off" />
-          <input id="rKindle" type="email" placeholder="name@kindle.com (optional)" autocomplete="off" />
-          <input id="rPhone" placeholder="Phone +1… (optional, future SMS)" autocomplete="off" />
-          <input id="rCarrier" placeholder="Carrier (optional)" autocomplete="off" />
-          <button type="submit" class="primary-btn">Add</button>
-        </form>
-        <div id="manageList" class="manage-list"></div>
-
         <h3>Groups</h3>
         <p class="hint">Check recipients above, then save them as a reusable group.</p>
         <form id="groupForm" class="group-form">
@@ -384,6 +375,24 @@
         <span class="spacer"></span>
         <button id="statusRefresh" class="ghost-btn" type="button">↻ Refresh</button>
       </div>
+    </div>
+  </div>
+
+  <!-- Recipients management modal (top-level; no download/send context needed) -->
+  <div id="recipientsModal" class="modal" role="dialog" aria-modal="true" aria-label="Recipients" hidden>
+    <div class="modal-card recipients-card">
+      <button id="recipientsClose" class="dl-close" type="button" aria-label="Close">✕</button>
+      <h2>Recipients</h2>
+      <p class="hint">Add readers, invite them to their personal shelf, or remove them. No download needed.</p>
+      <form id="recipForm" class="recip-form">
+        <input id="rName" placeholder="Name" autocomplete="off" />
+        <input id="rEmail" type="email" placeholder="Email (notification)" autocomplete="off" />
+        <input id="rKindle" type="email" placeholder="name@kindle.com (optional)" autocomplete="off" />
+        <input id="rPhone" placeholder="Phone +1… (optional, future SMS)" autocomplete="off" />
+        <input id="rCarrier" placeholder="Carrier (optional)" autocomplete="off" />
+        <button type="submit" class="primary-btn">Add</button>
+      </form>
+      <div id="manageList" class="manage-list"></div>
     </div>
   </div>
 

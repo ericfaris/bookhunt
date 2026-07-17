@@ -1187,6 +1187,9 @@ img.lib-cover { overflow: hidden; }
 
 /* --- Status / health (#14) ------------------------------------------------ */
 .status-card { width: min(460px, 94vw); position: relative; }
+
+/* --- Recipients (top-level nav) -------------------------------------------- */
+.recipients-card { width: min(460px, 94vw); position: relative; }
 .status-body { display: flex; flex-direction: column; gap: 1rem; margin-top: 0.5rem; }
 .status-section h3 { margin: 0 0 0.5rem; font-size: 0.9rem; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.03em; }
 .status-item {
