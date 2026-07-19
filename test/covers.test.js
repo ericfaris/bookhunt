@@ -15,6 +15,7 @@ const {
   cleanDescription,
   descriptionFromGoogleBooks,
   resolveMeta,
+  fetchCoverImage,
 } = require('../src/covers');
 
 // A fetch stub: maps a substring of the URL to a JSON payload (or an error).
@@ -319,4 +320,32 @@ test('resolveMeta: a failing lookup resolves to blanks (fail soft)', async () =>
     { cache: { get: () => null, set: () => {} }, lookup: async () => { throw new Error('network'); } }
   );
   assert.deepEqual(out, { cover: null, description: null });
+});
+
+test('fetchCoverImage: returns the bytes on a 200 response', async () => {
+  const bytes = Buffer.from('jpeg-bytes');
+  const buf = await fetchCoverImage('https://covers.example/c.jpg', {
+    fetchImpl: async () => ({ ok: true, status: 200, arrayBuffer: async () => bytes }),
+  });
+  assert.ok(Buffer.isBuffer(buf));
+  assert.equal(buf.toString(), 'jpeg-bytes');
+});
+
+test('fetchCoverImage: a non-2xx status resolves to null instead of throwing', async () => {
+  const buf = await fetchCoverImage('https://covers.example/c.jpg', {
+    fetchImpl: async () => ({ ok: false, status: 502 }),
+  });
+  assert.equal(buf, null);
+});
+
+test('fetchCoverImage: a network error resolves to null instead of throwing', async () => {
+  const buf = await fetchCoverImage('https://covers.example/c.jpg', {
+    fetchImpl: async () => { throw new Error('ECONNRESET'); },
+  });
+  assert.equal(buf, null);
+});
+
+test('fetchCoverImage: a non-http(s) or empty url short-circuits to null', async () => {
+  assert.equal(await fetchCoverImage(''), null);
+  assert.equal(await fetchCoverImage('not-a-url'), null);
 });

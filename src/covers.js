@@ -195,6 +195,30 @@ async function fetchJson(url, { fetchImpl = fetch, timeoutMs = LOOKUP_TIMEOUT_MS
   return res.json();
 }
 
+const IMAGE_FETCH_TIMEOUT_MS = 5000;
+
+/**
+ * Download a cover image's bytes so callers (email attachments) never hand a
+ * live URL to something else's HTTP client. FAIL SOFT: any non-2xx response,
+ * network error, or timeout resolves to `null` — a cover is decoration, never
+ * something that should be able to sink an email send. NEVER throws.
+ */
+async function fetchCoverImage(url, { fetchImpl = fetch, timeoutMs = IMAGE_FETCH_TIMEOUT_MS } = {}) {
+  if (!/^https?:\/\//i.test(String(url || ''))) return null;
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(), timeoutMs);
+  try {
+    const res = await fetchImpl(url, { signal: ac.signal, headers: { 'User-Agent': 'bookhunt/1.0' } });
+    if (!res || !res.ok) return null;
+    const buf = Buffer.from(await res.arrayBuffer());
+    return buf.length ? buf : null;
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 /**
  * Look a cover up by { title, author }. Open Library first (keyless, no quota),
  * Google Books as a fallback. Returns a cover URL string, or null when nothing
@@ -408,6 +432,7 @@ module.exports = {
   resolveCover,
   lookupMeta,
   resolveMeta,
+  fetchCoverImage,
   coverFromOpenLibrary,
   coverFromGoogleBooks,
   descriptionFromGoogleBooks,

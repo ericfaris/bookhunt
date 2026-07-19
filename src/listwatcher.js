@@ -345,9 +345,10 @@ const SECTIONS = [
 const COVER_SECTIONS = new Set(['added', 'watching']);
 
 /** PURE: pending events → { subject, text, html, attachments } (null when
- *  nothing to say). Events may carry a `cover` URL (see sendDigest); covers
- *  ride as inline CID images so they render even when a client blocks remote
- *  images, matching the reader emails. */
+ *  nothing to say). Events may carry a `coverBuffer` (see sendDigest, which
+ *  downloads it) — covers ride as inline CID images so they render even when
+ *  a client blocks remote images, matching the reader emails. No cover buffer
+ *  falls back to the placeholder, same as a lookup miss. */
 function buildDigest(events) {
   const byType = (t) => (events || []).filter((e) => e.type === t);
   if (!events || !events.length) return null;
@@ -370,9 +371,9 @@ function buildDigest(events) {
     if (COVER_SECTIONS.has(s.type)) {
       const rows = evs.map((e) => {
         let coverCell;
-        if (/^https?:\/\//i.test(String(e.cover || ''))) {
+        if (e.coverBuffer) {
           const cid = `cover${attachments.length}@radar`;
-          attachments.push({ filename: `cover${attachments.length}.jpg`, path: e.cover, cid });
+          attachments.push({ filename: `cover${attachments.length}.jpg`, content: e.coverBuffer, cid });
           coverCell = `<img src="cid:${cid}" alt="" width="54"
             style="width:54px;height:auto;display:block;border-radius:7px;box-shadow:0 3px 10px rgba(0,0,0,0.18)">`;
         } else {
@@ -422,10 +423,14 @@ async function sendDigest() {
   if (!to) return false;
   const events = lists.drainEvents();
   // Enrich the cover-worthy events with a cover URL (disk-cached lookup;
-  // resolveCover never throws — a miss just leaves the placeholder).
+  // resolveCover never throws — a miss just leaves the placeholder) and then
+  // download the image bytes ourselves (fetchCoverImage also never throws —
+  // a dead/502ing cover host just falls back to the placeholder instead of
+  // handing nodemailer a live URL that can sink the whole send).
   for (const e of events) {
-    if (COVER_SECTIONS.has(e.type) && !e.cover) {
-      e.cover = await covers.resolveCover({ title: e.title, author: e.author });
+    if (COVER_SECTIONS.has(e.type)) {
+      if (!e.cover) e.cover = await covers.resolveCover({ title: e.title, author: e.author });
+      if (e.cover) e.coverBuffer = await covers.fetchCoverImage(e.cover);
     }
   }
   const msg = buildDigest(events);

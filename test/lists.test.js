@@ -244,15 +244,24 @@ test('buildDigest: sections and counts reflect the events', () => {
   assert.match(msg.html, /<li>Never Showed — Ghost Writer<\/li>/);
 });
 
-test('buildDigest: a cover URL becomes an inline CID image + attachment', () => {
+test('buildDigest: a fetched cover buffer becomes an inline CID image + attachment', () => {
   const msg = buildDigest([
-    { type: 'added', title: 'With Cover', author: 'A', cover: 'https://covers.example/c.jpg' },
+    { type: 'added', title: 'With Cover', author: 'A', coverBuffer: Buffer.from('jpeg-bytes') },
     { type: 'watching', title: 'No Cover', author: 'B', list: 'L' },
   ]);
   assert.equal(msg.attachments.length, 1);
-  assert.equal(msg.attachments[0].path, 'https://covers.example/c.jpg');
+  assert.equal(msg.attachments[0].content, msg.attachments[0].content); // present
+  assert.ok(Buffer.isBuffer(msg.attachments[0].content));
   assert.match(msg.html, new RegExp(`cid:${msg.attachments[0].cid}`));
   assert.match(msg.html, /📖/); // the coverless book gets the placeholder
+});
+
+test('buildDigest: a cover URL with no buffer (fetch failed) falls back to the placeholder', () => {
+  const msg = buildDigest([
+    { type: 'added', title: 'Dead Cover', author: 'A', cover: 'https://covers.example/c.jpg' },
+  ]);
+  assert.equal(msg.attachments.length, 0);
+  assert.match(msg.html, /📖/);
 });
 
 test('buildDigest: escapes HTML in titles', () => {
