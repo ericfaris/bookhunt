@@ -93,6 +93,7 @@ h1, h2, h3,
 }
 .topbar h1 { margin: 0; min-width: 0; }
 .topbar-actions { display: flex; gap: 0.5rem; flex-shrink: 0; }
+.nav-toggle { display: none; font-size: 1.15rem; line-height: 1; padding: 0.42rem 0.7rem; }
 
 /* --- BookHunt brand lockup ------------------------------------------------- */
 .brand { display: flex; align-items: center; gap: 0.6rem; white-space: nowrap; }
@@ -1008,6 +1009,7 @@ img.lib-cover { overflow: hidden; }
 @media (prefers-reduced-motion: reduce) {
   .confetti { display: none; }
   .dl-step.active .dl-step-icon { animation: none; }
+  .topbar-actions { transition: none; }
 }
 
 /* --- Spell-correction before→after notice (single + batch) ---------------- */
@@ -1049,14 +1051,37 @@ img.lib-cover { overflow: hidden; }
   .card .cover.placeholder { font-size: 1.6rem; }
 
   .dl-row a.topic-link { margin-left: 0; }
-}
 
-/* Narrow phones: let the action buttons wrap to their own row so the title is
-   never clipped behind them. */
-@media (max-width: 520px) {
-  .topbar { flex-wrap: wrap; row-gap: 0.5rem; }
-  .topbar h1 { flex: 1 1 100%; }
-  .topbar-actions { flex: 1 1 100%; }
+  /* Topbar collapses to a hamburger; brand + ☰ share the first row, the six
+     action buttons become a full-width slide-down panel on their own row. */
+  .topbar { flex-wrap: wrap; row-gap: 0; }
+  .topbar h1 { flex: 1 1 auto; }          /* brand keeps the row with the ☰ */
+  .nav-toggle { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 auto; }
+
+  .topbar-actions {
+    flex: 1 1 100%;                        /* own row, full width */
+    flex-direction: column;
+    gap: 0.4rem;
+    max-height: 0;
+    overflow: hidden;
+    visibility: hidden;                    /* keep buttons out of tab order while closed */
+    transition: max-height var(--ease), margin-top var(--ease), visibility var(--ease);
+    margin-top: 0;
+  }
+  .topbar.nav-open .topbar-actions {
+    max-height: 60vh;                      /* generous; six buttons never exceed this */
+    visibility: visible;
+    margin-top: 0.6rem;
+    overflow-y: auto;                      /* safety net on very short screens */
+  }
+  .topbar-actions .ghost-btn {
+    width: 100%;
+    text-align: left;
+    justify-content: flex-start;
+    padding: 0.7rem 0.85rem;               /* ~44px touch target */
+    font-size: 0.95rem;
+  }
+  .topbar.nav-open .nav-toggle { border-color: var(--accent); }
 }
 
 /* On very narrow phones, drop the tagline and tighten the buttons so the

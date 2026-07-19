@@ -3487,12 +3487,48 @@ FOCUS_SURFACES.forEach((s) => {
 });
 
 // ---------------------------------------------------------------------------
+// Mobile hamburger nav: the six topbar action buttons collapse into a
+// slide-down panel at <=600px. Toggling a class on .topbar is the single
+// source of truth; the buttons' own click handlers are untouched.
+// ---------------------------------------------------------------------------
+const topbar = $('.topbar');
+const navToggle = $('#navToggle');
+const topbarActions = $('#topbarActions');
+
+function openNav() {
+  topbar.classList.add('nav-open');
+  navToggle.setAttribute('aria-expanded', 'true');
+}
+function closeNav() {
+  topbar.classList.remove('nav-open');
+  navToggle.setAttribute('aria-expanded', 'false');
+}
+function toggleNav() {
+  topbar.classList.contains('nav-open') ? closeNav() : openNav();
+}
+
+navToggle.addEventListener('click', (e) => { e.stopPropagation(); toggleNav(); });
+
+// Selecting any action closes the panel (its own handler still runs and opens
+// the modal). Delegated so it never needs to know the six ids.
+topbarActions.addEventListener('click', (e) => {
+  if (e.target.closest('.ghost-btn')) closeNav();
+});
+
+// Click anywhere outside the header closes the panel.
+document.addEventListener('click', (e) => {
+  if (!topbar.classList.contains('nav-open')) return;
+  if (!topbar.contains(e.target)) closeNav();
+});
+
+// ---------------------------------------------------------------------------
 // Global keyboard: Escape dismisses the top-most open surface. The download
 // modal is only dismissible once its close button is shown (i.e. the download
 // has settled), matching the existing click-to-close affordance.
 // ---------------------------------------------------------------------------
 document.addEventListener('keydown', (e) => {
   if (e.key !== 'Escape') return;
+  if (topbar.classList.contains('nav-open')) return closeNav();
   const lb = $('#lightbox');
   if (lb && !lb.hidden) return closeLightbox();
   if (!$('#settingsModal').hidden) return closeSettings();
