@@ -124,7 +124,7 @@ function buildMessage({ recipient, book }) {
                 <p style="margin:0;color:#ffffff;font-size:16px;font-weight:800;letter-spacing:0.2px">
                   Book<span style="color:${ACCENT}">Hunt</span>
                 </p>
-                <p style="margin:0;color:#aeb6d6;font-size:11px;font-weight:600">find books. find threads.</p>
+                <p style="margin:0;color:#aeb6d6;font-size:11px;font-weight:600">find your book.</p>
               </td>
             </tr></table>
           </td></tr>
