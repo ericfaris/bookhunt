@@ -65,6 +65,36 @@
   .install button.x { border: 0; background: none; color: var(--dim); font-size: 1.2rem;
     cursor: pointer; padding: 0 2px; line-height: 1; flex-shrink: 0; }
   .center { text-align: center; padding: 40px 10px; color: var(--dim); }
+  .search { display: flex; gap: 8px; margin: 0 0 16px; }
+  .search[hidden] { display: none; }
+  .search input { flex: 1; min-width: 0; background: var(--surface); color: var(--text);
+    border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px; font-size: 0.95rem; }
+  .search button.clear { border: 0; background: none; color: var(--dim); font-size: 1.2rem;
+    cursor: pointer; padding: 0 4px; line-height: 1; }
+  .shelfSentinel { height: 1px; }
+  /* Reusable "what's new" spotlight — a pulsing ring on the feature itself
+     plus a dismissable callout underneath. Generic by design: any future
+     feature can reuse .spotlight-ring / .spotlight-bubble via
+     spotlightFeature() in reader.js rather than a one-off banner each time. */
+  .spotlight-ring { outline: 2px solid var(--accent); outline-offset: 4px;
+    border-radius: 14px; animation: bhSpotlightPulse 1.8s ease-in-out infinite; }
+  @keyframes bhSpotlightPulse {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(241, 89, 42, 0.35); }
+    50% { box-shadow: 0 0 0 9px rgba(241, 89, 42, 0); }
+  }
+  .spotlight-bubble { background: var(--surface); border: 1px solid var(--accent);
+    border-radius: 12px; padding: 12px 14px; margin: 0 0 16px; font-size: 0.88rem; }
+  .spotlight-bubble .st { font-weight: 700; margin: 0 0 4px; }
+  .spotlight-bubble .sb { color: var(--dim); margin: 0 0 10px; line-height: 1.5; }
+  .spotlight-bubble button { border: 0; border-radius: 9px; padding: 7px 14px; font-weight: 600;
+    font-size: 0.85rem; cursor: pointer; background: var(--accent); color: #fff; }
+  .spotlight-bubble button:hover { background: var(--accent-hover); }
+  #searchResults { margin: 0 0 24px; }
+  #searchResults .center { text-align: center; padding: 24px 10px; color: var(--dim); }
+  #searchResults h2 { font-size: 0.95rem; margin: 0 0 12px; color: var(--dim); }
+  .watchForm { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
+  .watchForm input { background: var(--bg); color: var(--text); border: 1px solid var(--border);
+    border-radius: 9px; padding: 10px 12px; font-size: 0.9rem; }
   footer { text-align: center; margin-top: 34px; font-size: 0.8rem; color: var(--dim); }
   footer a { color: var(--dim); }
 </style>
@@ -77,6 +107,12 @@
   </header>
   <div id="banner"></div>
   <div id="install" class="install" hidden></div>
+  <form id="searchForm" class="search" hidden>
+    <input id="searchInput" type="search" placeholder="Search all books by title or author…"
+           autocomplete="off" maxlength="300" enterkeyhint="search">
+    <button type="button" id="searchClear" class="clear" hidden title="Clear search">✕</button>
+  </form>
+  <div id="searchResults"></div>
   <div id="main" class="center">Loading…</div>
   <footer id="foot" hidden>
     Tap “Send to my Kindle” and the book arrives in your Kindle library in a few minutes.<br>

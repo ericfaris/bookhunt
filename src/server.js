@@ -108,12 +108,42 @@ app.get('/reader/icon-:size.png', (req, res) => {
 app.get('/reader/api/books', async (req, res) => {
   const r = reader.byToken(String(req.query.t || ''));
   if (!r) return res.status(404).json({ error: 'Not found' });
+  const offset = Math.max(0, parseInt(req.query.offset, 10) || 0);
+  const limit = Math.min(50, Math.max(1, parseInt(req.query.limit, 10) || reader.PAGE_SIZE));
   try {
-    const books = await reader.booksForReader(r);
-    res.json({ name: r.name, kindleSet: !!r.kindleEmail, days: reader.RECENT_DAYS, books });
+    const { books, total, hasMore } = await reader.booksForReaderPage(r, offset, limit);
+    res.json({ name: r.name, kindleSet: !!r.kindleEmail, books, total, hasMore, offset, limit });
   } catch (err) {
     console.error('Reader books failed:', err);
     res.status(500).json({ error: 'Could not load the shelf.' });
+  }
+});
+
+app.get('/reader/api/search', async (req, res) => {
+  const r = reader.byToken(String(req.query.t || ''));
+  if (!r) return res.status(404).json({ error: 'Not found' });
+  const q = String(req.query.q || '').slice(0, 300).trim();
+  try {
+    const books = q ? await reader.searchForReader(r, q) : [];
+    res.json({ name: r.name, kindleSet: !!r.kindleEmail, books, query: q });
+  } catch (err) {
+    console.error('Reader search failed:', err);
+    res.status(500).json({ error: 'Search failed.' });
+  }
+});
+
+app.post('/reader/api/watchlist', (req, res) => {
+  const { t, title, author } = req.body || {};
+  const r = reader.byToken(String(t || ''));
+  if (!r) return res.status(404).json({ error: 'Not found' });
+  try {
+    const cleaned = watchlist.cleanWatchInput({ title, author, recipientIds: [r.id] });
+    const plan = reader.planReaderWatch(watchlist.readAll(), cleaned, r.id);
+    if (plan.action === 'merge') watchlist.setRecipients(plan.id, plan.recipientIds);
+    else watchlist.add(plan.input);
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(400).json({ error: err.message || 'Could not add the watch.' });
   }
 });
 

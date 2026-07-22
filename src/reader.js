@@ -25,14 +25,22 @@ const booktags = require('./booktags');
 const covers = require('./covers');
 const kindle = require('./kindle');
 const smtp = require('./smtp');
+const watchlist = require('./watchlist');
+const { normalize, similarity } = require('./correct');
 
 // Public origin for links in reader emails (the app itself never needs this —
 // only mail does, since a reader's email client can't use relative URLs).
 const BASE_URL = (process.env.PUBLIC_BASE_URL || 'https://bookhunt.mooseflip.com').replace(/\/+$/, '');
 
-// How far back the picker looks. New releases churn weekly; a month of depth
-// keeps the page cozy instead of overwhelming.
+// How far back the "new books" EMAIL digest looks (notifyNewBooks below). The
+// shelf page itself shows the reader's whole library (paginated — see
+// booksForReaderPage); this window only bounds what triggers an email.
 const RECENT_DAYS = Number(process.env.READER_RECENT_DAYS) || 30;
+
+// Shelf page size for lazy-loaded pagination — big enough to fill a screen or
+// two without the reader scrolling much, small enough that a page load and
+// each subsequent lazy fetch stay snappy.
+const PAGE_SIZE = Number(process.env.READER_PAGE_SIZE) || 24;
 
 // At most one "new books" email per reader per this window, however often the
 // notifier is invoked — the notifier itself is fired opportunistically.
@@ -136,15 +144,31 @@ function buildBooks() {
   return library.buildLibrary(history.readAll(), (p) => booktags.readStore()[booktags.keyFor(p)] || []);
 }
 
-/** PURE-ish core: which books surface to readers — verified, still on disk,
- *  added within the window. Newest first (buildLibrary's order). */
+/** PURE: is this book actually sendable — verified AND still on disk? Shared
+ *  by every reader-facing book list so nobody's ever offered a "Send" button
+ *  for a book that isn't really there. */
+function isSendable(b) {
+  return !!(b && b.verified && b.filePresent);
+}
+
+/** PURE-ish core: which books surface in the "new books" EMAIL digest —
+ *  sendable, added within the window. Newest first (buildLibrary's order).
+ *  The shelf PAGE itself no longer uses this — see sendableBooks/
+ *  booksForReaderPage — this stays scoped to notifyNewBooks below. */
 function recentBooks(books, now = Date.now(), days = RECENT_DAYS) {
   const cutoff = now - days * 24 * 3600 * 1000;
   return (books || []).filter((b) => {
-    if (!b.verified || !b.filePresent) return false;
+    if (!isSendable(b)) return false;
     const at = Date.parse(b.acquiredAt || '');
     return !Number.isNaN(at) && at >= cutoff;
   });
+}
+
+/** PURE: every sendable book in the whole library, newest first
+ *  (buildLibrary's order, filter preserves it). The reader shelf's full,
+ *  unpaginated source list — booksForReaderPage slices a page off this. */
+function sendableBooks(books) {
+  return (books || []).filter(isSendable);
 }
 
 /** PURE: has this book already been sent to this recipient? Sends log `to` as
@@ -156,27 +180,129 @@ function sentTo(book, recipient) {
   );
 }
 
-/** The picker payload for one reader: safe fields only. Covers resolve through
- *  the disk-cached catalog lookup (each book at most once, ever). */
-async function booksForReader(recipient) {
-  const recent = recentBooks(buildBooks());
-  const out = [];
-  for (const b of recent) {
-    let cover = b.cover || null;
-    if (!cover) {
-      try { cover = await covers.resolveCover({ title: b.title, author: b.author }); } catch { /* placeholder */ }
-    }
-    out.push({
-      id: b.id,
-      title: b.title || b.filename || 'Untitled',
-      author: b.author || '',
-      cover,
-      acquiredAt: b.acquiredAt,
-      tags: b.tags || [],
-      sent: sentTo(b, recipient),
-    });
+/** Map one library book to the safe reader-tile payload (id, title, author,
+ *  cover, tags, sent). Covers resolve through the disk-cached catalog lookup
+ *  (each book at most once, ever); a resolve failure falls back to no cover
+ *  rather than failing the whole page/search. Shared by the shelf and search. */
+async function toReaderTile(b, recipient) {
+  let cover = b.cover || null;
+  if (!cover) {
+    try { cover = await covers.resolveCover({ title: b.title, author: b.author }); } catch { /* placeholder */ }
   }
+  return {
+    id: b.id,
+    title: b.title || b.filename || 'Untitled',
+    author: b.author || '',
+    cover,
+    acquiredAt: b.acquiredAt,
+    tags: b.tags || [],
+    sent: sentTo(b, recipient),
+  };
+}
+
+/** PURE: slice a page off an ordered list. `hasMore` tells the client whether
+ *  to keep observing for the next scroll-triggered page. */
+function paginate(list, offset, limit) {
+  const source = Array.isArray(list) ? list : [];
+  const total = source.length;
+  const slice = source.slice(offset, offset + limit);
+  return { slice, total, hasMore: offset + slice.length < total };
+}
+
+/**
+ * One page of the reader's WHOLE library (not just recent), newest first —
+ * the shelf's lazy-load source. `offset`/`limit` page through
+ * `sendableBooks`, so the same book never straddles two pages as new books
+ * are acquired between loads (the underlying order is acquiredAt-desc and
+ * stable within a request). Returns `{ books, total, hasMore }`.
+ */
+async function booksForReaderPage(recipient, offset = 0, limit = PAGE_SIZE) {
+  const { slice, total, hasMore } = paginate(sendableBooks(buildBooks()), offset, limit);
+  const books = [];
+  for (const b of slice) books.push(await toReaderTile(b, recipient));
+  return { books, total, hasMore };
+}
+
+// A candidate needs at least this much fuzzy evidence (see fuzzyScore) before
+// it's considered a real hit for reader search-as-you-type — loose enough to
+// forgive typos and partial words, tight enough not to return everything.
+const SEARCH_THRESHOLD = 0.55;
+
+// Common short words dropped from per-token fuzzy matching — without this, a
+// query like "burning" (which itself contains the substring "in") would
+// containment-match the stray word "in" inside an unrelated title like
+// "Girls in the Stilt House". They still count toward a whole-string
+// substring hit (e.g. searching "the" isn't specially blocked), just not as
+// individual token-matching noise.
+const STOPWORDS = new Set(['a', 'an', 'the', 'of', 'in', 'on', 'at', 'to', 'and', 'or', 'is', 'it', 'its', 'for', 'with', 'by']);
+
+/** PURE: fuzzy match a free-text query against one field (title or author),
+ *  in [0,1]. A normalized substring hit (any partial word the user is
+ *  mid-typing, e.g. "burning" inside "the burning side") scores highest.
+ *  Otherwise, every query token must find its best match — substring or
+ *  Levenshtein-similar — among the field's non-stopword words, and the score
+ *  is the average of those per-token bests. This is deliberately more
+ *  forgiving than `correct.matchScore` (whole-string similarity), which
+ *  penalizes a short query against a longer title too harshly for live
+ *  search. Containment only grants its shortcut score when both sides are at
+ *  least 3 characters, so short words can't spuriously "contain" each other. */
+function fuzzyScore(query, field) {
+  const nq = normalize(query);
+  const nf = normalize(field);
+  if (!nq || !nf) return 0;
+  if (nf.includes(nq)) return 1;
+  const qTokens = nq.split(' ');
+  const fTokens = nf.split(' ').filter((w) => !STOPWORDS.has(w));
+  const pool = fTokens.length ? fTokens : nf.split(' ');
+  let total = 0;
+  for (const qt of qTokens) {
+    let best = 0;
+    for (const ft of pool) {
+      const containment = (ft.includes(qt) || qt.includes(ft)) && Math.min(ft.length, qt.length) >= 3;
+      best = Math.max(best, containment ? 0.9 : similarity(qt, ft));
+    }
+    total += best;
+  }
+  return total / qTokens.length;
+}
+
+/** PURE: reader-facing fuzzy library search. Restricts to sendable books
+ *  (verified && filePresent), scores each against the free-text query on
+ *  BOTH title and author (best of the two wins), keeps hits at/above
+ *  SEARCH_THRESHOLD, and returns them best-match-first. Empty/blank query →
+ *  []. Typo- and partial-word-tolerant (see fuzzyScore). */
+function searchLibrary(books, query) {
+  const q = String(query || '').trim();
+  if (!q) return [];
+  const sendable = sendableBooks(books);
+  const scored = [];
+  for (const b of sendable) {
+    const score = Math.max(fuzzyScore(q, b.title || ''), fuzzyScore(q, b.author || ''));
+    if (score >= SEARCH_THRESHOLD) scored.push({ book: b, score });
+  }
+  scored.sort((x, y) => y.score - x.score);
+  return scored.map((s) => s.book);
+}
+
+/** Search the whole library (not just the recent shelf) for one reader. */
+async function searchForReader(recipient, query) {
+  const hits = searchLibrary(buildBooks(), query);
+  const out = [];
+  for (const b of hits) out.push(await toReaderTile(b, recipient));
   return out;
+}
+
+/** PURE: decide how a reader's watch request maps onto the existing watchlist.
+ *  If an ACTIVE watch already exists for this query, return a merge (the
+ *  reader's id added to its recipientIds); otherwise return a create. Works
+ *  around watchlist.add()'s silent dedupe that would drop the new recipientId. */
+function planReaderWatch(watches, cleaned, recipientId) {
+  const key = watchlist.queryKey(cleaned);
+  const existing = (watches || []).find((w) => w.status === 'active' && watchlist.queryKey(w) === key);
+  if (existing) {
+    return { action: 'merge', id: existing.id, recipientIds: [...(existing.recipientIds || []), recipientId] };
+  }
+  return { action: 'create', input: cleaned };
 }
 
 // --- sending ---------------------------------------------------------------------
@@ -467,22 +593,31 @@ async function notifyNewBooks() {
 module.exports = {
   BASE_URL,
   RECENT_DAYS,
+  PAGE_SIZE,
   ensureToken,
   rotateToken,
   setReaderEnabled,
   byToken,
   readerLink,
   buildManifest,
-  booksForReader,
+  booksForReaderPage,
+  searchForReader,
   sendToReader,
   invite,
   notifyNewBooks,
   emailShell, // shared branded card shell (also used by the radar digest)
   // exported for unit tests
   recentBooks,
+  isSendable,
+  sendableBooks,
+  paginate,
   sentTo,
   sendAllowed,
   buildNewBooksEmail,
   buildInviteEmail,
   newToken,
+  searchLibrary,
+  fuzzyScore,
+  planReaderWatch,
+  toReaderTile,
 };
