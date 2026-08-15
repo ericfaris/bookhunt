@@ -94,8 +94,14 @@ function createCancelSignal() {
   };
 }
 
+// Guarded like isCloudflareChallenge() below: a bare evaluate() here can race an
+// in-flight navigation (flaky Mobilism connectivity leaves the page mid-goto) and
+// throw "Execution context was destroyed", which isn't caught anywhere it's called
+// from. Treat that as "not logged in yet" rather than letting it blow up warmUp().
 const isLoggedIn = (page) =>
-  page.evaluate(() => !!document.querySelector('a[href*="mode=logout"]'));
+  page
+    .evaluate(() => !!document.querySelector('a[href*="mode=logout"]'))
+    .catch(() => false);
 
 // Playwright's browser-launch failures carry a multi-KB log (the full Chromium
 // command line + stderr). Collapse that into a short, actionable message for the
@@ -308,6 +314,9 @@ async function warmUp() {
     // Surface current Cloudflare/login state. A headed browser usually clears the
     // JS challenge within a few seconds of landing on the page.
     await page.goto(`${BASE_URL}/index.php`, { waitUntil: 'domcontentloaded' }).catch(() => {});
+    // Give a still-in-flight navigation (e.g. after a swallowed goto failure/redirect)
+    // a moment to settle before evaluating against the page.
+    await page.waitForLoadState('domcontentloaded', { timeout: 5000 }).catch(() => {});
     if (await isCloudflareChallenge(page)) {
       await page.waitForTimeout(6000); // give Turnstile/JS a chance to auto-pass
       if (await isLoggedIn(page)) return { ready: true, action: 'cf-auto', humanNeeded: false };
