@@ -235,6 +235,12 @@ function rateLimiter({ windowMs = 60_000, max = 120 } = {}) {
     }
     rec.count++;
     if (rec.count > max) {
+      // Log once per trip (not every subsequent request while still over) so a
+      // false-positive (shared IP, misidentified client) is diagnosable from
+      // the container logs instead of a silent 429 in the browser.
+      if (rec.count === max + 1) {
+        console.warn('[security] rate limit hit: ip=%s route=%s max=%d/%dms', ip, req.originalUrl, max, windowMs);
+      }
       res.setHeader('Retry-After', Math.ceil((rec.start + windowMs - now) / 1000));
       return res.status(429).json({ error: 'Too many requests' });
     }

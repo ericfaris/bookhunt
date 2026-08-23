@@ -57,9 +57,13 @@ app.use(security.cloudflareAccess());
 
 app.use(express.json({ limit: '64kb' }));
 
-// Per-IP rate limit on the API. Generous enough for normal use (searches and
-// downloads are few and slow) but caps hammering/abuse if the front gate fails.
-app.use('/api', security.rateLimiter({ windowMs: 60_000, max: 120 }));
+// Per-IP rate limit on the API. Bumped 120 → 300/min: even after fixing the
+// watchlist's uncached-cover-fetch-per-render bug, normal browsing (library
+// covers/blurbs via IntersectionObserver, /api/meta lookups, 30s session-status
+// polling) plus a handful of watchlist actions was still enough to trip 120 —
+// see the "Remove failed / Watch again failed (HTTP 429)" reports. Still well
+// below anything a real hammering/abuse burst would look like.
+app.use('/api', security.rateLimiter({ windowMs: 60_000, max: 300 }));
 
 // --- Reader portal (issue #34) ----------------------------------------------
 // Magic-link book picker for recipients — the ONLY surface outside Cloudflare
