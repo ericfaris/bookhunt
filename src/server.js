@@ -627,8 +627,13 @@ app.post('/api/reupload/cancel', async (req, res) => {
 // the user when a match finally appears. The list also reports whether email is
 // configured (no email channel = notifications can't be delivered).
 app.get('/api/watchlist', (_req, res) => {
+  // Newest-added first — readAll() is insertion order (oldest first), so sort
+  // by createdAt desc for display; sort is a copy, doesn't touch storage order.
+  const watches = [...watchlist.readAll()].sort(
+    (a, b) => Date.parse(b.createdAt || 0) - Date.parse(a.createdAt || 0)
+  );
   res.json({
-    watches: watchlist.readAll(),
+    watches,
     emailReady: notify.listChannels().some((c) => c.id === 'email' && c.configured),
     notifyTo: watcher.operatorEmail() || null,
     // For relating recipients to a watch (id, name, whether they have a Kindle).

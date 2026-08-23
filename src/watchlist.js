@@ -18,7 +18,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
-const FILE = path.join(__dirname, '..', 'watchlist.json');
+const FILE = process.env.WATCHLIST_FILE || path.join(__dirname, '..', 'watchlist.json');
 const MAX_LEN = 300;
 const MAX_WATCHES = 200;
 
@@ -183,10 +183,12 @@ function setRecipients(id, recipientIds) {
 }
 
 function setStatus(id, status) {
-  if (!['active', 'paused', 'fulfilled'].includes(status)) throw new Error('Invalid status');
-  // Re-activating a fulfilled/paused watch clears the previous "found" state so
-  // it can fire again.
-  const patch = status === 'active' ? { status, foundUrl: null, foundAt: null, lastError: null } : { status };
+  if (!['active', 'paused', 'fulfilled', 'expired'].includes(status)) throw new Error('Invalid status');
+  // Re-activating a fulfilled/paused/expired watch clears the previous
+  // "found" state and no-match count so it gets a fresh run (otherwise a
+  // watch reactivated from 'expired' would hit the 20-check cap again on its
+  // very next check).
+  const patch = status === 'active' ? { status, foundUrl: null, foundAt: null, lastError: null, checkCount: 0 } : { status };
   return update(id, patch);
 }
 

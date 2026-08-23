@@ -27,6 +27,11 @@ const lists = require('./lists');
 const covers = require('./covers');
 
 const TICK_MS = Number(process.env.WATCH_TICK_MS) || 300000; // wake every 5 min
+// A watch that has gone this many no-match checks without a hit is retired —
+// marked expired (not deleted) so it stays visible and can be re-activated via
+// the same status toggle used elsewhere, mirroring how list-origin watches
+// already expire on age (lists.js) rather than vanish silently.
+const MAX_NO_MATCH_CHECKS = Number(process.env.WATCH_MAX_CHECKS) || 20;
 // List-origin watches never re-check faster than this, whatever the user's
 // watchlist cadence — bestseller lists refresh weekly, and dozens of radar
 // watches on a tight cadence would be impolite to the forum.
@@ -246,6 +251,21 @@ async function checkWatch(watch) {
       delivery.verifiedMatch ? ', watch removed' : ', watch fulfilled'
     );
     return { matched: true, delivery };
+  }
+
+  if (base.checkCount >= MAX_NO_MATCH_CHECKS) {
+    watchlist.update(watch.id, { ...base, status: 'expired' });
+    console.log('[watcher] "%s" hit %d checks with no match — expiring', watch.title || watch.author, base.checkCount);
+    try {
+      history.add({
+        type: 'watch-hit',
+        title: watch.title || watch.author,
+        author: watch.author,
+        url: null,
+        status: 'expired',
+      });
+    } catch { /* best effort */ }
+    return { matched: false, expired: true };
   }
 
   watchlist.update(watch.id, base);

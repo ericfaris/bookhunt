@@ -6,7 +6,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
-const { cleanWatchInput, dueWatches, queryKey, readJsonList, writeJsonList } = require('../src/watchlist');
+const { cleanWatchInput, dueWatches, queryKey, readJsonList, writeJsonList, setStatus } = require('../src/watchlist');
 
 // Note: add/remove/update operate on the hardcoded repo-root watchlist.json
 // (bind-mounted into Docker), so they are deliberately NOT exercised here — doing
@@ -165,4 +165,19 @@ test('writeJsonList: EACCES creating the tmp companion still falls back safely (
   t.after(() => { fs.writeFileSync = origWrite; });
   writeJsonList(file, newList);
   assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')), newList);
+});
+
+// --- setStatus: status whitelist (issue: auto-expire after MAX_NO_MATCH_CHECKS) --
+// setStatus() reads/writes the hardcoded repo-root watchlist.json, same
+// live-file constraint noted at the top of this file — but with an id that
+// can't match any real watch, update() finds nothing and returns without ever
+// writing (see src/watchlist.js update()), so these are safe to run against
+// the real file: they exercise only the validation guard, never a write.
+test('setStatus: rejects an unrecognized status before touching the store', () => {
+  assert.throws(() => setStatus('__no-such-watch__', 'bogus'), /Invalid status/);
+});
+
+test('setStatus: "expired" is now a recognized status (no-op on a nonexistent id)', () => {
+  assert.doesNotThrow(() => setStatus('__no-such-watch__', 'expired'));
+  assert.equal(setStatus('__no-such-watch__', 'expired'), null, 'nonexistent id → no match → null, no write');
 });

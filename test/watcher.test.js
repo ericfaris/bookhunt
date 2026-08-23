@@ -355,3 +355,63 @@ test('checkWatch: a plain (non-set) match still keeps the post title and scraped
   assert.equal(logged.title, 'A Voice in the Dark', 'no watched title → the post title is right');
   assert.equal(logged.cover, 'http://x/voice.jpg', 'a non-set post image IS this book’s cover');
 });
+
+// --- Auto-expire after MAX_NO_MATCH_CHECKS consecutive no-match checks ------
+test('checkWatch: a no-match check below the cap just records the check', async () => {
+  const updates = [];
+  const histAdds = [];
+  await withMocks(
+    {
+      search: async () => ({ results: [] }),
+      update: (id, patch) => updates.push(patch),
+      add: (rec) => histAdds.push(rec),
+    },
+    async () => {
+      const out = await watcher.checkWatch({ id: 'w10', title: 'Nope', author: '', sort: 'newest', checkCount: 18 });
+      assert.equal(out.matched, false);
+      assert.ok(!out.expired);
+    }
+  );
+  assert.equal(updates.length, 1);
+  assert.equal(updates[0].checkCount, 19);
+  assert.ok(!('status' in updates[0]), 'not yet at the cap — status untouched');
+  assert.equal(histAdds.length, 0, 'no history entry until it actually expires');
+});
+
+test('checkWatch: the Nth no-match check (default cap 20) marks the watch expired', async () => {
+  const updates = [];
+  const histAdds = [];
+  await withMocks(
+    {
+      search: async () => ({ results: [] }),
+      update: (id, patch) => updates.push(patch),
+      add: (rec) => histAdds.push(rec),
+    },
+    async () => {
+      const out = await watcher.checkWatch({ id: 'w11', title: 'Ghost', author: 'Nobody', sort: 'newest', checkCount: 19 });
+      assert.equal(out.matched, false);
+      assert.equal(out.expired, true);
+    }
+  );
+  assert.equal(updates.length, 1);
+  assert.equal(updates[0].checkCount, 20);
+  assert.equal(updates[0].status, 'expired');
+  assert.equal(histAdds.length, 1);
+  assert.equal(histAdds[0].type, 'watch-hit');
+  assert.equal(histAdds[0].status, 'expired');
+  assert.equal(histAdds[0].title, 'Ghost');
+});
+
+test('checkWatch: never checked (checkCount undefined) does not immediately expire', async () => {
+  const updates = [];
+  await withMocks(
+    { search: async () => ({ results: [] }), update: (id, patch) => updates.push(patch) },
+    async () => {
+      const out = await watcher.checkWatch({ id: 'w12', title: 'Fresh', author: '', sort: 'newest' });
+      assert.equal(out.matched, false);
+      assert.ok(!out.expired);
+    }
+  );
+  assert.equal(updates[0].checkCount, 1);
+  assert.ok(!('status' in updates[0]));
+});

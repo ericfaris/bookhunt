@@ -2847,11 +2847,12 @@ function renderWatchlist(watches) {
 
     // Status line — always rendered. Either the last-checked summary, or a
     // warn-colored error chip when the last check failed.
+    const added = w.createdAt ? `added ${formatDate(w.createdAt)}` : '';
     const checked = w.lastCheckedAt ? `checked ${formatDate(w.lastCheckedAt)} · ${w.checkCount || 0}×` : 'not checked yet';
     const statusLine = el('div', { className: 'watch-status-line' }, [
       w.lastError
         ? el('span', { className: 'watch-error-chip', title: w.lastError }, `⚠ ${w.lastError}`)
-        : el('span', {}, checked),
+        : el('span', {}, [added, checked].filter(Boolean).join(' · ')),
     ]);
 
     // Delivery line — only for fulfilled watches: the match link + send counts.
@@ -2896,7 +2897,7 @@ function renderWatchlist(watches) {
 
     // Actions: pause/resume, check now, remove.
     const actions = el('div', { className: 'watch-actions' });
-    if (w.status !== 'fulfilled') {
+    if (w.status !== 'fulfilled' && w.status !== 'expired') {
       const checkBtn = el('button', { className: 'ghost-btn', type: 'button' }, 'Check now');
       checkBtn.addEventListener('click', async () => {
         checkBtn.disabled = true; checkBtn.textContent = 'Checking…';
@@ -2956,8 +2957,11 @@ function renderWatchlist(watches) {
   }
 }
 
-// Lazy book cover for a watchlist row. Looked up by { title, author } via
-// /api/cover (disk-cached server-side). Falls back to a glyph when there's no
+// Book cover for a watchlist row. Looked up by { title, author } via
+// /api/cover, sharing the library's coverCache — the watchlist re-renders
+// after every action (delete, check, pause/resume, save recipients), and an
+// uncached fetch per row per render was burning through the /api rate limit
+// (see 429s on repeated deletes). Falls back to a glyph when there's no
 // confident cover or the watch has no title/author to look up.
 function buildWatchCover(w) {
   const slot = el('div', { className: 'watch-cover' });
@@ -2966,19 +2970,30 @@ function buildWatchCover(w) {
     return slot;
   }
   slot.append(el('div', { className: 'watch-cover-ph' }, '📖'));
+  const key = `${w.title || ''}|${w.author || ''}`.toLowerCase();
+  const paint = (url) => {
+    if (!url || !slot.isConnected) return;
+    slot.innerHTML = '';
+    const img = el('img', { className: 'watch-cover-img zoomable', src: url, alt: 'cover', loading: 'lazy', title: 'Click to enlarge' });
+    img.addEventListener('click', () => openLightbox(url, w.title || ''));
+    slot.append(img);
+  };
+  const cached = coverCache.get(key);
+  if (cached !== undefined) {
+    paint(cached);
+    return slot;
+  }
   const params = new URLSearchParams();
   if (w.title) params.set('title', w.title);
   if (w.author) params.set('author', w.author);
   fetch(`/api/cover?${params.toString()}`)
     .then((r) => r.json())
     .then((d) => {
-      if (!d || !d.cover) return;
-      slot.innerHTML = '';
-      const img = el('img', { className: 'watch-cover-img zoomable', src: d.cover, alt: 'cover', loading: 'lazy', title: 'Click to enlarge' });
-      img.addEventListener('click', () => openLightbox(d.cover, w.title || ''));
-      slot.append(img);
+      const url = (d && d.cover) || null;
+      coverCache.set(key, url);
+      paint(url);
     })
-    .catch(() => { /* keep the glyph */ });
+    .catch(() => { /* keep the glyph; don't cache a transient failure */ });
   return slot;
 }
 
@@ -3005,8 +3020,12 @@ function renderHistoryItem(entry) {
     item.append(el('div', {}, `↻ Re-upload ${label}${entry.title ? ` — “${entry.title}”` : ''}`));
   } else if (entry.type === 'watch-hit') {
     const label = [entry.title && `“${entry.title}”`, entry.author && `by ${entry.author}`].filter(Boolean).join(' ');
-    item.append(el('div', {}, `🔔 Watch matched — ${label || 'a book'} is available`));
-    if (entry.url) item.append(el('a', { className: 'hint', href: entry.url, target: '_blank', rel: 'noopener' }, 'Open the match ↗'));
+    if (entry.status === 'expired') {
+      item.append(el('div', {}, `🔕 Watch expired — ${label || 'a book'} never turned up after repeated checks`));
+    } else {
+      item.append(el('div', {}, `🔔 Watch matched — ${label || 'a book'} is available`));
+      if (entry.url) item.append(el('a', { className: 'hint', href: entry.url, target: '_blank', rel: 'noopener' }, 'Open the match ↗'));
+    }
   } else {
     const where = entry.savePath ? ` → ${entry.savePath}` : '';
     item.append(el('div', {}, `⬇ ${entry.filename || 'download'}${where}`));
