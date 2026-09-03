@@ -42,6 +42,19 @@ const app = express();
 // pointed at an attacker-chosen origin while carrying our session cookies.
 const isForumUrl = security.isForumUrl;
 
+// --- Container healthcheck (issue #39) --------------------------------------
+// Docker's `restart: unless-stopped` only restarts on PROCESS EXIT — it can't
+// see the app's actual failure mode, which is Node staying alive while the
+// browser session underneath it is wedged. This is a bare process-liveness
+// probe ONLY: it does not check searcher.sessionStatus(). A cold/unauthenticated
+// Mobilism session is a normal, expected state that autowarm + /warm exist to
+// resolve on their own — restarting the container on it would fight autowarm
+// and could throw away a half-cleared Cloudflare challenge. Mounted before
+// EVERY other middleware (Access verification, rate limiting) so it's always
+// reachable for Docker's in-container probe regardless of Access config, and
+// deliberately unauthenticated — it leaks nothing beyond "the process is up".
+app.get('/healthz', (_req, res) => res.status(200).json({ ok: true }));
+
 // Don't advertise the framework, and reject oversized bodies (all real requests
 // here are tiny JSON — capping blunts memory-exhaustion attempts).
 app.disable('x-powered-by');

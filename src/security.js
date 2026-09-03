@@ -209,12 +209,47 @@ async function isUpgradeAuthorized(req) {
 // In-memory per-IP rate limiter (fixed window). No external store needed for a
 // single-process app; behind Cloudflare we key on CF-Connecting-IP.
 // ---------------------------------------------------------------------------
-function clientIp(req) {
+
+// Is this the TCP peer address of a request that could only have arrived
+// through our own trusted path (cloudflared on the host → the docker-mapped
+// 127.0.0.1:3000 port → NAT'd into the container)? Verified empirically: a
+// connection made from inside the container's own network namespace lands as
+// 127.0.0.1; one forwarded in from the host (which is the ONLY way external
+// traffic reaches this process — the compose port binding is
+// "127.0.0.1:3000:3000") lands as the docker bridge gateway, a private
+// address. A real internet client can never make the peer anything else, so
+// gating on "private/loopback peer" is equivalent to "actually came through
+// the tunnel/host", without hardcoding a specific gateway IP that changes
+// across redeploys.
+//
+// This matters ONLY for /reader/* — every other route sits behind
+// cloudflareAccess()'s JWT check first, which a spoofed header can't get
+// past. /reader/* is the one deliberate hole in that wall (see security.js's
+// header comment), so it's the one place a header alone could otherwise buy
+// a fresh rate-limit bucket.
+function isTrustedProxyPeer(ip) {
+  const a = String(ip || '');
+  if (a === '::1' || a === '127.0.0.1') return true;
+  // IPv4-mapped IPv6 form, e.g. ::ffff:127.0.0.1
+  const mapped = a.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/i);
+  const v4 = mapped ? mapped[1] : a;
   return (
-    req.headers['cf-connecting-ip'] ||
-    (req.socket && req.socket.remoteAddress) ||
-    'unknown'
+    /^127\./.test(v4) ||
+    /^10\./.test(v4) ||
+    /^192\.168\./.test(v4) ||
+    /^172\.(1[6-9]|2\d|3[01])\./.test(v4)
   );
+}
+
+function clientIp(req) {
+  const peer = (req.socket && req.socket.remoteAddress) || '';
+  // Only trust the client-supplied header from a peer that could actually be
+  // our own tunnel forward — anything else falls back to the raw socket
+  // address, so a header can't be used to evade the limit.
+  if (req.headers['cf-connecting-ip'] && isTrustedProxyPeer(peer)) {
+    return req.headers['cf-connecting-ip'];
+  }
+  return peer || 'unknown';
 }
 
 function rateLimiter({ windowMs = 60_000, max = 120 } = {}) {
@@ -257,5 +292,7 @@ module.exports = {
   // exported for tests
   verifyAccessToken,
   tokenFromHeaders,
+  isTrustedProxyPeer,
+  clientIp,
   ACCESS_ENABLED,
 };

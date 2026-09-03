@@ -14,7 +14,7 @@
 // the cache updates behind it; the cache is only used as an OFFLINE fallback.
 // Bump CACHE on changes that must evict the previous shell.
 
-const CACHE = 'bookhunt-shell-v2';
+const CACHE = 'bookhunt-shell-v3'; // bumped: evict anything /reader/api cached before issue #38's fix
 const SHELL = [
   '/',
   '/index.html',
@@ -47,7 +47,17 @@ self.addEventListener('fetch', (event) => {
   // Leave cross-origin (book covers, external sources) to the browser.
   if (url.origin !== self.location.origin) return;
   // Never intercept API or the live-browser proxy — always go to the network.
-  if (url.pathname.startsWith('/api') || url.pathname.startsWith('/warm')) return;
+  // `/reader/api` doesn't start with `/api` (issue #38: it was slipping past
+  // this guard and getting cached below despite the server marking those
+  // responses `Cache-Control: no-store` — personal shelf data, token in the
+  // URL). Match it explicitly rather than only the general `/api` prefix.
+  if (
+    url.pathname.startsWith('/api') ||
+    url.pathname.startsWith('/reader/api') ||
+    url.pathname.startsWith('/warm')
+  ) {
+    return;
+  }
 
   // Network-first: serve the freshest shell when online, update the cache, and
   // fall back to the cache (or the cached index.html for navigations) offline.
@@ -55,7 +65,12 @@ self.addEventListener('fetch', (event) => {
     (async () => {
       try {
         const res = await fetch(req);
-        if (res && res.ok && res.type === 'basic') {
+        // Belt-and-braces on top of the path check above: never cache a
+        // response the server explicitly marked no-store, whichever path it
+        // came from — so a future personal/no-store route can't be silently
+        // cached just because someone forgot to extend the prefix list here.
+        const noStore = /no-store/i.test(res && res.headers.get('Cache-Control') || '');
+        if (res && res.ok && res.type === 'basic' && !noStore) {
           const copy = res.clone();
           caches.open(CACHE).then((c) => c.put(req, copy)).catch(() => {});
         }

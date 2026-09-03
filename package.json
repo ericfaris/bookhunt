@@ -1,6 +1,6 @@
 {
   "name": "bookhunt",
-  "version": "1.26.0",
+  "version": "1.26.1",
   "private": true,
   "description": "Local web app to search the Mobilism ebook forum and download ePUBs",
   "main": "src/server.js",
@@ -18,7 +18,10 @@
     "express": "^4.19.2",
     "http-proxy": "^1.18.1",
     "node-unrar-js": "^2.0.2",
-    "nodemailer": "^9.0.1",
-    "playwright": "^1.44.0"
+    "nodemailer": "^9.1.1",
+    "playwright": "^1.62.1"
+  },
+  "overrides": {
+    "qs": "^6.16.0"
   }
 }

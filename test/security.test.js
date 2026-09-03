@@ -55,7 +55,7 @@ test('tokenFromHeaders: reads the assertion header and the cookie', () => {
 
 test('rateLimiter: blocks after the cap and returns 429', () => {
   const limit = security.rateLimiter({ windowMs: 60_000, max: 3 });
-  const req = { headers: { 'cf-connecting-ip': '1.2.3.4' }, socket: {} };
+  const req = { headers: { 'cf-connecting-ip': '1.2.3.4' }, socket: { remoteAddress: '203.0.113.9' } };
   let allowed = 0;
   let blocked = null;
   for (let i = 0; i < 5; i++) {
@@ -74,10 +74,58 @@ test('rateLimiter: separate IPs have separate budgets', () => {
   const resB = mockRes();
   let aOk = false;
   let bOk = false;
-  limit({ headers: { 'cf-connecting-ip': 'a' }, socket: {} }, resA, () => (aOk = true));
-  limit({ headers: { 'cf-connecting-ip': 'b' }, socket: {} }, resB, () => (bOk = true));
+  // Real, distinct socket peers — an untrusted CF-Connecting-IP header alone
+  // must NOT be enough to buy separate budgets (see the isTrustedProxyPeer
+  // tests below); two different clients are told apart by their actual
+  // connection, same as any request that didn't come through the tunnel.
+  limit({ headers: { 'cf-connecting-ip': 'a' }, socket: { remoteAddress: '203.0.113.1' } }, resA, () => (aOk = true));
+  limit({ headers: { 'cf-connecting-ip': 'b' }, socket: { remoteAddress: '203.0.113.2' } }, resB, () => (bOk = true));
   assert.equal(aOk, true);
   assert.equal(bOk, true);
+});
+
+test('clientIp: trusts CF-Connecting-IP only from a loopback/private peer (issue #37)', () => {
+  // The docker-mapped tunnel path: real requests land with a private peer
+  // (verified against the running container — loopback inside the container's
+  // own namespace, the docker bridge gateway for host-forwarded traffic).
+  assert.equal(
+    security.clientIp({ headers: { 'cf-connecting-ip': '9.9.9.9' }, socket: { remoteAddress: '127.0.0.1' } }),
+    '9.9.9.9'
+  );
+  assert.equal(
+    security.clientIp({ headers: { 'cf-connecting-ip': '9.9.9.9' }, socket: { remoteAddress: '172.22.0.1' } }),
+    '9.9.9.9'
+  );
+});
+
+test('clientIp: ignores CF-Connecting-IP from an untrusted (non-private) peer', () => {
+  // A request that somehow reached the app with a real internet-routable
+  // peer address can't buy a fresh rate-limit bucket just by setting a
+  // header — the raw socket address is used instead.
+  assert.equal(
+    security.clientIp({ headers: { 'cf-connecting-ip': '9.9.9.9' }, socket: { remoteAddress: '203.0.113.5' } }),
+    '203.0.113.5'
+  );
+});
+
+test('clientIp: falls back to "unknown" with no header and no socket', () => {
+  assert.equal(security.clientIp({ headers: {}, socket: undefined }), 'unknown');
+});
+
+test('isTrustedProxyPeer: accepts loopback and RFC1918 private ranges (+ IPv4-mapped IPv6)', () => {
+  assert.equal(security.isTrustedProxyPeer('127.0.0.1'), true);
+  assert.equal(security.isTrustedProxyPeer('::1'), true);
+  assert.equal(security.isTrustedProxyPeer('::ffff:127.0.0.1'), true);
+  assert.equal(security.isTrustedProxyPeer('172.22.0.1'), true); // docker bridge gateway, verified live
+  assert.equal(security.isTrustedProxyPeer('10.0.0.5'), true);
+  assert.equal(security.isTrustedProxyPeer('192.168.1.1'), true);
+});
+
+test('isTrustedProxyPeer: rejects public/internet addresses', () => {
+  assert.equal(security.isTrustedProxyPeer('203.0.113.5'), false);
+  assert.equal(security.isTrustedProxyPeer('8.8.8.8'), false);
+  assert.equal(security.isTrustedProxyPeer(''), false);
+  assert.equal(security.isTrustedProxyPeer(undefined), false);
 });
 
 test('isForumUrl: accepts forum.mobilism.org + subdomains over http(s)', () => {

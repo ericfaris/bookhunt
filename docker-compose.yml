@@ -13,6 +13,21 @@ services:
         BUILD_TIME: ${BUILD_TIME:-}
     image: ericfaris/bookhunt:latest
     restart: unless-stopped
+    # Process-liveness only (issue #39) — restart: unless-stopped alone only
+    # catches the process exiting, not it staying up while the Chromium
+    # session underneath it is wedged. Deliberately does NOT check whether the
+    # Mobilism session is logged in (see /healthz's own comment in
+    # src/server.js) — a cold session is normal and autowarm/`/warm` handle it
+    # on their own; restarting the container on that state would fight them.
+    # No curl in this image — node is guaranteed, so use it directly.
+    # start_period is generous: Xvfb + fluxbox + x11vnc + websockify all start
+    # before the app does (see entrypoint.sh), then Chromium itself launches.
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://127.0.0.1:3000/healthz',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
     # Run as the host user (uid:gid 1000) so the bind-mounted browser profile,
     # history, and downloads stay owned by you — never root.
     user: "1000:1000"
