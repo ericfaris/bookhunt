@@ -308,7 +308,25 @@ async function tick() {
 async function checkNow(id) {
   const watch = watchlist.readAll().find((w) => w.id === id);
   if (!watch) throw new Error('Watch not found');
-  return checkWatch(watch);
+  // Only an ACTIVE watch may be checked. A verified hit makes checkWatch()
+  // call watchlist.remove() — so running this on a paused/expired/fulfilled
+  // watch could silently delete it out from under the user. `notActive`
+  // mirrors the existing `needWarm` convention: the route maps it to a 409.
+  if (watch.status !== 'active') {
+    throw Object.assign(new Error('Resume this watch before checking it.'), { notActive: true });
+  }
+  // Share tick()'s concurrency guard: two overlapping "Check now" clicks, or
+  // a "Check now" racing the scheduler's own tick, must not both run against
+  // the shared browser session at once.
+  if (_inFlight) {
+    throw new Error('A check is already running — try again in a moment.');
+  }
+  _inFlight = true;
+  try {
+    return await checkWatch(watch);
+  } finally {
+    _inFlight = false;
+  }
 }
 
 let _timer = null;

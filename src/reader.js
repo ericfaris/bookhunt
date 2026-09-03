@@ -16,6 +16,7 @@
 // and the routes ride a tight rate limit in server.js.
 
 const crypto = require('crypto');
+const fs = require('fs');
 const path = require('path');
 
 const recipients = require('./recipients');
@@ -141,7 +142,20 @@ function byToken(token) {
 // --- books for the picker ------------------------------------------------------
 
 function buildBooks() {
-  return library.buildLibrary(history.readAll(), (p) => booktags.readStore()[booktags.keyFor(p)] || []);
+  // Copy-paste bug (fixed): buildLibrary's 2nd arg is a fileExists PREDICATE,
+  // not a tag lookup — passing the tag array here made `[]` (truthy) stand in
+  // for "file present" always, and never attached tags at all. Match
+  // /api/library in src/server.js: a real existsSync predicate, then
+  // booktags.attachTags() to actually put tags on the books. Read the tag
+  // store once, not once per book.
+  const books = library.buildLibrary(history.readAll(), (p) => {
+    try {
+      return fs.existsSync(path.resolve(p));
+    } catch {
+      return false;
+    }
+  });
+  return booktags.attachTags(books, booktags.readStore());
 }
 
 /** PURE: is this book actually sendable — verified AND still on disk? Shared
@@ -344,6 +358,15 @@ async function sendToReader(recipient, downloadId) {
     throw Object.assign(new Error('That book is no longer available.'), { code: 'gone' });
   }
   if (!downloader.isSafeEpubPath(entry.savePath, downloader.DOWNLOAD_PATH)) {
+    throw Object.assign(new Error('That book is no longer available.'), { code: 'gone' });
+  }
+  // The file itself may have been deleted (library cleanup, manual removal)
+  // even though history still has a verified entry for it. Without this check
+  // a missing file surfaces as a raw 500 from nodemailer's attachment read
+  // instead of the intended, friendlier 410 "gone".
+  let onDisk = false;
+  try { onDisk = fs.existsSync(path.resolve(entry.savePath)); } catch { onDisk = false; }
+  if (!onDisk) {
     throw Object.assign(new Error('That book is no longer available.'), { code: 'gone' });
   }
   await kindle.pushToKindle({

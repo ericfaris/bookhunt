@@ -1363,6 +1363,10 @@ function closeCredModal() { credModal.hidden = true; }
 const sendModal = $('#sendModal');
 let sendCtx = null;
 let recipientsCache = [];
+// Set while #recipForm is repurposed to edit an existing recipient (see the
+// Edit button in renderManageList) instead of adding a new one — PUTs to
+// /api/recipients/:id rather than POSTing, so the id + readerToken survive.
+let editingRecipientId = null;
 
 async function openSendModal(ctx) {
   sendCtx = ctx;
@@ -1383,7 +1387,13 @@ async function openRecipientsModal() {
   await loadRecipients();     // refreshes recipientsCache + re-renders #manageList
   recipientsModal.hidden = false;
 }
-function closeRecipientsModal() { recipientsModal.hidden = true; }
+function closeRecipientsModal() {
+  recipientsModal.hidden = true;
+  // Drop any in-progress edit. Without this, closing mid-edit leaves
+  // editingRecipientId set, and the next "Add" would silently PUT over the
+  // recipient that was being edited instead of creating a new one.
+  resetRecipForm($('#recipForm'));
+}
 $('#recipientsToggle').addEventListener('click', openRecipientsModal);
 $('#recipientsClose').addEventListener('click', closeRecipientsModal);
 
@@ -1432,6 +1442,21 @@ function renderManageList() {
       await fetch('/api/recipients/' + r.id, { method: 'DELETE' });
       await loadRecipients();
     });
+    // Edit in place (issue #7): repopulate the add-form and PUT instead of
+    // POST, so this recipient keeps their id + reader token (magic link,
+    // installed home-screen app, and every watch's recipientIds survive).
+    const edit = el('button', { className: 'ghost-btn', type: 'button' }, 'Edit');
+    edit.addEventListener('click', () => {
+      editingRecipientId = r.id;
+      $('#rName').value = r.name || '';
+      $('#rEmail').value = r.email || '';
+      $('#rKindle').value = r.kindleEmail || '';
+      $('#rPhone').value = r.phone || '';
+      $('#rCarrier').value = r.carrier || '';
+      $('#recipSubmit').textContent = 'Save changes';
+      $('#recipCancelEdit').hidden = false;
+      $('#rName').focus();
+    });
     // Reader portal (issue #34): invite (emails their magic link), rotate the
     // link if it leaks, and toggle their new-book emails.
     const status = el('span', { className: 'hint recip-reader-status' },
@@ -1464,7 +1489,7 @@ function renderManageList() {
     ml.append(
       el('div', { className: 'manage-row' }, [
         el('span', {}, [`${r.name} · ${r.email}${r.kindleEmail ? ' · ' + r.kindleEmail : ''} `, status]),
-        el('span', { className: 'manage-actions' }, [invite, rotate, del]),
+        el('span', { className: 'manage-actions' }, [invite, rotate, edit, del]),
       ])
     );
   }
@@ -1502,6 +1527,15 @@ $('#groupsToggle').addEventListener('click', () => {
   p.hidden = !p.hidden;
 });
 
+function resetRecipForm(form) {
+  editingRecipientId = null;
+  form.reset();
+  $('#recipSubmit').textContent = 'Add';
+  $('#recipCancelEdit').hidden = true;
+}
+
+$('#recipCancelEdit').addEventListener('click', () => resetRecipForm($('#recipForm')));
+
 $('#recipForm').addEventListener('submit', async (e) => {
   e.preventDefault();
   const body = {
@@ -1511,14 +1545,15 @@ $('#recipForm').addEventListener('submit', async (e) => {
     phone: $('#rPhone').value,
     carrier: $('#rCarrier').value,
   };
-  const res = await fetch('/api/recipients', {
-    method: 'POST',
+  const editing = editingRecipientId;
+  const res = await fetch(editing ? '/api/recipients/' + editing : '/api/recipients', {
+    method: editing ? 'PUT' : 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   });
   const data = await res.json();
-  if (!res.ok) { alert(data.error || 'Could not add recipient'); return; }
-  e.target.reset();
+  if (!res.ok) { alert(data.error || (editing ? 'Could not save changes' : 'Could not add recipient')); return; }
+  resetRecipForm(e.target);
   await loadRecipients();
 });
 

@@ -22,6 +22,7 @@ async function withMocks(overrides, fn) {
     search: searcher.search,
     update: watchlist.update,
     remove: watchlist.remove,
+    readAll: watchlist.readAll,
     notify: notify.notify,
     byIds: recipients.byIds,
     add: history.add,
@@ -39,6 +40,7 @@ async function withMocks(overrides, fn) {
   searcher.search = overrides.search || (async () => ({ results: [] }));
   watchlist.update = overrides.update || (() => {});
   watchlist.remove = overrides.remove || (() => true);
+  watchlist.readAll = overrides.readAll || (() => []);
   notify.notify = overrides.notify || (async () => [{ channel: 'email', ok: true }]);
   recipients.byIds = overrides.byIds || (() => []);
   history.add = overrides.add || (() => {});
@@ -52,7 +54,7 @@ async function withMocks(overrides, fn) {
     return await fn();
   } finally {
     Object.assign(searcher, { search: orig.search });
-    Object.assign(watchlist, { update: orig.update, remove: orig.remove });
+    Object.assign(watchlist, { update: orig.update, remove: orig.remove, readAll: orig.readAll });
     Object.assign(notify, { notify: orig.notify });
     Object.assign(recipients, { byIds: orig.byIds });
     Object.assign(history, { add: orig.add, logDownload: orig.logDownload });
@@ -414,4 +416,82 @@ test('checkWatch: never checked (checkCount undefined) does not immediately expi
   );
   assert.equal(updates[0].checkCount, 1);
   assert.ok(!('status' in updates[0]));
+});
+
+// --- checkNow (the "Check now" button) ---------------------------------------
+// checkNow must refuse a non-active watch (a verified hit on a PAUSED watch
+// would otherwise call watchlist.remove() out from under the user) and must
+// share tick()'s concurrency guard so two overlapping calls can't both run.
+
+test('checkNow: refuses a paused watch and does not touch it', async () => {
+  let removed = 0;
+  await withMocks(
+    {
+      readAll: () => [{ id: 'w20', title: 'Paused Book', author: '', sort: 'newest', status: 'paused' }],
+      remove: (id) => { removed++; return true; },
+      search: async () => ({ results: [{ title: 'Paused Book', url: 'https://forum.mobilism.org/t20' }] }),
+    },
+    async () => {
+      await assert.rejects(() => watcher.checkNow('w20'), /resume/i);
+    }
+  );
+  assert.equal(removed, 0, 'a paused watch must never be removed by "Check now"');
+});
+
+test('checkNow: refuses an expired watch too (only "active" may be checked)', async () => {
+  await withMocks(
+    { readAll: () => [{ id: 'w21', title: 'X', author: '', sort: 'newest', status: 'expired' }] },
+    async () => {
+      let err;
+      try {
+        await watcher.checkNow('w21');
+      } catch (e) {
+        err = e;
+      }
+      assert.ok(err, 'must throw');
+      assert.ok(err.notActive, 'carries the notActive flag the route maps to a 409');
+    }
+  );
+});
+
+test('checkNow: an unknown id throws "Watch not found"', async () => {
+  await withMocks({ readAll: () => [] }, async () => {
+    await assert.rejects(() => watcher.checkNow('nope'), /not found/i);
+  });
+});
+
+test('checkNow: runs an active watch and returns checkWatch\'s result', async () => {
+  const updates = [];
+  await withMocks(
+    {
+      readAll: () => [{ id: 'w22', title: 'Active Book', author: '', sort: 'newest', status: 'active', checkCount: 0 }],
+      search: async () => ({ results: [] }),
+      update: (id, patch) => updates.push(patch),
+    },
+    async () => {
+      const out = await watcher.checkNow('w22');
+      assert.equal(out.matched, false);
+    }
+  );
+  assert.equal(updates.length, 1);
+});
+
+test('checkNow: a second concurrent call is rejected while one is in flight', async () => {
+  let releaseSearch;
+  const gate = new Promise((resolve) => { releaseSearch = resolve; });
+  await withMocks(
+    {
+      readAll: () => [{ id: 'w23', title: 'Slow Book', author: '', sort: 'newest', status: 'active', checkCount: 0 }],
+      search: async () => { await gate; return { results: [] }; },
+      update: () => {},
+    },
+    async () => {
+      const first = watcher.checkNow('w23');
+      // Give the first call a tick to set the in-flight guard before the second fires.
+      await new Promise((r) => setImmediate(r));
+      await assert.rejects(() => watcher.checkNow('w23'), /already running/i);
+      releaseSearch();
+      await first;
+    }
+  );
 });

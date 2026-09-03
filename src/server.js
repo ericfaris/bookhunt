@@ -504,16 +504,34 @@ app.post('/api/download', async (req, res) => {
     Connection: 'keep-alive',
     'X-Accel-Buffering': 'no', // disable proxy buffering so events flush promptly
   });
-  const send = (event) => res.write(`data: ${JSON.stringify(event)}\n\n`);
+  const send = (event) => { if (!res.writableEnded) res.write(`data: ${JSON.stringify(event)}\n\n`); };
+
+  // Cancellation (same posture as /api/search): listen on the RESPONSE close
+  // (not req 'close', which also fires when the request body finishes being
+  // read — and does so early behind Cloudflare — spuriously cancelling every
+  // download). `writableEnded` is true once we've called res.end() ourselves,
+  // so a normal finish never cancels.
+  const signal = searcher.createCancelSignal();
+  res.on('close', () => { if (!res.writableEnded) signal.cancel(); });
 
   try {
-    // Walk the candidate posts until one yields a VERIFIED, title-matching
-    // download (runCandidates keeps the best fallback when none verifies).
-    // Progress events — including per-candidate 'candidate' frames — stream
-    // straight through to the client.
+    // downloader.premiumDownload/runCandidates don't accept a cancel signal
+    // (they predate issue #28's cancellation work, and threading a signal
+    // through the whole downloader is out of scope here) — so the minimal fix
+    // is to check the signal at the one boundary runCandidates gives us:
+    // between candidate posts, inside the attempt callback below. A cancelled
+    // client stops the walk before the next candidate's scrape even starts.
     const { result, errors } = await downloader.runCandidates(
       posts,
-      (cand) => downloader.premiumDownload(cand.url, send, searchedTitle || title),
+      (cand) => {
+        if (signal.cancelled) {
+          const err = new Error('Download cancelled');
+          err.cancelled = true;
+          err.fatal = true; // stop the candidate walk immediately, don't try the next post
+          throw err;
+        }
+        return downloader.premiumDownload(cand.url, send, searchedTitle || title);
+      },
       send
     );
     const downloads = (result && result.downloads) || [];
@@ -550,11 +568,16 @@ app.post('/api/download', async (req, res) => {
       description: (result && result.description) || '',
     });
   } catch (err) {
-    console.error('Download failed:', err.detail || err); // full text kept server-side
-    const info = messages.classifyError(err, { needWarm: !!err.needWarm });
-    send({ step: 'error', ...info });
+    // A cancellation isn't an error — the client already walked away, so
+    // there's nothing (and nowhere) to report.
+    if (!err || !err.cancelled) {
+      console.error('Download failed:', err.detail || err); // full text kept server-side
+      const info = messages.classifyError(err, { needWarm: !!err.needWarm });
+      send({ step: 'error', ...info });
+    }
   } finally {
-    res.end();
+    signal.settle();
+    if (!res.writableEnded) res.end();
   }
 });
 
@@ -693,6 +716,7 @@ app.post('/api/watchlist/:id/check', async (req, res) => {
     res.json(result);
   } catch (err) {
     if (err.needWarm) return res.status(409).json({ error: err.message, needWarm: true });
+    if (err.notActive) return res.status(409).json({ error: err.message, notActive: true });
     res.status(500).json({ error: err.message || 'Check failed.' });
   }
 });
@@ -833,6 +857,20 @@ app.post('/api/recipients', (req, res) => {
   try {
     const entry = recipients.add(req.body || {});
     res.json({ recipient: entry });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// Edit a recipient IN PLACE (issue #7 fix) — deliberately NOT delete+re-add,
+// which would mint a new id and readerToken and break that person's magic
+// link, their installed home-screen app, and every watch's recipientIds that
+// pointed at the old id.
+app.put('/api/recipients/:id', (req, res) => {
+  try {
+    const updated = recipients.update(req.params.id, req.body || {});
+    if (!updated) return res.status(404).json({ error: 'Recipient not found.' });
+    res.json({ recipient: updated });
   } catch (err) {
     res.status(400).json({ error: err.message });
   }

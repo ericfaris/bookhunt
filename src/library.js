@@ -200,9 +200,20 @@ function findInLibrary(books, { title, author } = {}, opts = {}) {
  */
 function ownsBook(entry) {
   try {
+    const fs = require('fs');
     const history = require('./history');
-    const booktags = require('./booktags');
-    const books = buildLibrary(history.readAll(), (p) => booktags.readStore()[booktags.keyFor(p)] || []);
+    // Same copy-paste bug as reader.js's buildBooks: this needs a fileExists
+    // PREDICATE, not a tag lookup (an always-truthy `[]`). ownsBook only does
+    // title/author matching, not tags, so no attachTags needed here — just a
+    // correct existsSync check. The whole function is already wrapped in this
+    // try/catch and fails open, so a stat error just falls through below.
+    const books = buildLibrary(history.readAll(), (p) => {
+      try {
+        return fs.existsSync(path.resolve(p));
+      } catch {
+        return false;
+      }
+    });
     return findInLibrary(books, entry).length > 0;
   } catch {
     return false;

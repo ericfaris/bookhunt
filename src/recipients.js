@@ -94,6 +94,43 @@ function add({ name, email, kindleEmail, phone, carrier }) {
   return entry;
 }
 
+/**
+ * Edit a recipient IN PLACE. Deleting + re-adding was the only option before
+ * this (issue #7 fix): that mints a new id AND a new readerToken, which breaks
+ * that person's magic link, their installed home-screen app, and every watch's
+ * recipientIds that pointed at the old id. Only fields present in `patch` are
+ * touched — `id`, `readerToken`, and `readerEnabled` can never be changed here
+ * (reader.js owns those via ensureToken/rotateToken/setReaderEnabled).
+ * Validates the same way add() does: throws on a bad email, an empty name, or
+ * a non-empty-but-invalid kindleEmail. Returns the updated recipient, or null
+ * if no recipient has that id.
+ */
+function update(id, patch) {
+  const p = patch || {};
+  if (Object.prototype.hasOwnProperty.call(p, 'name') && !clean(p.name)) {
+    throw new Error('Name is required');
+  }
+  if (Object.prototype.hasOwnProperty.call(p, 'email')) {
+    if (!clean(p.email)) throw new Error('Email is required');
+    if (!EMAIL_RE.test(clean(p.email))) throw new Error('Email is not valid');
+  }
+  if (Object.prototype.hasOwnProperty.call(p, 'kindleEmail') && clean(p.kindleEmail) && !EMAIL_RE.test(clean(p.kindleEmail))) {
+    throw new Error('Kindle email is not valid');
+  }
+  let found = null;
+  mutate((list) => {
+    const r = list.find((x) => x.id === id);
+    if (!r) return false; // nothing to persist — id not found
+    if (Object.prototype.hasOwnProperty.call(p, 'name')) r.name = clean(p.name);
+    if (Object.prototype.hasOwnProperty.call(p, 'email')) r.email = clean(p.email);
+    if (Object.prototype.hasOwnProperty.call(p, 'kindleEmail')) r.kindleEmail = clean(p.kindleEmail);
+    if (Object.prototype.hasOwnProperty.call(p, 'phone')) r.phone = clean(p.phone);
+    if (Object.prototype.hasOwnProperty.call(p, 'carrier')) r.carrier = clean(p.carrier);
+    found = r;
+  });
+  return found;
+}
+
 function remove(id) {
   const list = readAll();
   const next = list.filter((r) => r.id !== id);
@@ -156,6 +193,6 @@ function removeGroup(id) {
 }
 
 module.exports = {
-  readAll, writeAll, mutate, add, remove, byIds,
+  readAll, writeAll, mutate, add, update, remove, byIds,
   readGroups, addGroup, removeGroup, cleanGroupInput,
 };
