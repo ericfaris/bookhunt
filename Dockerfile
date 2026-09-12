@@ -12,7 +12,7 @@ ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 #   fluxbox   - minimal window manager (so the browser window behaves normally)
 #   x11vnc    - exposes the virtual display over VNC
 #   novnc + websockify - browser-based VNC client served over HTTP/WebSocket
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends \
       xvfb fluxbox x11vnc novnc websockify \
     && rm -rf /var/lib/apt/lists/* \
     # Xvfb writes its socket here; make it world-writable for the non-root user.
