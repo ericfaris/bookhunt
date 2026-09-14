@@ -1,0 +1,455 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>BookHunt — Design System</title>
+<meta name="theme-color" content="#f6f1e7" media="(prefers-color-scheme: light)" />
+<meta name="theme-color" content="#131a30" media="(prefers-color-scheme: dark)" />
+<link rel="icon" type="image/svg+xml" href="favicon.svg" />
+<!-- Loads the app's real stylesheet — every token/component below is live,
+     not redrawn. If style.css changes, this page changes with it. -->
+<link rel="stylesheet" href="style.css" />
+<style>
+  /* Showcase-only chrome. Deliberately kept separate from style.css: none of
+     this is part of the shipped design system, it's just the gallery frame
+     around it. Uses the app's own tokens throughout so the frame itself
+     stays on-brand and theme-aware. */
+  .sc-page { max-width: 1100px; margin: 0 auto; padding: var(--space-6) var(--space-6) var(--space-10); }
+  .sc-hero {
+    display: flex; align-items: center; gap: var(--space-4); flex-wrap: wrap;
+    padding: var(--space-6) 0 var(--space-5);
+    border-bottom: 1px solid var(--border);
+    margin-bottom: var(--space-8);
+  }
+  .sc-hero-mark { width: 52px; height: 52px; color: var(--brand-fg); flex: none; }
+  .sc-hero-mark svg { width: 100%; height: 100%; display: block; }
+  .sc-hero h1 { margin: 0; font-family: var(--font-rounded); font-size: var(--text-2xl); letter-spacing: -0.01em; }
+  .sc-hero h1 .hunt { color: var(--brand-orange); }
+  .sc-hero p { margin: 0.3rem 0 0; color: var(--text-dim); font-size: var(--text-base); max-width: 60ch; }
+  .sc-hero-link { margin-left: auto; align-self: center; }
+
+  .sc-section { margin-bottom: var(--space-8); }
+  .sc-section h2 {
+    font-family: var(--font-rounded); font-size: var(--text-lg); letter-spacing: -0.01em;
+    margin: 0 0 var(--space-2);
+    padding-bottom: var(--space-2);
+    border-bottom: 1px dashed var(--border);
+  }
+  .sc-section-desc { color: var(--text-dim); font-size: var(--text-sm); margin: 0 0 var(--space-5); max-width: 70ch; }
+  .sc-sub { font-family: var(--font-rounded); font-size: var(--text-base); font-weight: 700; margin: var(--space-5) 0 var(--space-3); }
+
+  /* --- Color swatches --- */
+  .sc-swatch-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: var(--space-4); }
+  .sc-swatch { border: 1px solid var(--border); border-radius: var(--radius-md); overflow: hidden; background: var(--surface); box-shadow: var(--shadow-sm); }
+  .sc-swatch-fill { height: 64px; }
+  .sc-swatch-body { padding: var(--space-2) var(--space-3) var(--space-3); }
+  .sc-swatch-name { font-size: var(--text-sm); font-weight: 700; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  .sc-swatch-val { font-size: var(--text-xs); color: var(--text-dim); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; margin-top: 2px; }
+  .sc-swatch-role { font-size: var(--text-xs); color: var(--text-dim); margin-top: 4px; }
+
+  /* --- Type scale --- */
+  .sc-type-row { display: flex; align-items: baseline; gap: var(--space-4); padding: var(--space-3) 0; border-bottom: 1px dashed var(--border); flex-wrap: wrap; }
+  .sc-type-row:last-child { border-bottom: none; }
+  .sc-type-meta { flex: 0 0 220px; font-size: var(--text-xs); color: var(--text-dim); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  .sc-type-sample { color: var(--text); }
+  .sc-type-sample.rounded { font-family: var(--font-rounded); }
+
+  /* --- Spacing / radius scale --- */
+  .sc-scale-row { display: flex; align-items: center; gap: var(--space-3); padding: var(--space-2) 0; }
+  .sc-scale-box { background: var(--accent); flex: none; height: 22px; border-radius: 3px; }
+  .sc-scale-label { font-size: var(--text-xs); color: var(--text-dim); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; width: 220px; }
+  .sc-radius-grid { display: flex; gap: var(--space-4); flex-wrap: wrap; }
+  .sc-radius-item { text-align: center; }
+  .sc-radius-box { width: 72px; height: 72px; background: var(--surface-2); border: 1px solid var(--border-strong); margin-bottom: var(--space-2); }
+  .sc-radius-label { font-size: var(--text-xs); color: var(--text-dim); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+
+  /* --- Shadow --- */
+  .sc-shadow-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: var(--space-5); }
+  .sc-shadow-card { background: var(--surface); border-radius: var(--radius-md); padding: var(--space-5); text-align: center; font-size: var(--text-sm); color: var(--text-dim); }
+
+  /* --- Motion demo --- */
+  .sc-motion-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: var(--space-4); }
+  .sc-motion-card {
+    background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-md);
+    padding: var(--space-4); text-align: center; cursor: pointer; font-size: var(--text-sm);
+  }
+  .sc-motion-card.demo-base { transition: transform var(--ease-base), box-shadow var(--dur-base) var(--ease-standard); }
+  .sc-motion-card.demo-base:hover { transform: translateY(-4px); box-shadow: var(--shadow); }
+  .sc-motion-card.demo-fast { transition: background var(--dur-fast) var(--ease-standard); }
+  .sc-motion-card.demo-fast:hover { background: var(--surface-2); }
+  .sc-motion-card.demo-out { transition: transform var(--dur-slow) var(--ease-out); }
+  .sc-motion-card.demo-out:hover { transform: scale(1.05) rotate(-1deg); }
+
+  /* --- Component groups --- */
+  .sc-row { display: flex; flex-wrap: wrap; gap: var(--space-3); align-items: center; margin-bottom: var(--space-3); }
+  .sc-component-block { margin-bottom: var(--space-6); }
+  .sc-component-block:last-child { margin-bottom: 0; }
+  .sc-label { font-size: var(--text-xs); color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: var(--space-2); }
+
+  /* --- Mood boards --- */
+  .sc-mood-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: var(--space-5); }
+  .sc-mood-card { border: 1px solid var(--border); border-radius: var(--radius-md); overflow: hidden; background: var(--surface); box-shadow: var(--shadow-sm); }
+  .sc-mood-card.chosen { border-color: var(--good); box-shadow: 0 0 0 2px color-mix(in srgb, var(--good) 40%, transparent); }
+  .sc-mood-card img { width: 100%; display: block; aspect-ratio: 16/9; object-fit: cover; background: var(--surface-2); }
+  .sc-mood-body { padding: var(--space-3) var(--space-4) var(--space-4); }
+  .sc-mood-title { font-family: var(--font-rounded); font-weight: 700; font-size: var(--text-base); }
+  .sc-mood-tag { display: inline-block; margin-left: var(--space-2); font-size: var(--text-xs); font-weight: 700; color: var(--good); }
+  .sc-mood-verdict { font-size: var(--text-sm); color: var(--text-dim); margin-top: var(--space-1); }
+
+  footer.sc-footer { margin-top: var(--space-8); padding-top: var(--space-4); border-top: 1px solid var(--border); font-size: var(--text-xs); color: var(--text-dim); }
+  footer.sc-footer a { color: var(--accent); }
+</style>
+</head>
+<body>
+<div class="sc-page">
+
+  <header class="sc-hero">
+    <span class="sc-hero-mark" aria-hidden="true">
+      <svg viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <g stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M9 41 L9 44.5 C16 41.5 26 41.5 32 46 C38 41.5 48 41.5 55 44.5 L55 41"/>
+          <path d="M32 21 C25 16 15 16 9 19 L9 41 C15 38 25 38 32 43 Z"/>
+          <path d="M32 21 C39 16 49 16 55 19 L55 41 C49 38 39 38 32 43 Z"/>
+          <path d="M40 25.5 L49 25"/>
+        </g>
+        <g stroke="currentColor" stroke-width="2" stroke-linecap="round">
+          <path d="M37 35.5 L44 35"/>
+          <path d="M38 39 L43 38.6"/>
+        </g>
+        <g stroke="#f1592a" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="41" cy="37" r="8.5"/>
+          <path d="M47.2 43.2 L53 49.5"/>
+        </g>
+      </svg>
+    </span>
+    <div>
+      <h1>Book<span class="hunt">Hunt</span> Design System</h1>
+      <p>"Warm Paper & Ink Hunt" — every token and component on this page is rendered
+        live from the app's real <code>style.css</code>, not redrawn. See
+        <code>/DESIGN.md</code> for the full narrative, rationale, and specs.</p>
+    </div>
+    <a class="ghost-btn sc-hero-link" href="index.html">← Back to the app</a>
+  </header>
+
+  <!-- ===================== MOOD BOARDS ===================== -->
+  <section class="sc-section">
+    <h2>Direction exploration</h2>
+    <p class="sc-section-desc">Three directions were generated and evaluated against BookHunt's actual
+      purpose (a cozy, personal, task-focused book-hunting tool) before committing to a direction. Full
+      writeup in DESIGN.md §2.</p>
+    <div class="sc-mood-grid">
+      <div class="sc-mood-card chosen">
+        <img src="https://ideogram.ai/assets/image/balanced/response/6pAtzhD0WyGlnF1LYHVdiQ@2k" alt="Warm Paper and Ink Hunt mood board" loading="lazy" />
+        <div class="sc-mood-body">
+          <span class="sc-mood-title">Warm Paper &amp; Ink Hunt</span><span class="sc-mood-tag">✓ chosen</span>
+          <div class="sc-mood-verdict">Cream paper, navy ink, hot-orange accent, rounded friendly type. Matches
+            the existing logo and the app's real personality.</div>
+        </div>
+      </div>
+      <div class="sc-mood-card">
+        <img src="https://ideogram.ai/assets/image/balanced/response/LObH1T7HUAWTyASIftP70Q@2k" alt="Reading Room Noir mood board" loading="lazy" />
+        <div class="sc-mood-body">
+          <span class="sc-mood-title">Reading Room Noir</span>
+          <div class="sc-mood-verdict">Rejected — moody library aesthetic fights the app's task-focused,
+            in-and-out usage and its existing light/dark toggle.</div>
+        </div>
+      </div>
+      <div class="sc-mood-card">
+        <img src="https://ideogram.ai/assets/image/balanced/response/2BKZgcrfW4ysm3sxkHuQ3w@2k" alt="Field Guide Ephemera mood board" loading="lazy" />
+        <div class="sc-mood-body">
+          <span class="sc-mood-title">Field Guide Ephemera</span>
+          <div class="sc-mood-verdict">Rejected — charming but adds vintage-curio kitsch the app doesn't need;
+            green/red accents would collide with the semantic good/danger tokens.</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===================== COLOR ===================== -->
+  <section class="sc-section">
+    <h2>Color</h2>
+    <p class="sc-section-desc">Every swatch below reads its fill directly from the live CSS custom
+      property (see each card's caption). Toggle your OS/browser color scheme to see the dark-mode
+      overrides swap in place — this page has no separate dark-mode logic of its own.</p>
+    <div id="colorSwatches" class="sc-swatch-grid"></div>
+  </section>
+
+  <!-- ===================== TYPE ===================== -->
+  <section class="sc-section">
+    <h2>Type</h2>
+    <p class="sc-section-desc">Body copy: <code>system-ui</code> (native platform face). Display voice:
+      <code>--font-rounded</code> (ui-rounded / SF Pro Rounded / Quicksand fallback chain) — used only for
+      headings, the wordmark, and empty-state titles.</p>
+    <div id="typeScale"></div>
+  </section>
+
+  <!-- ===================== SPACING & RADIUS ===================== -->
+  <section class="sc-section">
+    <h2>Spacing &amp; radius</h2>
+    <p class="sc-sub">Spacing scale (4px base)</p>
+    <div id="spaceScale"></div>
+    <p class="sc-sub">Radius scale</p>
+    <div class="sc-radius-grid" id="radiusScale"></div>
+  </section>
+
+  <!-- ===================== SHADOW & MOTION ===================== -->
+  <section class="sc-section">
+    <h2>Shadow &amp; motion</h2>
+    <p class="sc-sub">Elevation</p>
+    <div class="sc-shadow-grid">
+      <div class="sc-shadow-card" style="box-shadow: var(--shadow-sm);">--shadow-sm<br>resting cards/rows</div>
+      <div class="sc-shadow-card" style="box-shadow: var(--shadow);">--shadow<br>hover state</div>
+      <div class="sc-shadow-card" style="box-shadow: var(--shadow-lg);">--shadow-lg<br>modals</div>
+    </div>
+    <p class="sc-sub">Motion — hover each card to feel the named transition</p>
+    <div class="sc-motion-grid">
+      <div class="sc-motion-card demo-base">--dur-base + --ease-standard<br><small>(hover: lift)</small></div>
+      <div class="sc-motion-card demo-fast">--dur-fast<br><small>(hover: fill)</small></div>
+      <div class="sc-motion-card demo-out">--dur-slow + --ease-out<br><small>(hover: settle)</small></div>
+    </div>
+  </section>
+
+  <!-- ===================== COMPONENTS ===================== -->
+  <section class="sc-section">
+    <h2>Components</h2>
+
+    <div class="sc-component-block">
+      <div class="sc-label">Buttons</div>
+      <div class="sc-row">
+        <button class="primary-btn">Search</button>
+        <button class="primary-btn" disabled>Search</button>
+        <button class="primary-btn cancel-btn">Cancel search</button>
+        <button class="ghost-btn">Library</button>
+        <button class="ghost-btn" disabled>Library</button>
+        <button class="watch-icon-btn ghost-btn" title="Delete">✕</button>
+        <button class="lib-icon-btn ghost-btn watch-del" title="Delete (danger hover)">🗑</button>
+      </div>
+    </div>
+
+    <div class="sc-component-block">
+      <div class="sc-label">Inputs</div>
+      <div class="sc-row" style="max-width: 420px; flex-direction: column; align-items: stretch;">
+        <div class="field">
+          <label for="scTitle">Title</label>
+          <input id="scTitle" type="text" placeholder="e.g. 1984" />
+        </div>
+        <div class="field">
+          <label for="scSort">Sort</label>
+          <select id="scSort"><option>Newest first</option><option>Oldest first</option></select>
+        </div>
+      </div>
+    </div>
+
+    <div class="sc-component-block">
+      <div class="sc-label">Badges</div>
+      <div class="sc-row">
+        <span class="badge src">Mobilism</span>
+        <span class="badge prem">Premium</span>
+        <span class="badge own">In library</span>
+        <span class="badge set">In a set</span>
+      </div>
+    </div>
+
+    <div class="sc-component-block">
+      <div class="sc-label">Semantic text &amp; chips</div>
+      <div class="sc-row">
+        <span style="color: var(--good); font-weight:600;">● Success text</span>
+        <span style="color: var(--warn); font-weight:600;">● Warning text</span>
+        <span style="color: var(--danger); font-weight:600;">● Danger text</span>
+        <span class="watch-error-chip">Warning chip</span>
+      </div>
+    </div>
+
+    <div class="sc-component-block">
+      <div class="sc-label">Card (search result) — default / hover-simulated / library match</div>
+      <div class="sc-row" style="align-items: stretch;">
+        <div class="card" style="max-width: 320px;">
+          <div class="cover placeholder">📕</div>
+          <div class="card-body">
+            <h3>The Book Thief</h3>
+            <p class="author">Markus Zusak</p>
+            <div class="badges"><span class="badge src">Mobilism</span><span class="badge prem">Premium</span></div>
+          </div>
+        </div>
+        <div class="card library-card" style="max-width: 320px;">
+          <div class="cover placeholder">📗</div>
+          <div class="card-body">
+            <h3>Dune</h3>
+            <p class="author">Frank Herbert</p>
+            <div class="badges"><span class="badge own">In library</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="sc-component-block">
+      <div class="sc-label">Empty state</div>
+      <div class="results-empty" style="max-width: 480px;">
+        <div class="results-empty-icon" aria-hidden="true">
+          <svg viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <g stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M9 41 L9 44.5 C16 41.5 26 41.5 32 46 C38 41.5 48 41.5 55 44.5 L55 41"/>
+              <path d="M32 21 C25 16 15 16 9 19 L9 41 C15 38 25 38 32 43 Z"/>
+              <path d="M32 21 C39 16 49 16 55 19 L55 41 C49 38 39 38 32 43 Z"/>
+              <path d="M40 25.5 L49 25"/>
+            </g>
+            <g stroke="#f1592a" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="41" cy="37" r="8.5"/>
+              <path d="M47.2 43.2 L53 49.5"/>
+            </g>
+          </svg>
+        </div>
+        <p class="results-empty-title">Find your next read</p>
+        <p class="hint">Search by title, author, or both.</p>
+      </div>
+    </div>
+
+    <div class="sc-component-block">
+      <div class="sc-label">Loading skeleton</div>
+      <div class="lib-book skeleton" style="max-width: 420px;">
+        <div class="sk-line sk-title"></div>
+        <div class="sk-line sk-sub"></div>
+        <div class="sk-line sk-row"></div>
+      </div>
+    </div>
+
+    <div class="sc-component-block">
+      <div class="sc-label">Warm banner (signature moment)</div>
+      <div id="warmBanner" class="warm-banner" style="position: relative; border-radius: var(--radius-md);">
+        <div class="warm-stage" aria-hidden="true">
+          <span class="warm-mug">☕</span>
+          <span class="warm-steam"><i></i><i></i><i></i></span>
+        </div>
+        <div class="warm-copy">
+          <span class="warm-headline">Warming up the reading room…</span>
+          <span class="warm-sub">Getting your Mobilism session cozy — it re-warms itself.</span>
+        </div>
+        <div class="warm-actions">
+          <button class="warm-btn" type="button">Log into Mobilism</button>
+          <a class="warm-btn warm-btn-ghost" href="#" onclick="return false">Open /warm ↗</a>
+        </div>
+        <span class="warm-shimmer" aria-hidden="true"></span>
+      </div>
+    </div>
+
+    <div class="sc-component-block">
+      <div class="sc-label">Download progress steps</div>
+      <ol class="dl-steps" style="max-width: 320px;">
+        <li class="dl-step done"><span class="dl-step-icon">✓</span><span class="dl-step-label">Located thread</span></li>
+        <li class="dl-step active"><span class="dl-step-icon">↻</span><span class="dl-step-label">Downloading…</span></li>
+        <li class="dl-step pending"><span class="dl-step-icon">○</span><span class="dl-step-label">Verifying ePUB</span></li>
+        <li class="dl-step warn"><span class="dl-step-icon">!</span><span class="dl-step-label">Cover art missing<span class="dl-step-note">non-fatal</span></span></li>
+        <li class="dl-step fail"><span class="dl-step-icon">✕</span><span class="dl-step-label">Send to Kindle failed</span></li>
+      </ol>
+    </div>
+
+    <div class="sc-component-block">
+      <div class="sc-label">Modal card</div>
+      <div class="modal-card" style="position: static; width: min(360px, 100%); animation: none;">
+        <h2>Add watch</h2>
+        <p class="hint">We re-check this on Mobilism and email you the moment it shows up.</p>
+        <div class="field"><label>Title</label><input type="text" placeholder="Title" /></div>
+        <div class="modal-actions"><button class="ghost-btn">Cancel</button><button class="primary-btn">Add watch</button></div>
+      </div>
+    </div>
+
+  </section>
+
+  <footer class="sc-footer">
+    BookHunt design system — generated during the 2026-09-13 design-system pass.
+    Full rationale, token tables, and component specs: <a href="../DESIGN.md">DESIGN.md</a>.
+    This page is static and reads its styling from the live <code>style.css</code> — it will
+    drift-check itself against any future change to that file.
+  </footer>
+</div>
+
+<script>
+// Every value below is read live from getComputedStyle(document.documentElement)
+// against the real style.css — nothing here is a hand-typed duplicate of a
+// color/size that could silently drift out of sync with the actual system.
+const root = getComputedStyle(document.documentElement);
+const val = (name) => root.getPropertyValue(name).trim();
+
+const colorTokens = [
+  ['--bg', 'Background', 'Dominant surface — page background'],
+  ['--surface', 'Surface', 'Cards, modals, panels'],
+  ['--surface-2', 'Surface 2', 'Sunken fill, skeletons, hover fills'],
+  ['--text', 'Text', 'Body text, headings'],
+  ['--text-dim', 'Text dim', 'Hints, labels, metadata'],
+  ['--border', 'Border', 'Hairline borders'],
+  ['--border-strong', 'Border strong', 'Input borders, hover'],
+  ['--accent', 'Accent', 'Primary actions, focus, links'],
+  ['--accent-hover', 'Accent hover', 'Primary button pressed'],
+  ['--accent-2', 'Accent 2', 'Warm-banner glow (rare, never for actions)'],
+  ['--good', 'Good', 'Success / in-library'],
+  ['--warn', 'Warn', 'Warnings, stale files'],
+  ['--danger', 'Danger', 'Errors, destructive actions'],
+  ['--badge-bg', 'Badge bg', 'Neutral chip fill'],
+  ['--badge-text', 'Badge text', 'Neutral chip text'],
+];
+
+const swatchGrid = document.getElementById('colorSwatches');
+for (const [token, name, role] of colorTokens) {
+  const v = val(token);
+  const el = document.createElement('div');
+  el.className = 'sc-swatch';
+  // Text-role tokens are shown as text-on-bg chips instead of a fill block,
+  // since a solid --text fill tells you nothing useful about a text color.
+  const isTextRole = token === '--text' || token === '--text-dim';
+  el.innerHTML = `
+    <div class="sc-swatch-fill" style="${isTextRole
+      ? `background:var(--surface); color:${v}; display:flex; align-items:center; justify-content:center; font-weight:700;`
+      : `background:${v};`}">${isTextRole ? 'Aa' : ''}</div>
+    <div class="sc-swatch-body">
+      <div class="sc-swatch-name">${token}</div>
+      <div class="sc-swatch-val">${v}</div>
+      <div class="sc-swatch-role">${name} — ${role}</div>
+    </div>`;
+  swatchGrid.appendChild(el);
+}
+
+const typeSteps = [
+  ['--text-xs', 'Eyebrow labels, badges'],
+  ['--text-sm', 'Form labels, hints'],
+  ['--text-base', 'Body / buttons / inputs'],
+  ['--text-md', 'Card titles'],
+  ['--text-lg', 'Empty-state titles, modal h2', 'rounded'],
+  ['--text-xl', 'Brand wordmark', 'rounded'],
+  ['--text-2xl', 'Reserved — page-level heading', 'rounded'],
+  ['--text-3xl', 'Reserved — hero heading', 'rounded'],
+];
+const typeHost = document.getElementById('typeScale');
+for (const [token, use, family] of typeSteps) {
+  const v = val(token);
+  const row = document.createElement('div');
+  row.className = 'sc-type-row';
+  row.innerHTML = `
+    <div class="sc-type-meta">${token}<br>${v}</div>
+    <div class="sc-type-sample ${family === 'rounded' ? 'rounded' : ''}" style="font-size:${v};">BookHunt — find your book.</div>
+    <div class="sc-swatch-role" style="margin-left:auto;">${use}</div>`;
+  typeHost.appendChild(row);
+}
+
+const spaceSteps = ['--space-1','--space-2','--space-3','--space-4','--space-5','--space-6','--space-8','--space-10'];
+const spaceHost = document.getElementById('spaceScale');
+for (const token of spaceSteps) {
+  const v = val(token);
+  const row = document.createElement('div');
+  row.className = 'sc-scale-row';
+  row.innerHTML = `<span class="sc-scale-label">${token} = ${v}</span><span class="sc-scale-box" style="width:${v};"></span>`;
+  spaceHost.appendChild(row);
+}
+
+const radiusSteps = ['--radius-xs','--radius-sm','--radius-md','--radius-lg','--radius-full'];
+const radiusHost = document.getElementById('radiusScale');
+for (const token of radiusSteps) {
+  const v = val(token);
+  const item = document.createElement('div');
+  item.className = 'sc-radius-item';
+  item.innerHTML = `<div class="sc-radius-box" style="border-radius:${v};"></div><div class="sc-radius-label">${token}<br>${v}</div>`;
+  radiusHost.appendChild(item);
+}
+</script>
+</body>
+</html>

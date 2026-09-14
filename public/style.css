@@ -1,11 +1,15 @@
 /* ===========================================================================
-   BookHunt design system
+   BookHunt design system — "Warm Paper & Ink Hunt"
    Palette pulled straight from the logo: warm cream paper, deep navy ink, and
    a single hot-orange "hunt" accent (the magnifying glass). Orange is reserved
    for actions + focus (the thing you're hunting toward); navy carries the
-   brand, structure, and body text.
+   brand, structure, and body text. Full token rationale, the type/spacing/
+   motion scales, and every component spec live in /DESIGN.md — this file is
+   the implementation, that document is the source of truth for *why*.
+   See /public/design-showcase.html for every token rendered live.
    =========================================================================== */
 :root {
+  /* --- Color: surfaces & ink -------------------------------------------- */
   --bg: #f6f1e7;            /* warm cream paper (logo backdrop) */
   --surface: #fffdf8;       /* card / panel — barely-warm white */
   --surface-2: #efe8d8;     /* sunken / muted warm fill */
@@ -14,8 +18,11 @@
   --text-dim: #616a8c;      /* navy-tinted muted */
   --border: #e7ddc8;
   --border-strong: #d7cab0;
+
+  /* --- Color: accents & semantics ---------------------------------------- */
   --accent: #f1592a;        /* hot orange — the magnifying glass */
   --accent-hover: #d8481c;
+  --accent-2: #f4b73f;      /* warm gold — second brand accent (the "warming up" glow) */
   --good: #1f9d57;
   --warn: #c2871c;
   --danger: #d6402c;
@@ -24,13 +31,56 @@
   --brand-navy: #1c2a56;
   --brand-orange: #f1592a;
   --brand-fg: #1c2a56;      /* wordmark / logo strokes follow this */
+
+  /* --- Elevation ---------------------------------------------------------- */
   --shadow-sm: 0 1px 2px rgba(28, 42, 86, 0.07);
   --shadow: 0 1px 3px rgba(28, 42, 86, 0.10), 0 6px 16px rgba(28, 42, 86, 0.06);
   --shadow-lg: 0 12px 34px rgba(28, 42, 86, 0.18);
   --ring: 0 0 0 3px color-mix(in srgb, var(--accent) 34%, transparent);
-  --radius: 14px;
+
+  /* --- Radius scale (--radius / --radius-sm kept as the historical
+       aliases most component rules already use) ------------------------- */
+  --radius-xs: 6px;
   --radius-sm: 9px;
-  --ease: 0.18s cubic-bezier(0.4, 0, 0.2, 1);
+  --radius-md: 14px;
+  --radius-lg: 20px;
+  --radius-full: 999px;
+  --radius: var(--radius-md);
+
+  /* --- Motion: named duration + easing pairs (--ease kept as the
+       historical alias for --ease-base, used throughout) ------------------ */
+  --dur-fast: 0.12s;
+  --dur-base: 0.18s;
+  --dur-slow: 0.32s;
+  --ease-standard: cubic-bezier(0.4, 0, 0.2, 1);   /* micro-interactions: hover, focus, press */
+  --ease-out: cubic-bezier(0.2, 0.7, 0.2, 1);       /* reveals: cards, tiles, modals entering */
+  --ease-base: var(--dur-base) var(--ease-standard);
+  --ease: var(--ease-base);
+
+  /* --- Type scale ---------------------------------------------------------
+     Body copy stays in clean system-ui for density and legibility; display
+     steps (headings, brand, empty-state titles) switch to --font-rounded for
+     the friendly, bookish voice. Values are rem so they scale with the
+     user's base font size. */
+  --text-xs: 0.72rem;    /* meta labels, badges, uppercase eyebrow text */
+  --text-sm: 0.82rem;    /* form labels, hints, secondary body copy */
+  --text-base: 0.95rem;  /* default body / button / input text */
+  --text-md: 1.05rem;    /* card titles, sub-headings */
+  --text-lg: 1.2rem;     /* empty-state titles, modal h2 */
+  --text-xl: 1.3rem;     /* brand wordmark */
+  --text-2xl: 1.6rem;    /* reserved: page-level display headings */
+  --text-3xl: 2.1rem;    /* reserved: hero/landing display headings */
+
+  /* --- Spacing scale (4px base) ------------------------------------------- */
+  --space-1: 0.25rem;   /* 4px  — icon-to-label gaps */
+  --space-2: 0.5rem;    /* 8px  — tight inline gaps */
+  --space-3: 0.75rem;   /* 12px — form field gaps */
+  --space-4: 1rem;      /* 16px — card padding, section gaps */
+  --space-5: 1.25rem;   /* 20px — panel padding */
+  --space-6: 1.5rem;    /* 24px — page margins */
+  --space-8: 2rem;      /* 32px — large section breaks */
+  --space-10: 2.75rem;  /* 44px — empty-state padding */
+
   --font-rounded: ui-rounded, "SF Pro Rounded", "Hiragino Maru Gothic ProN",
                   "Quicksand", "Segoe UI", system-ui, sans-serif;
 }
@@ -47,6 +97,7 @@
     --border-strong: #41507a;
     --accent: #ff6a3d;      /* brighter orange for dark paper */
     --accent-hover: #ff8157;
+    --accent-2: #f4b73f;    /* gold reads the same on dark; kept as-is */
     --good: #43c97f;
     --warn: #e0a049;
     --danger: #ff6b57;
@@ -215,7 +266,7 @@ input:focus, select:focus, textarea:focus { border-color: var(--accent); box-sha
   border: 1px solid var(--border);
   font-size: 0.92rem;
 }
-.status.error { border-color: #c0392b; color: #e74c3c; }
+.status.error { border-color: var(--danger); color: var(--danger); }
 .status .links { margin-top: 0.5rem; display: flex; gap: 1rem; flex-wrap: wrap; }
 .status .links a { color: var(--accent); }
 
@@ -227,11 +278,11 @@ input:focus, select:focus, textarea:focus { border-color: var(--accent); box-sha
 /* Re-warm call-to-action button (base; the banner overrides colours) */
 .warm-btn {
   display: inline-block;
-  background: #c0392b; color: #fff; text-decoration: none;
+  background: var(--danger); color: #fff; text-decoration: none;
   padding: 0.4rem 0.85rem; border-radius: 6px; font-weight: 600;
   font-size: 0.85rem; white-space: nowrap;
 }
-.warm-btn:hover { background: #a93226; }
+.warm-btn:hover { background: color-mix(in srgb, var(--danger) 85%, #000); }
 
 .spinner {
   width: 16px; height: 16px;
@@ -378,8 +429,8 @@ input:focus, select:focus, textarea:focus { border-color: var(--accent); box-sha
 .reup-btn:disabled { opacity: 0.7; cursor: default; }
 .reup-msg { font-size: 0.78rem; }
 .reup-msg.ok { color: var(--good); }
-.reup-msg.warn { color: #c89a16; }
-.reup-msg.error { color: #e74c3c; }
+.reup-msg.warn { color: var(--warn); }
+.reup-msg.error { color: var(--danger); }
 
 .dl-btn {
   background: var(--surface-2);
@@ -394,7 +445,7 @@ input:focus, select:focus, textarea:focus { border-color: var(--accent); box-sha
 .dl-btn:hover { filter: brightness(1.08); }
 
 .dl-result { margin-top: 0.5rem; font-size: 0.8rem; color: var(--good); }
-.dl-result.err { color: #e74c3c; }
+.dl-result.err { color: var(--danger); }
 
 /* History drawer */
 .history-panel {
@@ -821,7 +872,7 @@ img.lib-cover { overflow: hidden; }
 .batch-pill.found { background: color-mix(in srgb, var(--good) 18%, transparent); color: var(--good); }
 .batch-pill.multiple { background: var(--badge-bg); color: var(--badge-text); }
 .batch-pill.notfound { background: var(--surface-2); color: var(--text-dim); }
-.batch-pill.error { background: #e74c3c22; color: #e74c3c; }
+.batch-pill.error { background: color-mix(in srgb, var(--danger) 13%, transparent); color: var(--danger); }
 
 .batch-row-body { margin-top: 0.55rem; }
 .batch-select { display: flex; align-items: center; gap: 0.55rem; cursor: pointer; font-size: 0.9rem; }
@@ -830,13 +881,13 @@ img.lib-cover { overflow: hidden; }
 .batch-match { min-width: 0; }
 .batch-links { display: flex; gap: 1rem; flex-wrap: wrap; margin-top: 0.3rem; }
 .batch-links a { color: var(--accent); font-size: 0.82rem; }
-.batch-err { color: #e74c3c; font-size: 0.88rem; }
+.batch-err { color: var(--danger); font-size: 0.88rem; }
 
 .batch-note { font-size: 0.82rem; margin-top: 0.45rem; }
 .batch-note.working { color: var(--text-dim); }
 .batch-note.ok { color: var(--good); }
-.batch-note.warn { color: #c97a1f; }
-.batch-note.fail { color: #e74c3c; }
+.batch-note.warn { color: var(--warn); }
+.batch-note.fail { color: var(--danger); }
 .batch-send { margin-top: 0.4rem; font-size: 0.8rem; }
 
 .batch-actionbar {
@@ -862,7 +913,7 @@ img.lib-cover { overflow: hidden; }
   background:
     linear-gradient(100deg,
       color-mix(in srgb, var(--accent) 13%, var(--bg)),
-      color-mix(in srgb, #f4b73f 18%, var(--bg)) 55%,
+      color-mix(in srgb, var(--accent-2) 18%, var(--bg)) 55%,
       color-mix(in srgb, var(--accent) 10%, var(--bg)));
   color: color-mix(in srgb, var(--text) 86%, var(--accent));
   border-bottom: 1px solid color-mix(in srgb, var(--accent) 30%, var(--border));
@@ -912,7 +963,7 @@ img.lib-cover { overflow: hidden; }
 .warm-shimmer {
   position: absolute; left: 0; right: 0; bottom: 0; height: 3px;
   background: linear-gradient(90deg, transparent, var(--accent),
-    color-mix(in srgb, #f4b73f 80%, #fff), var(--accent), transparent);
+    color-mix(in srgb, var(--accent-2) 80%, #fff), var(--accent), transparent);
   background-size: 220% 100%;
   animation: warm-slide 1.9s linear infinite;
 }
@@ -966,8 +1017,8 @@ img.lib-cover { overflow: hidden; }
 }
 .dl-close:hover { color: var(--text); }
 #dlHeading.dl-success { color: var(--good); }
-#dlHeading.dl-warn-head { color: #c97a1f; }
-#dlHeading.dl-fail-head { color: #e74c3c; }
+#dlHeading.dl-warn-head { color: var(--warn); }
+#dlHeading.dl-fail-head { color: var(--danger); }
 
 .dl-steps { list-style: none; margin: 1rem 0 0; padding: 0; display: flex; flex-direction: column; gap: 0.55rem; }
 .dl-step { display: grid; grid-template-columns: 1.4rem 1fr; align-items: start; gap: 0.5rem; font-size: 0.9rem; }
@@ -980,8 +1031,8 @@ img.lib-cover { overflow: hidden; }
 .dl-step.active .dl-step-icon { color: var(--accent); animation: spin 1s linear infinite; display: inline-block; }
 .dl-step.active .dl-step-label { color: var(--text); font-weight: 600; }
 .dl-step.done .dl-step-icon { color: var(--good); }
-.dl-step.warn .dl-step-icon { color: #c97a1f; }
-.dl-step.fail .dl-step-icon { color: #e74c3c; }
+.dl-step.warn .dl-step-icon { color: var(--warn); }
+.dl-step.fail .dl-step-icon { color: var(--danger); }
 
 .dl-result-panel { margin-top: 1rem; }
 .dl-success-panel {
@@ -992,9 +1043,9 @@ img.lib-cover { overflow: hidden; }
 .dl-line.hint { font-size: 0.78rem; color: var(--text-dim); }
 .dl-check { font-size: 0.85rem; margin-top: 0.3rem; line-height: 1.35; }
 .dl-check.ok { color: var(--good); }
-.dl-check.warn { color: #c97a1f; }
+.dl-check.warn { color: var(--warn); }
 .dl-result-panel .send-btn { margin-top: 0.9rem; width: 100%; }
-.dl-errors { margin: 0.4rem 0 0; padding-left: 1.1rem; font-size: 0.84rem; color: #e74c3c; }
+.dl-errors { margin: 0.4rem 0 0; padding-left: 1.1rem; font-size: 0.84rem; color: var(--danger); }
 .dl-errors li { margin: 0.15rem 0; }
 
 /* Celebration confetti */
