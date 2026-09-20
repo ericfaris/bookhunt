@@ -300,6 +300,45 @@ test('checkWatch: a failed email send is NOT counted as delivered', async () => 
   assert.equal(notifyLogs[0].channels[0].ok, false);
 });
 
+// --- The top search hit can be a dead-end "request" thread with no real -----
+// download link (e.g. a Mobilism "Fulfilled eBook Request" post that only
+// references Amazon) while a lower-ranked hit (a "Books by <author>"
+// collection match) has the actual file. autoDeliver used to only ever try
+// results[0], so this silently fell through to a notify-only email even
+// though a real download existed one result down.
+test('checkWatch: a dead-end top hit falls through to a real download further down the results', async () => {
+  process.env.WATCH_ALERT_EMAIL = 'op@example.com';
+  const removedIds = [];
+  let logged = null;
+  await withMocks(
+    {
+      search: async () => ({
+        results: [
+          { title: 'Request thread', url: 'https://forum.mobilism.org/dead-end', premium: true },
+          { title: 'Books by Author', author: 'Herbert', url: 'https://forum.mobilism.org/real-post', premium: true },
+        ],
+      }),
+      hasPremiumCreds: () => true,
+      premiumDownload: async (url) => {
+        if (url === 'https://forum.mobilism.org/dead-end') {
+          throw new Error('No Premium icon found on this post — use the standard links');
+        }
+        return { downloads: [{ filename: 'Dune.epub', savePath: '/dl/Dune.epub', verified: true, titleMatch: true }], errors: [] };
+      },
+      logDownload: (rec) => { logged = rec; return { id: 'd10' }; },
+      remove: (id) => { removedIds.push(id); return true; },
+    },
+    async () => {
+      const out = await watcher.checkWatch({ id: 'w31', title: 'Dune', author: 'Herbert', sort: 'newest', recipientIds: [], checkCount: 0 });
+      assert.equal(out.delivery.downloaded, true, 'a real download further down the results is not ignored');
+      assert.equal(out.delivery.verifiedMatch, true);
+    }
+  );
+  assert.deepEqual(removedIds, ['w31'], 'a verified match from a non-top candidate still removes the watch');
+  assert.ok(logged);
+  assert.equal(logged.url, 'https://forum.mobilism.org/real-post', 'logged against the post that actually yielded the file');
+});
+
 // --- Provenance: a book found inside a SET must not be labelled with the set --
 // Regression: the radar watched "Saved By A God", matched the set post "Kings Of
 // Mafia Series by Michelle Heard", pulled the right ePUB out of it — and then

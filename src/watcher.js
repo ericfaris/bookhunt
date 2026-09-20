@@ -66,19 +66,23 @@ function deliveryRecipients(watch) {
 }
 
 /**
- * Autonomously deliver a matched book (issue #7 follow-up): when the match is a
- * premium ePUB and credentials are set, download + verify it, push it to each
- * recipient's Kindle, and email everyone. If a download isn't possible (no
- * premium / no creds / unverified / wrong-book), gracefully fall back to a
- * notify-only email with the thread link so nothing is ever silently dropped.
- * Always emails the operator. Never throws.
+ * Autonomously deliver a matched book (issue #7 follow-up): when credentials
+ * are set, walk every search hit (not just the top-ranked one — see
+ * downloader.runCandidates) trying a verified premium download, push it to
+ * each recipient's Kindle, and email everyone. If no candidate yields a
+ * download (no creds / none premium / unverified / wrong-book), gracefully
+ * fall back to a notify-only email with the top hit's thread link so nothing
+ * is ever silently dropped. Always emails the operator. Never throws.
+ *
+ * `results` is the full ranked array from searcher.search() for this watch;
+ * results[0] supplies the book's title/author/cover/link when nothing downloads.
  *
  * Returns { downloaded, delivered, kindlePushed, verifiedMatch }. `verifiedMatch`
  * is true only when the accepted download passed the strict bar — verified AND
  * positively title-matched — which is the watch-removal criterion (stricter than
  * the delivery bar, which also accepts titleMatch === null).
  */
-async function autoDeliver(watch, top) {
+async function autoDeliver(watch, results) {
   // Record the book we WATCHED FOR, not the forum post's title. A set post
   // ("Kings Of Mafia Series by Michelle Heard") legitimately CONTAINS the book —
   // the downloader digs the right ePUB out of it — but its title names the set
@@ -86,6 +90,7 @@ async function autoDeliver(watch, top) {
   // what put "Kings Of Mafia Series" in the Library when the radar had acquired
   // "Saved By A God". The interactive path (server.js) already prefers the
   // searched title; this mirrors it.
+  const top = results[0];
   const book = {
     title: watch.title || top.matchedTitle || top.title,
     author: watch.author || top.author,
@@ -103,19 +108,43 @@ async function autoDeliver(watch, top) {
   if (!book.cover && !top.collection) book.cover = top.cover || null;
   const targets = deliveryRecipients(watch);
 
-  // 1) Try an autonomous, verified premium download.
+  // 1) Try an autonomous, verified premium download — walk EVERY search hit,
+  // not just the top-ranked one (mirrors the interactive /api/download batch
+  // path's downloader.runCandidates). A title-exact "request/bounty" thread
+  // often ranks first but carries no real download link (just a reference
+  // link, e.g. Amazon) — the actual file can live in a lower-ranked post
+  // (a "Books by <author>" collection match). Trying only results[0] meant
+  // that dead end silently fell through to a notify-only email even when a
+  // real download existed one result down.
   let download = null;
-  if (top.premium && top.url && downloader.hasPremiumCreds()) {
-    try {
-      const r = await downloader.premiumDownload(top.url, () => {}, watch.title || top.title);
-      download = (r.downloads || []).find((d) => d.verified) || null;
-      // Safety: never auto-send a book whose embedded title clearly mismatches.
-      if (download && download.titleMatch === false) {
-        console.warn('[watcher] downloaded "%s" but embedded title mismatched — not auto-sending', book.title);
-        download = null;
+  if (downloader.hasPremiumCreds()) {
+    const candidates = results.filter((r) => r.url);
+    if (candidates.length) {
+      // runCandidates tries candidates in order and stops at the first one
+      // that verifies (rank >= 3 — see downloadRank), so whenever `download`
+      // ends up accepted below, `attemptedUrl` is guaranteed to be the URL of
+      // the candidate that actually produced it — not necessarily `top.url`.
+      let attemptedUrl = top.url;
+      try {
+        const { result } = await downloader.runCandidates(
+          candidates,
+          (cand) => {
+            attemptedUrl = cand.url;
+            return downloader.premiumDownload(cand.url, () => {}, watch.title || cand.title);
+          },
+          () => {}
+        );
+        download = ((result && result.downloads) || []).find((d) => d.verified) || null;
+        // Safety: never auto-send a book whose embedded title clearly mismatches.
+        if (download && download.titleMatch === false) {
+          console.warn('[watcher] downloaded "%s" but embedded title mismatched — not auto-sending', book.title);
+          download = null;
+        } else if (download) {
+          download.url = download.url || attemptedUrl;
+        }
+      } catch (err) {
+        console.warn('[watcher] auto-download failed for "%s": %s', book.title, err.message);
       }
-    } catch (err) {
-      console.warn('[watcher] auto-download failed for "%s": %s', book.title, err.message);
     }
   }
 
@@ -125,7 +154,7 @@ async function autoDeliver(watch, top) {
     try {
       const rec = history.logDownload({
         title: book.title, author: book.author, cover: book.cover,
-        filename: download.filename, savePath: download.savePath, url: top.url,
+        filename: download.filename, savePath: download.savePath, url: download.url || top.url,
         mode: 'premium', verified: download.verified, size: download.size,
       });
       downloadId = rec && rec.id;
@@ -214,7 +243,7 @@ async function checkWatch(watch) {
     const top = results[0];
     let delivery = { downloaded: false, delivered: 0, kindlePushed: 0, verifiedMatch: false };
     try {
-      delivery = await autoDeliver(watch, top);
+      delivery = await autoDeliver(watch, results);
     } catch (err) {
       console.warn('[watcher] delivery failed for %s: %s', watch.id, err.message);
     }
