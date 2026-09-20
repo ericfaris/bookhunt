@@ -27,6 +27,7 @@ async function withMocks(overrides, fn) {
     byIds: recipients.byIds,
     add: history.add,
     logDownload: history.logDownload,
+    logNotify: history.logNotify,
     hasCreds: downloader.hasPremiumCreds,
     premiumDownload: downloader.premiumDownload,
     push: kindle.pushToKindle,
@@ -45,6 +46,7 @@ async function withMocks(overrides, fn) {
   recipients.byIds = overrides.byIds || (() => []);
   history.add = overrides.add || (() => {});
   history.logDownload = overrides.logDownload || (() => ({ id: 'd1' }));
+  history.logNotify = overrides.logNotify || (() => ({ id: 'n1' }));
   downloader.hasPremiumCreds = overrides.hasPremiumCreds || (() => false);
   downloader.premiumDownload = overrides.premiumDownload || (async () => ({ downloads: [], errors: [] }));
   kindle.pushToKindle = overrides.push || (async () => {});
@@ -57,7 +59,7 @@ async function withMocks(overrides, fn) {
     Object.assign(watchlist, { update: orig.update, remove: orig.remove, readAll: orig.readAll });
     Object.assign(notify, { notify: orig.notify });
     Object.assign(recipients, { byIds: orig.byIds });
-    Object.assign(history, { add: orig.add, logDownload: orig.logDownload });
+    Object.assign(history, { add: orig.add, logDownload: orig.logDownload, logNotify: orig.logNotify });
     Object.assign(downloader, { hasPremiumCreds: orig.hasCreds, premiumDownload: orig.premiumDownload });
     Object.assign(kindle, { pushToKindle: orig.push });
     Object.assign(lists, { recordEvent: orig.recordEvent });
@@ -266,6 +268,36 @@ test('checkWatch: a radar (list-origin) strict match is removed AND still queues
   assert.equal(scheduled, 1, 'digest was scheduled');
   // List-origin watches stay quiet for the operator (radar digest handles it).
   assert.equal(opEmails.length, 0, 'no per-book operator email for a list watch');
+});
+
+// --- Regression: a failed send must not be counted/recorded as delivered ----
+// Bug: notify.notify() never throws (it swallows per-channel errors into its
+// results array), but autoDeliver() was treating "the await didn't throw" as
+// success and incrementing `delivered` unconditionally — so watchlist.json's
+// `delivered` count (and the "sent to N" UI badge) claimed a send happened
+// even when the SMTP send actually failed.
+test('checkWatch: a failed email send is NOT counted as delivered', async () => {
+  process.env.WATCH_ALERT_EMAIL = 'op@example.com';
+  const notifyLogs = [];
+  let updatePatch = null;
+  await withMocks(
+    {
+      search: async () => ({ results: [{ title: 'Dune', author: 'Herbert', url: 'https://forum.mobilism.org/t1' }] }),
+      byIds: () => [{ id: 'r1', name: 'Sam', email: 'sam@example.com' }],
+      notify: async () => [{ channel: 'email', ok: false, error: 'SMTP auth failed' }],
+      logNotify: (rec) => { notifyLogs.push(rec); return { id: 'n1' }; },
+      update: (_id, patch) => { updatePatch = patch; },
+    },
+    async () => {
+      const out = await watcher.checkWatch({ id: 'w30', title: 'Dune', author: 'Herbert', sort: 'newest', recipientIds: ['r1'], checkCount: 0 });
+      assert.equal(out.delivery.delivered, 0, 'a failed send must not count as delivered');
+    }
+  );
+  assert.ok(updatePatch, 'a fulfilled update was written');
+  assert.equal(updatePatch.delivered, 0, 'watchlist record must not claim a send that failed');
+  // The failure is still logged to history (for audit), just marked not-ok.
+  assert.equal(notifyLogs.length, 1);
+  assert.equal(notifyLogs[0].channels[0].ok, false);
 });
 
 // --- Provenance: a book found inside a SET must not be labelled with the set --

@@ -3006,18 +3006,27 @@ function buildWatchCover(w) {
   }
   slot.append(el('div', { className: 'watch-cover-ph' }, '📖'));
   const key = `${w.title || ''}|${w.author || ''}`.toLowerCase();
-  const paint = (url) => {
-    if (!url || !slot.isConnected) return;
-    slot.innerHTML = '';
+  const makeImg = (url) => {
     const img = el('img', { className: 'watch-cover-img zoomable', src: url, alt: 'cover', loading: 'lazy', title: 'Click to enlarge' });
     img.addEventListener('click', () => openLightbox(url, w.title || ''));
-    slot.append(img);
+    return img;
   };
   const cached = coverCache.get(key);
   if (cached !== undefined) {
-    paint(cached);
+    // Cache hit paints synchronously, before `slot` is attached to the DOM
+    // (buildWatchCover runs as an el() argument, ahead of the append) — so
+    // this can't gate on isConnected like the async path below does.
+    if (cached) {
+      slot.innerHTML = '';
+      slot.append(makeImg(cached));
+    }
     return slot;
   }
+  const paint = (url) => {
+    if (!url || !slot.isConnected) return;
+    slot.innerHTML = '';
+    slot.append(makeImg(url));
+  };
   const params = new URLSearchParams();
   if (w.title) params.set('title', w.title);
   if (w.author) params.set('author', w.author);

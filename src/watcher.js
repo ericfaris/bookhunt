@@ -120,13 +120,15 @@ async function autoDeliver(watch, top) {
   }
 
   // 2) Log a real download to history/Library so it behaves like a manual one.
+  let downloadId = null;
   if (download) {
     try {
-      history.logDownload({
+      const rec = history.logDownload({
         title: book.title, author: book.author, cover: book.cover,
         filename: download.filename, savePath: download.savePath, url: top.url,
         mode: 'premium', verified: download.verified, size: download.size,
       });
+      downloadId = rec && rec.id;
     } catch { /* best effort */ }
     // List-origin watches carry tags so the Library groups auto-acquisitions.
     if (Array.isArray(watch.tags) && watch.tags.length && download.savePath) {
@@ -151,13 +153,24 @@ async function autoDeliver(watch, top) {
       }
     }
     if (r.email) {
-      try {
-        await notify.notify(r, { ...book, pushedToKindle: pushed }, ['email']);
+      const channelResults = await notify.notify(r, { ...book, pushedToKindle: pushed }, ['email']);
+      const emailResult = channelResults.find((c) => c.channel === 'email');
+      if (emailResult && emailResult.ok) {
         emailed.add(String(r.email).toLowerCase());
         delivered++;
-      } catch (err) {
-        console.warn('[watcher] notify failed for %s: %s', r.email, err.message);
+      } else {
+        console.warn('[watcher] notify failed for %s: %s', r.email, (emailResult && emailResult.error) || 'unknown error');
       }
+      try {
+        history.logNotify({
+          downloadId,
+          title: book.title,
+          filename: download && download.filename,
+          to: [r.name],
+          kindlePushed: pushed,
+          channels: channelResults,
+        });
+      } catch { /* best effort */ }
     }
   }
 
@@ -166,10 +179,10 @@ async function autoDeliver(watch, top) {
   // the radar's digest email instead of one email per book.
   const op = watch.source === 'list' ? '' : operatorEmail();
   if (op && !emailed.has(op.toLowerCase())) {
-    try {
-      await notify.notify({ email: op, name: '' }, { ...book, pushedToKindle: false }, ['email']);
-    } catch (err) {
-      console.warn('[watcher] operator notify failed: %s', err.message);
+    const opResults = await notify.notify({ email: op, name: '' }, { ...book, pushedToKindle: false }, ['email']);
+    const opEmail = opResults.find((c) => c.channel === 'email');
+    if (!opEmail || !opEmail.ok) {
+      console.warn('[watcher] operator notify failed: %s', (opEmail && opEmail.error) || 'unknown error');
     }
   }
 
