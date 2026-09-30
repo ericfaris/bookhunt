@@ -29,8 +29,7 @@ the small gaps where the implementation hadn't quite caught up with its own
 intent, and makes it checkable via a live showcase page.
 
 **The 3-5 key moments this system is built around:**
-1. **First open / empty state** — "Find your next read": the book +
-   book line art and a warm invitation, not a blank page.
+1. **First open / empty state** — "Find your next read": the hand-inked book and a warm invitation, not a blank page.
 2. **A search result card revealing itself** — the subtle `card-in` rise,
    cover art, badges (In library / Premium / In a set) doing hierarchy work
    so the title always leads.
