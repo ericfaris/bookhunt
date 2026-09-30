@@ -12,7 +12,7 @@ const id = 'email';
 const label = 'Email';
 
 // BookHunt brand palette (kept inline; email clients ignore :root/vars).
-const ACCENT = '#f1592a'; // hot orange — the magnifying glass
+const ACCENT = '#f1592a'; // hot orange — the bookmark ribbon
 const NAVY = '#1c2a56';   // deep navy — the book / header band
 const INK = '#1c2a56';
 const MUTED = '#6b727e';

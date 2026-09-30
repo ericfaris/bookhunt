@@ -1,7 +1,7 @@
 /* ===========================================================================
    BookHunt design system — "Warm Paper & Ink Hunt"
    Palette pulled straight from the logo: warm cream paper, deep navy ink, and
-   a single hot-orange "hunt" accent (the magnifying glass). Orange is reserved
+   a single hot-orange "hunt" accent (the bookmark ribbon). Orange is reserved
    for actions + focus (the thing you're hunting toward); navy carries the
    brand, structure, and body text. Full token rationale, the type/spacing/
    motion scales, and every component spec live in /DESIGN.md — this file is
@@ -20,7 +20,7 @@
   --border-strong: #d7cab0;
 
   /* --- Color: accents & semantics ---------------------------------------- */
-  --accent: #f1592a;        /* hot orange — the magnifying glass */
+  --accent: #f1592a;        /* hot orange — the bookmark ribbon */
   --accent-hover: #d8481c;
   --accent-2: #f4b73f;      /* warm gold — second brand accent (the "warming up" glow) */
   --good: #1f9d57;

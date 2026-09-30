@@ -14,7 +14,7 @@
 // the cache updates behind it; the cache is only used as an OFFLINE fallback.
 // Bump CACHE on changes that must evict the previous shell.
 
-const CACHE = 'bookhunt-shell-v3'; // bumped: evict anything /reader/api cached before issue #38's fix
+const CACHE = 'bookhunt-shell-v4'; // bumped: new logo (favicon/inline mark) + evict anything /reader/api cached before issue #38's fix
 const SHELL = [
   '/',
   '/index.html',

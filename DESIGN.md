@@ -21,8 +21,8 @@ chasing signups — it's a personal appliance that should feel like a
 The existing app (built up over ~40 commits, see `docs/UI_CHANGES.md` and
 `.claude/plans/*redesign*`) had already converged, through iteration, on the
 right answer: **warm cream paper, deep navy ink, and one hot-orange accent**
-lifted directly from the hand-drawn logo (an open book crossed with a
-magnifying glass — the hunt). That is not an accident or a placeholder
+lifted from the logo (a closed navy book with an orange bookmark ribbon —
+the book you found). That is not an accident or a placeholder
 palette; it's the strongest asset already in the repo. This pass treats it
 as the committed direction, gives it a name, documents it properly, closes
 the small gaps where the implementation hadn't quite caught up with its own
@@ -30,7 +30,7 @@ intent, and makes it checkable via a live showcase page.
 
 **The 3-5 key moments this system is built around:**
 1. **First open / empty state** — "Find your next read": the book +
-   magnifying-glass line art and a warm invitation, not a blank page.
+   book line art and a warm invitation, not a blank page.
 2. **A search result card revealing itself** — the subtle `card-in` rise,
    cover art, badges (In library / Premium / In a set) doing hierarchy work
    so the title always leads.
@@ -66,7 +66,7 @@ not on which was the most striking image in isolation.
 
 | Direction | Pitch | Verdict |
 |---|---|---|
-| **Warm Paper & Ink Hunt** ✅ | Cream paper, navy ink, hot-orange accent, rounded friendly display type, hand-inked book + magnifying-glass line art. Cozy, bookish, adventurous. | **Chosen.** Matches the existing logo/palette exactly and the app's actual personality — a friendly personal tool, not a corporate product. Generated image: https://ideogram.ai/g/oZfjzLdHRSWrUuj8fYPqpQ/0 |
+| **Warm Paper & Ink Hunt** ✅ | Cream paper, navy ink, hot-orange accent, rounded friendly display type, hand-inked book line art. Cozy, bookish, adventurous. | **Chosen.** Matches the existing logo/palette exactly and the app's actual personality — a friendly personal tool, not a corporate product. Generated image: https://ideogram.ai/g/oZfjzLdHRSWrUuj8fYPqpQ/0 |
 | Reading Room Noir | Deep midnight navy dominant, brass accent, serif display type, library-desk-lamp mood. Moody, literary, late-night. | Rejected — gorgeous but wrong tone. BookHunt is used in short, task-focused bursts ("find this book, hit send"), not as an immersive reading environment; an all-dark-by-default identity would also fight the app's actual `prefers-color-scheme` dark mode (which is a *toggle*, not the identity). Generated image: https://ideogram.ai/g/SEuyuZbDR0m4IqK8M0LWUw/0 |
 | Field Guide Ephemera | Manila/forest-green/postage-red, vintage stencil type, ticket-stub buttons, card-catalog texture. Vintage-explorer, card-catalog mood. | Rejected — charming but adds a "vintage curio" affect the app doesn't need; the existing orange-on-cream already carries the "hunt/adventure" idea without the kitsch, and green+red as primary accents would collide with the semantic good/danger tokens. |
 
@@ -328,11 +328,16 @@ rows) needs a quiet backdrop. The only generated art in this pass is the
 mood-board exploration images (§2), which are documentation artifacts, not
 shipped assets.
 
-The **existing** brand art — the book + magnifying-glass mark — is
-hand-drawn SVG (not AI-generated), reused inline in three places for crisp
-`currentColor` theming: the topbar brand mark, the results-empty icon, and
-the favicon/app-icon family (see §8). This pass did not regenerate it; it
-already exactly matches the direction (see §2's verdict).
+The brand mark is the **Ribbon**: a solid closed book (two `currentColor`
+halves split by a gap) with an orange bookmark ribbon hanging below it — the
+book you found and marked. Geometry lives on a 256 grid (book x52–204,
+y28–212; ribbon x136–176, y28–236 with a notched tail). It is reused inline in
+the topbar brand mark, the results-empty icon and the showcase (`viewBox="28 20
+200 224"`, body in `currentColor` so it flips to cream in dark mode, ribbon
+always `#f1592a`), plus the favicon/app-icon family (see §8). The old open-book
++ magnifying-glass mark was retired 2026-09-30: too many details for 16 px and
+the lens covered the book. At favicon sizes the mark should stay solid; do not
+reintroduce thin strokes.
 
 ---
 
@@ -342,7 +347,7 @@ Already in place and confirmed to fit the direction — **not regenerated**:
 
 | File | Role |
 |---|---|
-| `public/favicon.svg` | 64×64 tab icon — cream rounded square, navy book, orange magnifying glass |
+| `public/favicon.svg` | 256-unit tab icon — cream rounded square, solid navy closed book, orange bookmark ribbon |
 | `public/reader-icon.svg` | 512×512 source, full-bleed cream so OS icon masks (squircle/circle) crop cleanly |
 | `public/reader-icon-180.png` | iOS home-screen icon (apple-touch-icon), served at `/reader/icon-180.png` |
 | `public/reader-icon-192.png` | PWA manifest icon (192), served at `/reader/icon-192.png` |
@@ -425,9 +430,9 @@ routes). No changes made here.
 |---|---|---|
 | `public/style.css` | Design system implementation (tokens + components) | Refined (additive tokens + literal→token color fixes) |
 | `public/design-showcase.html` | Live showcase — renders every token/component from the real CSS | **New** |
-| `public/favicon.svg` | Tab icon | No — pre-existing, confirmed on-direction |
-| `public/reader-icon.svg` | 512px icon source | No — pre-existing |
-| `public/reader-icon-{180,192,512}.png` | PWA/iOS icons | No — pre-existing |
+| `public/favicon.svg` | Tab icon | Yes — replaced with the Ribbon mark (2026-09-30) |
+| `public/reader-icon.svg` | 512px icon source | Yes — Ribbon mark |
+| `public/reader-icon-{180,192,512}.png` | PWA/iOS icons | Yes — re-rendered from `reader-icon.svg` |
 | `public/manifest.webmanifest` | Main app manifest | No — pre-existing, confirmed correct |
 | `DESIGN.md` | This document | **New** |
 | Mood-board images (§2) | Direction validation, documentation only | **New** — not shipped in the repo, linked by URL |
