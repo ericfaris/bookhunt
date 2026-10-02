@@ -27,6 +27,7 @@ const covers = require('./covers');
 const kindle = require('./kindle');
 const smtp = require('./smtp');
 const watchlist = require('./watchlist');
+const storage = require('./storage');
 const { normalize, similarity } = require('./correct');
 
 // Public origin for links in reader emails (the app itself never needs this —
@@ -148,14 +149,19 @@ function buildBooks() {
   // /api/library in src/server.js: a real existsSync predicate, then
   // booktags.attachTags() to actually put tags on the books. Read the tag
   // store once, not once per book.
-  const books = library.buildLibrary(history.readAll(), (p) => {
-    try {
-      return fs.existsSync(path.resolve(p));
-    } catch {
-      return false;
-    }
-  });
+  // Existence goes through the storage layer (#47): local disk, or the R2 key
+  // index (callers load it first via ensureStorageIndex).
+  const store = storage.get();
+  const books = library.buildLibrary(history.readAll(), (p) => store.existsSync(p));
   return booktags.attachTags(books, booktags.readStore());
+}
+
+// Load the R2 key index before a sync buildBooks(). Local mode has no index,
+// so it deliberately does NOT await anything there: callers keep running
+// buildBooks() synchronously on entry, exactly as before #47.
+function ensureStorageIndex() {
+  const store = storage.get();
+  return store.mode === 'local' ? null : store.ensureIndex();
 }
 
 /** PURE: is this book actually sendable — verified AND still on disk? Shared
@@ -231,6 +237,8 @@ function paginate(list, offset, limit) {
  * stable within a request). Returns `{ books, total, hasMore }`.
  */
 async function booksForReaderPage(recipient, offset = 0, limit = PAGE_SIZE) {
+  const pendingIndex = ensureStorageIndex();
+  if (pendingIndex) await pendingIndex;
   const { slice, total, hasMore } = paginate(sendableBooks(buildBooks()), offset, limit);
   const books = [];
   for (const b of slice) books.push(await toReaderTile(b, recipient));
@@ -300,6 +308,8 @@ function searchLibrary(books, query) {
 
 /** Search the whole library (not just the recent shelf) for one reader. */
 async function searchForReader(recipient, query) {
+  const pendingIndex = ensureStorageIndex();
+  if (pendingIndex) await pendingIndex;
   const hits = searchLibrary(buildBooks(), query);
   const out = [];
   for (const b of hits) out.push(await toReaderTile(b, recipient));
@@ -570,6 +580,8 @@ async function invite(id) {
  */
 async function notifyNewBooks() {
   if (!smtp.isConfigured()) return 0;
+  const pendingIndex = ensureStorageIndex();
+  if (pendingIndex) await pendingIndex;
   const now = Date.now();
   const recent = recentBooks(buildBooks(), now);
   if (!recent.length) return 0;

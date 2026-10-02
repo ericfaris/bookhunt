@@ -33,6 +33,7 @@ const settings = require('./settings');
 const lists = require('./lists');
 const listwatcher = require('./listwatcher');
 const reader = require('./reader');
+const storage = require('./storage');
 
 const PORT = process.env.PORT || 3000;
 const app = express();
@@ -309,9 +310,9 @@ app.post('/api/search', async (req, res) => {
     // it — and to whom it's gone — before the slower Mobilism scrape even starts.
     // Local + instant; runs even if the Mobilism session is stale. Fail-soft.
     try {
-      const libBooks = library.buildLibrary(history.readAll(), (p) => {
-        try { return fs.existsSync(path.resolve(p)); } catch { return false; }
-      });
+      const store = storage.get();
+      await store.ensureIndex();
+      const libBooks = library.buildLibrary(history.readAll(), (p) => store.existsSync(p));
       const hits = library.findInLibrary(libBooks, { title, author }).slice(0, 3);
       if (hits.length) send({ step: 'library', books: hits });
     } catch (err) {
@@ -742,15 +743,13 @@ app.get('/api/history', (_req, res) => {
 // --- Library: book-centric view with inline send history -------------------
 // Reshapes the flat history into one row per downloaded book, each carrying its
 // sends. `filePresent` reflects whether the .epub is still on disk so the client
-// can disable resend for files that have been removed.
-app.get('/api/library', (_req, res) => {
-  const books = library.buildLibrary(history.readAll(), (p) => {
-    try {
-      return fs.existsSync(path.resolve(p));
-    } catch {
-      return false;
-    }
-  });
+// can disable resend for files that have been removed. Existence goes through
+// the storage layer (local disk, or the R2 key index — one list, never a HEAD
+// per book).
+app.get('/api/library', async (_req, res) => {
+  const bookStore = storage.get();
+  await bookStore.ensureIndex();
+  const books = library.buildLibrary(history.readAll(), (p) => bookStore.existsSync(p));
   const store = booktags.readStore();
   res.json({ books: booktags.attachTags(books, store), allTags: booktags.allTags(store) });
 });
