@@ -54,7 +54,21 @@ const isForumUrl = security.isForumUrl;
 // EVERY other middleware (Access verification, rate limiting) so it's always
 // reachable for Docker's in-container probe regardless of Access config, and
 // deliberately unauthenticated — it leaks nothing beyond "the process is up".
-app.get('/healthz', (_req, res) => res.status(200).json({ ok: true }));
+//
+// R2 storage (#47) only ADDS an informational `storage` block in r2 mode — the
+// status stays 200 regardless, since a restart can't fix a remote R2 outage
+// (same reasoning as the Mobilism session above). Local mode: exactly { ok: true }.
+app.get('/healthz', (_req, res) => {
+  let body = { ok: true };
+  try {
+    const s = storage.get();
+    if (s.mode !== 'local') {
+      const h = s.healthInfo();
+      body = { ok: true, storage: { mode: h.mode, ok: h.ok, indexLoaded: h.indexLoaded, lastRefreshAt: h.lastRefreshAt } };
+    }
+  } catch { /* stay { ok: true } */ }
+  res.status(200).json(body);
+});
 
 // Don't advertise the framework, and reject oversized bodies (all real requests
 // here are tiny JSON — capping blunts memory-exhaustion attempts).
@@ -757,7 +771,7 @@ app.get('/api/library', async (_req, res) => {
 // Delete a library book: remove its file from disk (when safe + present) and
 // drop its download + correlated send entries from history. Tags for that file
 // are dropped too. Idempotent-ish: a missing file still clears the history rows.
-app.delete('/api/library/:id', (req, res) => {
+app.delete('/api/library/:id', async (req, res) => {
   let savePath = null;
   let removed = false;
   history.mutate((entries) => {
@@ -769,11 +783,21 @@ app.delete('/api/library/:id', (req, res) => {
   if (!removed) return res.status(404).json({ error: 'Library book not found.' });
   let fileDeleted = false;
   if (savePath && downloader.isSafeEpubPath(savePath, downloader.DOWNLOAD_PATH)) {
-    try {
-      const abs = path.resolve(savePath);
-      if (fs.existsSync(abs)) { fs.unlinkSync(abs); fileDeleted = true; }
-    } catch (err) {
-      console.error('Library delete: file removal failed:', err.message);
+    const store = storage.get();
+    if (store.mode === 'local') {
+      try {
+        const abs = path.resolve(savePath);
+        if (fs.existsSync(abs)) { fs.unlinkSync(abs); fileDeleted = true; }
+      } catch (err) {
+        console.error('Library delete: file removal failed:', err.message);
+      }
+    } else {
+      // R2: true iff the object was in the index; the delete itself is idempotent.
+      try {
+        fileDeleted = await store.remove(savePath);
+      } catch (err) {
+        console.error('Library delete: file removal failed:', err.message);
+      }
     }
   }
   try { booktags.setTags(savePath, []); } catch { /* best effort */ }
@@ -967,12 +991,21 @@ app.get('/api/status', async (_req, res) => {
   } catch {
     /* leave defaults on a transient error */
   }
-  const dir = downloader.DOWNLOAD_PATH;
-  const downloads = health.readDownloadStats(dir);
+  const store = storage.get();
+  let download;
+  if (store.mode === 'local') {
+    const dir = downloader.DOWNLOAD_PATH;
+    const downloads = health.readDownloadStats(dir);
+    download = { path: dir, ...downloads, disk: health.freeSpace(dir) };
+  } else {
+    // R2 (#47): counts come from the key index (only .epub objects, like local).
+    const st = await store.stats().catch(() => ({ exists: false, count: 0, totalBytes: 0 }));
+    download = { path: store.displayPath(), ...st, disk: null, storage: store.healthInfo() };
+  }
   res.json({
     version: version.info(),
     session,
-    download: { path: dir, ...downloads, disk: health.freeSpace(dir) },
+    download,
     channels: notify.listChannels(),
     kindle: kindle.isConfigured(),
     premium: { hasCreds: downloader.hasPremiumCreds() },
