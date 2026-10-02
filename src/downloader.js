@@ -6,6 +6,7 @@ const { getSession, ensureReady, enqueue, randomDelay, fetchDetail, fuzzyMatch }
 const { readEpubMetadata, parseEpubBuffer } = require('./epub');
 const { sniffArchive, extractEpubs } = require('./archive');
 const { giveThanks } = require('./thanks');
+const storage = require('./storage');
 
 const DOWNLOAD_PATH = process.env.DOWNLOAD_PATH || 'C:\\temp';
 const PREMIUM_BASE =
@@ -276,8 +277,10 @@ function isSafeEpubPath(savePath, root) {
  * Fallback save: fetch a known file URL with the browser context's cookies and
  * write it to disk. Used when navigating to the file didn't surface a Playwright
  * download event (some hosts serve inline rather than as an attachment).
+ * `dir` is where the file lands — DOWNLOAD_PATH in local mode, the attempt's
+ * staging dir in r2 mode (#47).
  */
-async function saveViaRequest(page, fileUrl, meta) {
+async function saveViaRequest(page, fileUrl, meta, dir = DOWNLOAD_PATH) {
   try {
     const resp = await page.context().request.get(fileUrl, { timeout: DOWNLOAD_TIMEOUT });
     if (!resp.ok()) return null;
@@ -296,7 +299,7 @@ async function saveViaRequest(page, fileUrl, meta) {
     const original = decodeURIComponent(base).replace(/[\r\n"]/g, '') || 'download';
     if (/\.html?$/i.test(original)) return { error: notABookFileError('') }; // page, not a file
     const filename = buildBookFilename(meta, original); // tidy "Title [Author] (Year).ext"
-    const savePath = path.join(DOWNLOAD_PATH, filename);
+    const savePath = path.join(dir, filename);
     fs.writeFileSync(savePath, buf);
     return { filename, savePath };
   } catch {
@@ -402,6 +405,43 @@ async function runPremiumDownload(topicUrl, onProgress = () => {}, targetTitle) 
 }
 
 /**
+ * Throw away a superseded/rejected saved download. Local mode is exactly the
+ * original unscoped best-effort unlink; r2 mode deletes the stored object
+ * (savePaths are logical in both modes, so winner/loser guards still compare
+ * like with like).
+ */
+async function discardFile(p) {
+  const store = storage.get();
+  if (store.mode === 'local') {
+    try { fs.unlinkSync(p); } catch { /* best effort */ }
+    return;
+  }
+  try { await store.remove(p); } catch { /* best effort */ }
+}
+
+/**
+ * Run one download attempt in a working directory. Local mode: the directory
+ * IS DOWNLOAD_PATH and nothing is removed (today's behaviour). r2 mode: a
+ * fresh per-attempt `dl-*` dir under the staging root, ALWAYS removed when the
+ * attempt ends — success or any failure — so no partial/rejected file lingers.
+ * The upload happens inside `fn` (finalizeDownload), before the cleanup.
+ */
+async function withStaging(store, fn) {
+  if (store.mode === 'local') return fn(DOWNLOAD_PATH);
+  const root = store.stagingDir();
+  if (path.resolve(root) === path.resolve(DOWNLOAD_PATH)) {
+    throw new Error('Refusing to stage downloads in the download directory itself');
+  }
+  fs.mkdirSync(root, { recursive: true });
+  const dir = fs.mkdtempSync(path.join(root, 'dl-'));
+  try {
+    return await fn(dir);
+  } finally {
+    try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* best effort */ }
+  }
+}
+
+/**
  * Rank a saved download by how convincingly it is the wanted book:
  *   3 → verified ePUB whose embedded title doesn't contradict the target (accepted)
  *   2 → verified ePUB but the embedded title is clearly a DIFFERENT book
@@ -439,9 +479,9 @@ async function runMirrors(links, attempt, onProgress = () => {}) {
   // under the same title-derived filename, so the loser's savePath is often the
   // SAME path the winner's file now lives at — unlinking it would delete the
   // winner. Record the error either way; only unlink a path the winner doesn't own.
-  const discard = (entry, reason, keep) => {
+  const discard = async (entry, reason, keep) => {
     if (entry.savePath && !(keep && keep.savePath === entry.savePath)) {
-      try { fs.unlinkSync(entry.savePath); } catch { /* best effort */ }
+      await discardFile(entry.savePath);
     }
     errors.push({ url: entry.url, error: reason });
   };
@@ -453,7 +493,7 @@ async function runMirrors(links, attempt, onProgress = () => {}) {
       const entry = { ...saved, url: link.url, timestamp: new Date().toISOString() };
       const rank = downloadRank(saved);
       if (rank >= 3) {
-        if (fallback) discard(fallback.entry, fallback.reason, entry);
+        if (fallback) await discard(fallback.entry, fallback.reason, entry);
         return { downloads: [entry], errors };
       }
       // Saved, but it isn't (verifiably) the right book. Report it, keep the
@@ -466,16 +506,16 @@ async function runMirrors(links, attempt, onProgress = () => {}) {
         verified: !!saved.verified, embeddedTitle: saved.embeddedTitle,
       });
       if (!fallback || rank > fallback.rank) {
-        if (fallback) discard(fallback.entry, fallback.reason, entry);
+        if (fallback) await discard(fallback.entry, fallback.reason, entry);
         fallback = { entry, rank, reason };
       } else {
-        discard(entry, reason, fallback.entry);
+        await discard(entry, reason, fallback.entry);
       }
     } catch (err) {
       if (err.fatal) {
         // Account-level — abort remaining mirrors; don't leave an orphaned
         // rejected file behind.
-        if (fallback && fallback.entry.savePath) { try { fs.unlinkSync(fallback.entry.savePath); } catch { /* best effort */ } }
+        if (fallback && fallback.entry.savePath) await discardFile(fallback.entry.savePath);
         throw err;
       }
       onProgress({ step: 'mirror-failed', host: link.host, error: err.message });
@@ -511,13 +551,13 @@ async function runCandidates(candidates, attempt, onProgress = () => {}) {
   // same title-derived filename, so a superseded candidate's savePath is often
   // the SAME path the kept candidate's file now lives at. Never unlink a path
   // the kept result (`keep`) owns.
-  const discardFiles = (result, keep) => {
+  const discardFiles = async (result, keep) => {
     const keepPaths = new Set(
       ((keep && keep.downloads) || []).map((d) => d && d.savePath).filter(Boolean)
     );
     for (const d of (result && result.downloads) || []) {
       if (d.savePath && !keepPaths.has(d.savePath)) {
-        try { fs.unlinkSync(d.savePath); } catch { /* best effort */ }
+        await discardFile(d.savePath);
       }
     }
   };
@@ -534,7 +574,7 @@ async function runCandidates(candidates, attempt, onProgress = () => {}) {
       result = await attempt(cand, i);
     } catch (err) {
       if (err.fatal || err.needWarm) {
-        if (best) discardFiles(best.result);
+        if (best) await discardFiles(best.result);
         throw err;
       }
       lastError = err;
@@ -550,14 +590,14 @@ async function runCandidates(candidates, attempt, onProgress = () => {}) {
         if (downloadsOf(best.result).length) {
           errors.push({ url: best.url, error: 'Download did not verify as the right book — a later match replaced it' });
         }
-        discardFiles(best.result, result);
+        await discardFiles(best.result, result);
       }
       best = { result, rank, url: cand.url };
     } else {
       if (downloadsOf(result).length) {
         errors.push({ url: cand.url, error: 'Download did not verify as the right book — kept the earlier match' });
       }
-      discardFiles(result, best.result);
+      await discardFiles(result, best.result);
     }
     if (rank >= 3) break; // verified the right book — stop looking
   }
@@ -579,6 +619,12 @@ async function runCandidates(candidates, attempt, onProgress = () => {}) {
  * (Error.fatal set for account-level failures).
  */
 async function attemptLink(page, link, meta, onProgress = () => {}) {
+  return withStaging(storage.get(), (dir) => attemptLinkIn(page, link, meta, onProgress, dir));
+}
+
+/** attemptLink's body, saving into `dir` (DOWNLOAD_PATH locally; the attempt's
+ *  staging dir in r2 mode). */
+async function attemptLinkIn(page, link, meta, onProgress, dir) {
   await randomDelay();
   const target = `${PREMIUM_BASE}?dl=${encodeURIComponent(link.url)}`;
 
@@ -656,11 +702,11 @@ async function attemptLink(page, link, meta, onProgress = () => {}) {
     await page.goto(fileUrl, { waitUntil: 'commit' }).catch(() => {});
     download = await dl2;
     if (!download) {
-      const saved = await saveViaRequest(page, fileUrl, meta);
+      const saved = await saveViaRequest(page, fileUrl, meta, dir);
       if (saved && saved.error) throw new Error(saved.error); // error page, not a file
       if (saved) {
         onProgress({ step: 'saved', filename: saved.filename });
-        return finalizeDownload(saved.savePath, saved.filename, meta, onProgress);
+        return finalizeDownload(saved.savePath, saved.filename, meta, onProgress, { dir });
       }
     }
   }
@@ -670,9 +716,18 @@ async function attemptLink(page, link, meta, onProgress = () => {}) {
     throw new Error('No download was triggered by this mirror.');
   }
 
+  return saveDownloadEvent(download, meta, dir, onProgress, fileUrl);
+}
+
+/**
+ * Save a Playwright download event's file into `dir`, reject HTML/error pages,
+ * then finalize (unwrap archive → verify → in r2 mode, upload). Split out of
+ * attemptLink so the save → finalize path is unit-testable without a browser.
+ */
+async function saveDownloadEvent(download, meta, dir, onProgress = () => {}, fileUrl = null) {
   const original = download.suggestedFilename();
   const filename = buildBookFilename(meta, original); // tidy "Title [Author] (Year).ext"
-  const savePath = path.join(DOWNLOAD_PATH, filename);
+  const savePath = path.join(dir, filename);
   await download.saveAs(savePath);
   console.error('[premium] saved %s (host name %s) from fileUrl=%s', filename, original, fileUrl || '(download event)');
   // Some hosts serve an HTML landing/error page as the "download" — reject it so
@@ -684,7 +739,7 @@ async function attemptLink(page, link, meta, onProgress = () => {}) {
     throw new Error(notABookFileError(reason));
   }
   onProgress({ step: 'saved', filename });
-  return finalizeDownload(savePath, filename, meta, onProgress);
+  return finalizeDownload(savePath, filename, meta, onProgress, { dir });
 }
 
 /**
@@ -716,7 +771,7 @@ function pickEpub(epubs, expectedTitle) {
  * reader operate on the real ePUB. A bare ePUB (or non-archive) passes through
  * untouched. Throws (→ failed mirror) if a recognized archive has no usable ePUB.
  */
-async function resolveArchive(savePath, filename, meta, onProgress = () => {}) {
+async function resolveArchive(savePath, filename, meta, onProgress = () => {}, dir = DOWNLOAD_PATH) {
   const kind = sniffArchive(savePath);
   if (kind !== 'zip' && kind !== 'rar') return { savePath, filename };
 
@@ -735,7 +790,7 @@ async function resolveArchive(savePath, filename, meta, onProgress = () => {}) {
 
   const chosen = pickEpub(epubs, meta && meta.title);
   const newFilename = buildBookFilename(meta, chosen.name); // ".epub" extension
-  const epubPath = path.join(DOWNLOAD_PATH, newFilename);
+  const epubPath = path.join(dir, newFilename);
   fs.writeFileSync(epubPath, chosen.data);
   // Remove the archive now that the ePUB is extracted (unless, improbably, the
   // tidy name resolved to the archive's own path).
@@ -752,8 +807,8 @@ async function resolveArchive(savePath, filename, meta, onProgress = () => {}) {
  * then `verified` progress so the UI can show exactly what was checked
  * (structure + embedded title match).
  */
-async function finalizeDownload(savePath, filename, meta, onProgress = () => {}) {
-  ({ savePath, filename } = await resolveArchive(savePath, filename, meta, onProgress));
+async function finalizeDownload(savePath, filename, meta, onProgress = () => {}, opts = {}) {
+  ({ savePath, filename } = await resolveArchive(savePath, filename, meta, onProgress, opts.dir || DOWNLOAD_PATH));
   // Final backstop: never keep an HTML/error page that slipped through every
   // earlier guard as a "book". Delete it and fail the mirror with a clear reason.
   if (isHtmlFile(savePath, filename)) {
@@ -773,6 +828,17 @@ async function finalizeDownload(savePath, filename, meta, onProgress = () => {})
     embeddedAuthor: v.embeddedAuthor,
     size: v.size,
   });
+  // r2 mode (#47): upload the verified final file under its LOGICAL path
+  // (DOWNLOAD_PATH/<filename>, the same savePath local mode returns) and hand
+  // that back. An upload error fails this mirror; the caller's withStaging
+  // removes the staged file either way. No new progress steps (the UI only
+  // knows the existing ones) — the upload happens inside `verified`.
+  const store = opts.store || storage.get();
+  if (store.mode !== 'local') {
+    const logical = path.join(DOWNLOAD_PATH, filename);
+    await store.putFile(savePath, logical);
+    savePath = logical;
+  }
   return {
     filename,
     savePath,
@@ -815,4 +881,8 @@ module.exports = {
   pickEpub,
   resolveArchive,
   finalizeDownload,
+  saveViaRequest,
+  saveDownloadEvent,
+  withStaging,
+  discardFile,
 };
