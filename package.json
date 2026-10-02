@@ -10,10 +10,11 @@
     "dev": "node --watch src/server.js",
     "warm": "node src/warm.js",
     "install-browser": "playwright install chromium",
-    "test": "node --test test/*.test.js",
+    "test": "STORAGE=local node --test test/*.test.js",
     "docker:up": "GIT_SHA=$(git rev-parse --short HEAD) BUILD_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ) docker compose up -d --build"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1145.0",
     "dotenv": "^16.4.5",
     "express": "^5.0.0",
     "http-proxy": "^1.18.1",
