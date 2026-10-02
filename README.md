@@ -1,6 +1,6 @@
 # BookHunt
 
-A self-hosted web app that searches the Mobilism ebook forum by title and/or author, auto-crawls collection posts, triggers Premium downloads where available, and saves ePUBs to disk. Accessible at `http://localhost:3000` locally or at `https://bookhunt.mooseflip.com` via Cloudflare Tunnel.
+A self-hosted web app that searches the Mobilism ebook forum by title and/or author, auto-crawls collection posts, triggers Premium downloads where available, and stores ePUBs in a private Cloudflare R2 bucket (or a local folder in dev). Accessible at `http://localhost:3000` locally or at `https://bookhunt.mooseflip.com` via Cloudflare Tunnel.
 
 > For personal use against an account you own. Drives a real Chromium browser with your logged-in session and inserts polite 2–5s delays between requests.
 
@@ -16,7 +16,7 @@ A self-hosted web app that searches the Mobilism ebook forum by title and/or aut
 - **Author fallback** — title-only author search as a last resort, gated on the post's actual author so blurb name-drops don't leak in
 - **Spell-correction** — fixes fuzzy title/author before searching (Google Books → Open Library)
 - **Amazon prefill** — a smart **Paste** button scrapes an Amazon link, plus a [browser extension](extension/README.md) that searches straight from any Amazon book page
-- **Premium downloads** — saved directly to disk via the Mobilism amember downloader
+- **Premium downloads** — fetched via the Mobilism amember downloader, verified, and stored in R2 (see [Book storage](#book-storage-cloudflare-r2--local))
 - **Standard links** — per-host download buttons when no Premium icon is present
 - **Search history** — stored in `history.json`, re-runnable with one click
 - **Dark mode** — via `prefers-color-scheme`
@@ -48,8 +48,14 @@ Fill in:
 ```
 MOBILISM_USER=your_forum_username
 MOBILISM_PASS=your_forum_password
-DOWNLOAD_PATH=/mnt/c/epubs        # WSL path to C:\epubs
 PORT=3000
+
+# Book storage — local dev usually keeps books on disk:
+STORAGE=local
+DOWNLOAD_PATH=./downloads
+# ...or point at the real bucket (see "Book storage" below):
+# STORAGE=r2
+# R2_ACCOUNT_ID=  R2_ACCESS_KEY_ID=  R2_SECRET_ACCESS_KEY=  R2_BUCKET=bookhunt-library
 
 # Optional: premium downloader login (loaded at startup; UI form overrides)
 MOBILISM_PREMIUM_USER=
@@ -76,7 +82,9 @@ user (`uid:gid 1000`). Mobilism's Cloudflare blocks headless browsers, so the
 browser runs headed in-container and is logged in **remotely via `/warm`** (a
 noVNC view of the live browser) — no host-side warm step is needed.
 
-**1. Create your `.env`** (same as above)
+**1. Create your `.env`** (same as above, but with `STORAGE=r2` and the four
+`R2_*` vars set — the container has no books volume, so `STORAGE=local` would
+write books into its ephemeral filesystem)
 
 **2. Make sure `history.json` exists**
 ```bash
@@ -85,14 +93,15 @@ touch history.json
 
 **3. Start the container**
 ```bash
-docker compose up -d
+npm run docker:up        # build + up, stamping version/commit/build time
 docker logs bookhunt-app-1
 ```
 
 Expected output:
 ```
+Storage: R2 bucket "bookhunt-library" — N object(s) indexed
 BookHunt running at http://localhost:3000
-Downloads will be saved to: /downloads
+Downloads will be staged in /tmp/bookhunt-staging and stored in r2://bookhunt-library/books/
 ```
 
 **To stop:**
@@ -102,7 +111,7 @@ docker compose down
 
 **To rebuild after a code change:**
 ```bash
-docker compose up -d --build
+npm run docker:up
 ```
 
 ### Re-warming (when the session expires)
@@ -129,24 +138,30 @@ and Chromium profile locks on boot, so `docker compose up -d` just works.
 | `./history.json` | `/app/history.json` | Search + download log |
 
 Books have no volume: they live in Cloudflare R2 (see *Book storage* below).
+The other gitignored state files (`recipients.json`, `recipient-groups.json`,
+`booktags.json`, `covers-cache.json`, `watchlist.json`, `settings.json`,
+`lists.json`) are single-file binds too — see `docker-compose.yml`.
 
 > The container runs as `user: "1000:1000"` so these bind-mounted files stay
 > owned by you, not root. If files ever end up root-owned (e.g. from an older
 > setup), fix them without sudo via:
 > `docker run --rm -v "$PWD/.browser-profile:/p" alpine chown -R 1000:1000 /p`
 
-### Book storage (local / Cloudflare R2)
+### Book storage (Cloudflare R2 / local)
 
-`STORAGE=local` (the default) keeps books as files in `DOWNLOAD_PATH`
-(`/mnt/c/epubs` → `/downloads`). `STORAGE=r2` stores them in the private
-Cloudflare R2 bucket `R2_BUCKET` instead (issue #47):
+**Production runs `STORAGE=r2`** (since 2026-10-02, issue #47): every book lives
+only in the private Cloudflare R2 bucket `bookhunt-library`, under `books/`.
+There is no local copy and no books volume. `STORAGE=local` (the code default)
+keeps books as plain files in `DOWNLOAD_PATH` and is used for tests and local dev.
+
+How r2 mode works:
 
 - **Identity is unchanged.** History and tags still key on the logical
   `/downloads/<file>.epub` path; the storage layer maps it to the object key
   `books/<file>.epub`. Nothing in `history.json`/`booktags.json` is rewritten.
 - **Downloads** are saved and unpacked (ZIP/RAR) in a per-attempt staging dir
-  (`STORAGE_STAGING_DIR`, container-local), verified, and only the final file is
-  uploaded. The staging dir is always removed, success or failure.
+  (`STORAGE_STAGING_DIR`, container-local `/tmp`), verified, and only the final
+  file is uploaded. The staging dir is always removed, success or failure.
 - **The Library** answers "is the file there?" from an in-memory index built from
   one bucket listing (refreshed every `STORAGE_INDEX_REFRESH_MS`), never a request
   per book. Send-to-Kindle fetches the bytes from R2 once per send.
@@ -154,29 +169,24 @@ Cloudflare R2 bucket `R2_BUCKET` instead (issue #47):
   `/api/status` and `/healthz` carry a `storage` block (healthz stays 200 even if
   R2 is down — a restart can't fix a remote outage). The app refuses to start if
   `STORAGE=r2` and any `R2_*` var is missing.
+- **Credentials:** a bucket-scoped R2 API token (Object Read & Write) in `.env`
+  only — never committed, never logged.
 
-**Cutover** (manual, in order):
+**Backups:** R2 is the only copy. To take one, sync the bucket's `books/` prefix
+to a host folder (e.g. `rclone sync r2:bookhunt-library/books ./books-backup`).
 
-1. Deploy this code (still `STORAGE=local`).
-2. On the host (`scripts/` is not in the Docker image; run `npm install` first):
-   `node scripts/migrate-to-r2.js --src /mnt/c/epubs` — a **dry run** that only
-   lists the bucket and prints the plan. Review it.
-3. `node scripts/migrate-to-r2.js --src /mnt/c/epubs --apply` — must end with
-   **0 failed and 0 verify mismatches** (re-running is safe; present objects are
-   skipped). It never deletes or modifies local files.
-4. Set `STORAGE=r2` in `.env`.
-5. `npm run docker:up`.
-6. Check Status shows `R2 (N objects)` and the Library shows every book present.
-7. Leave `/mnt/c/epubs` untouched as the backup.
+**Rollback to local:** copy `books/` back to a host folder, re-add it as a
+`/downloads` bind mount in `docker-compose.yml`, set `STORAGE=local`, and
+`npm run docker:up`. History is unchanged, so the Library resolves again once the
+files are back. Don't flip to `local` without the bind mount — downloads would
+land in the container's ephemeral filesystem and vanish on the next recreate.
 
-**Current state (2026-10-02):** cut over to `STORAGE=r2`; the local
-`/mnt/c/epubs` copy was deleted and its `/downloads` bind mount removed from
-`docker-compose.yml`, so R2 is the only copy of the books.
-
-**Rollback:** copy the bucket's `books/` back to a host folder (e.g. with
-rclone), re-add that folder as a `/downloads` bind mount in
-`docker-compose.yml`, set `STORAGE=local`, and `npm run docker:up`. History is
-unchanged, so the Library resolves again once the files are back.
+**Migration script** (`scripts/migrate-to-r2.js`, how the cutover was done; host
+only — `scripts/` isn't in the Docker image): `node scripts/migrate-to-r2.js
+--src <folder>` is a dry run that lists the bucket and prints the plan; add
+`--apply` to upload. It's idempotent (present objects are skipped), verifies each
+upload, and never deletes or modifies local files. Reuse it to re-seed the bucket
+from a backup.
 
 Tests always run with `STORAGE=local` (pinned in `npm test`) and talk only to an
 in-memory fake S3 — never the real bucket.
@@ -279,7 +289,7 @@ The reader portal (issue #34) lets invited readers open a passwordless magic lin
 
 ### Downloads
 
-- **Premium** (`img.MobilismDownloaderIcon` found in post): each associated download link is fetched through the amember downloader and saved to `DOWNLOAD_PATH`. Credentials are entered in the UI once per session and never written to disk (or optionally set via `MOBILISM_PREMIUM_USER`/`MOBILISM_PREMIUM_PASS` in `.env`). If a mirror serves the book wrapped in a **ZIP or RAR archive**, it's unpacked automatically: the inner `.epub` is extracted (the matching book is chosen when a bundle holds several), the archive is deleted, and verification + send-to-reader run on the real `.epub`.
+- **Premium** (`img.MobilismDownloaderIcon` found in post): each associated download link is fetched through the amember downloader into a staging dir, verified, and stored (R2 in production, `DOWNLOAD_PATH` with `STORAGE=local`). Credentials are entered in the UI once per session and never written to disk (or optionally set via `MOBILISM_PREMIUM_USER`/`MOBILISM_PREMIUM_PASS` in `.env`). If a mirror serves the book wrapped in a **ZIP or RAR archive**, it's unpacked automatically: the inner `.epub` is extracted (the matching book is chosen when a bundle holds several), the archive is deleted, and verification + send-to-reader run on the real `.epub`.
 - **Standard** (no Premium icon): every `a.postlink` is shown as a button labeled by file host and opens in a new tab.
 
 ---
@@ -331,7 +341,7 @@ Notification channels live in `src/notify/` and share one contract (`isConfigure
 | `MOBILISM_PASS` | Yes | — | Mobilism forum password |
 | `MOBILISM_PREMIUM_USER` | No | — | Premium downloader username |
 | `MOBILISM_PREMIUM_PASS` | No | — | Premium downloader password |
-| `DOWNLOAD_PATH` | No | `C:\epubs` | Where downloaded ePUBs are saved |
+| `DOWNLOAD_PATH` | No | `C:\epubs` | `STORAGE=local` only: folder where ePUBs are saved (unused in r2 mode) |
 | `PORT` | No | `3000` | HTTP port |
 | `HEADLESS` | No | `false` | Set `true` to run Chromium headless (only safe when the browser profile is warm and Cloudflare clearance is cached) |
 | `PROFILE_DIR` | No | `.browser-profile/` | Path to the Playwright persistent browser profile |
@@ -345,7 +355,7 @@ Notification channels live in `src/notify/` and share one contract (`isConfigure
 | `TWILIO_ACCOUNT_SID` | No | — | Reserved for the future SMS/MMS channel |
 | `TWILIO_AUTH_TOKEN` | No | — | Reserved for the future SMS/MMS channel |
 | `TWILIO_FROM` | No | — | Reserved — Twilio sending number |
-| `STORAGE` | No | `local` | Where books live: `local` (files in `DOWNLOAD_PATH`) or `r2` (Cloudflare R2 bucket) — see [Book storage](#book-storage-local--cloudflare-r2) |
+| `STORAGE` | No (`r2` in production) | `local` | Where books live: `local` (files in `DOWNLOAD_PATH`) or `r2` (Cloudflare R2 bucket) — see [Book storage](#book-storage-cloudflare-r2--local) |
 | `R2_ACCOUNT_ID` | When `STORAGE=r2` | — | Cloudflare account id (R2 S3 endpoint) |
 | `R2_ACCESS_KEY_ID` | When `STORAGE=r2` | — | Bucket-scoped R2 API token (Object Read & Write) |
 | `R2_SECRET_ACCESS_KEY` | When `STORAGE=r2` | — | Its secret — never logged or committed |
@@ -390,6 +400,8 @@ docker-compose.yml
 .env.example
 history.json      Search + download log (created on first run)
 recipients.json   Notification recipients (gitignored)
+scripts/
+  migrate-to-r2.js  Copy a local books folder into R2 (dry run by default)
 .browser-profile/ Playwright persistent session (created on first run)
 ```
 
@@ -405,6 +417,12 @@ The Cloudflare clearance or forum login expired. Open `/warm`, clear the challen
 
 **localhost:3000 shows the wrong app (green page / "Reel Quest")**
 A stale service worker from a previous project on port 3000 is intercepting requests. Open DevTools → Application → Service Workers → Unregister, or clear site data for `localhost`.
+
+**Status shows `R2 unreachable` / Library marks every book missing**
+The bucket listing failed (network, or the R2 token was revoked/expired). Check
+`docker logs bookhunt-app-1` for the `Storage:` line, confirm the `R2_*` values in
+`.env`, then `npm run docker:up`. The index retries every
+`STORAGE_INDEX_REFRESH_MS`, so a transient outage clears on its own.
 
 **Premium download: "account expired"**
 Your premium subscription has lapsed. The app detects this and reports it immediately rather than hanging. Renew on Mobilism and retry.
