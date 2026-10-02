@@ -355,7 +355,7 @@ Notification channels live in `src/notify/` and share one contract (`isConfigure
 | `TWILIO_ACCOUNT_SID` | No | — | Reserved for the future SMS/MMS channel |
 | `TWILIO_AUTH_TOKEN` | No | — | Reserved for the future SMS/MMS channel |
 | `TWILIO_FROM` | No | — | Reserved — Twilio sending number |
-| `STORAGE` | No (`r2` in production) | `local` | Where books live: `local` (files in `DOWNLOAD_PATH`) or `r2` (Cloudflare R2 bucket) — see [Book storage](#book-storage-cloudflare-r2--local) |
+| `STORAGE` | No | `local` (`r2` under docker-compose) | Where books live: `local` (files in `DOWNLOAD_PATH`) or `r2` (Cloudflare R2 bucket) — see [Book storage](#book-storage-cloudflare-r2--local) |
 | `R2_ACCOUNT_ID` | When `STORAGE=r2` | — | Cloudflare account id (R2 S3 endpoint) |
 | `R2_ACCESS_KEY_ID` | When `STORAGE=r2` | — | Bucket-scoped R2 API token (Object Read & Write) |
 | `R2_SECRET_ACCESS_KEY` | When `STORAGE=r2` | — | Its secret — never logged or committed |

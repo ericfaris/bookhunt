@@ -90,10 +90,12 @@ services:
       - TWILIO_ACCOUNT_SID=${TWILIO_ACCOUNT_SID:-}
       - TWILIO_AUTH_TOKEN=${TWILIO_AUTH_TOKEN:-}
       - TWILIO_FROM=${TWILIO_FROM:-}
-      # Book storage (issue #47): production sets STORAGE=r2 in .env (private
-      # Cloudflare R2 bucket; needs all four R2_* vars or the app refuses to
-      # start). The `local` fallback is only safe with a books bind mount (above).
-      - STORAGE=${STORAGE:-local}
+      # Book storage (issue #47): a private Cloudflare R2 bucket. Defaults to r2
+      # so a missing STORAGE fails loudly (all four R2_* vars are required or the
+      # app refuses to start) instead of silently writing books into the
+      # container's ephemeral /downloads. STORAGE=local is only safe with a books
+      # bind mount (see volumes above).
+      - STORAGE=${STORAGE:-r2}
       - R2_ACCOUNT_ID=${R2_ACCOUNT_ID:-}
       - R2_ACCESS_KEY_ID=${R2_ACCESS_KEY_ID:-}
       - R2_SECRET_ACCESS_KEY=${R2_SECRET_ACCESS_KEY:-}
