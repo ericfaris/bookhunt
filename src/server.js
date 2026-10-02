@@ -1218,15 +1218,55 @@ app.use((err, req, res, _next) => {
 // server, browser, schedulers, and VNC bridge when run directly.
 module.exports = { app };
 
-if (require.main === module) startServer();
+if (require.main === module) {
+  startServer().catch((err) => {
+    console.error('Startup failed:', err.message);
+    process.exit(1);
+  });
+}
 
-function startServer() {
+async function startServer() {
+// Storage first (#47): validate config and fail fast — before the browser
+// launches or the port binds — so STORAGE=r2 with missing R2_* vars exits
+// with a clear message instead of half-starting. In r2 mode, warm the key
+// index before listening so the first Library render is right, but bounded:
+// an R2 outage must never keep the app (and /warm) down. Never logs
+// credentials, the account id or the endpoint.
+let store;
+try {
+  store = storage.init(process.env);
+} catch (err) {
+  console.error(`[storage] ${err.message}`);
+  process.exit(1);
+}
+if (store.mode === 'r2') {
+  storage.sweepStaging(store.stagingDir(), 60 * 60 * 1000);
+  const timeoutMs = Number(process.env.STORAGE_STARTUP_TIMEOUT_MS) || 15000;
+  try {
+    await Promise.race([
+      store.refresh(),
+      new Promise((_, rej) => setTimeout(() => rej(new Error(`timed out after ${timeoutMs}ms`)), timeoutMs).unref()),
+    ]);
+    console.log(`Storage: R2 bucket "${store.bucket}" — ${store.healthInfo().objectCount} object(s) indexed`);
+  } catch (err) {
+    console.error(
+      `Storage: R2 bucket "${store.bucket}" UNREACHABLE at startup (${err.message}) — ` +
+        'library will show books as missing until it recovers; retrying in background'
+    );
+  }
+  storage.startRefreshTimer(Number(process.env.STORAGE_INDEX_REFRESH_MS) || 600000);
+}
+
 // Bind to loopback by default. In Docker the container is isolated by the
 // host-side port mapping (127.0.0.1:3000:3000), so HOST=0.0.0.0 is safe there.
 const HOST = process.env.HOST || '127.0.0.1';
 const server = app.listen(PORT, HOST, () => {
   console.log(`BookHunt running at http://localhost:${PORT}`);
-  console.log(`Downloads will be saved to: ${downloader.DOWNLOAD_PATH}`);
+  if (store.mode === 'local') {
+    console.log(`Downloads will be saved to: ${downloader.DOWNLOAD_PATH}`);
+  } else {
+    console.log(`Downloads will be staged in ${store.stagingDir()} and stored in ${store.displayPath()}`);
+  }
   // Launch the browser at startup and park it on the forum so /warm always shows
   // a usable page (ready to clear Cloudflare) and status reflects reality — even
   // before the first search.
