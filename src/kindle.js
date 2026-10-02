@@ -15,8 +15,21 @@ function isConfigured() {
   return smtp.isConfigured();
 }
 
-async function pushToKindle({ kindleEmail, filePath, filename }) {
+// `content` (optional Buffer) attaches in-memory bytes instead of reading
+// `filePath` — used when the book lives in R2 rather than on local disk (#47).
+async function pushToKindle({ kindleEmail, filePath, filename, content }) {
   if (!kindleEmail) throw new Error('No Kindle email for this recipient');
+  if (Buffer.isBuffer(content)) {
+    const bufName = filename || 'book.epub';
+    await smtp.getTransport().sendMail({
+      from: smtp.FROM,
+      to: kindleEmail,
+      subject: bufName, // ignored by Amazon, but useful in your Sent folder
+      text: 'Sent from BookHunt',
+      attachments: [{ filename: bufName, content, contentType: 'application/epub+zip' }],
+    });
+    return;
+  }
   const name = filename || path.basename(filePath);
   await smtp.getTransport().sendMail({
     from: smtp.FROM,
