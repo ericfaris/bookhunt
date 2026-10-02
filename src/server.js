@@ -1121,7 +1121,11 @@ app.post('/api/send', async (req, res) => {
     return res.status(400).json({ error: 'Refusing to send that file.' });
   }
   const filePath = path.resolve(entry.savePath);
-  if (!fs.existsSync(filePath)) {
+  // Existence via storage (#47): local = fs.existsSync of the resolved path;
+  // r2 = the key index (loaded once, no per-send HEAD).
+  const store = storage.get();
+  await store.ensureIndex();
+  if (!store.existsSync(entry.savePath)) {
     return res.status(410).json({ error: 'File no longer exists on disk.' });
   }
 
@@ -1157,12 +1161,25 @@ app.post('/api/send', async (req, res) => {
     } catch { /* leave blanks — never block a send on metadata */ }
   }
   const results = [];
+  // The attachment is fetched at most once per send (not per recipient): local
+  // passes the resolved path as before; r2 fetches the bytes from the bucket.
+  // A fetch failure surfaces as each recipient's Kindle error, never a 500.
+  let att = null;
+  let attErr = null;
   for (const r of recips) {
     const out = { id: r.id, name: r.name, kindle: null, channels: [] };
 
     if (pushToKindle && r.kindleEmail) {
       try {
-        await kindle.pushToKindle({ kindleEmail: r.kindleEmail, filePath, filename: entry.filename });
+        if (!att && !attErr) {
+          try {
+            att = store.mode === 'local' ? { filePath } : await store.attachment(entry.savePath);
+          } catch (e) {
+            attErr = e;
+          }
+        }
+        if (attErr) throw attErr;
+        await kindle.pushToKindle({ kindleEmail: r.kindleEmail, filename: entry.filename, ...att });
         out.kindle = { ok: true };
       } catch (err) {
         out.kindle = { ok: false, error: err.message };

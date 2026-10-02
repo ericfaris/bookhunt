@@ -16,7 +16,6 @@
 // and the routes ride a tight rate limit in server.js.
 
 const crypto = require('crypto');
-const fs = require('fs');
 const path = require('path');
 
 const recipients = require('./recipients');
@@ -374,15 +373,34 @@ async function sendToReader(recipient, downloadId) {
   // even though history still has a verified entry for it. Without this check
   // a missing file surfaces as a raw 500 from nodemailer's attachment read
   // instead of the intended, friendlier 410 "gone".
+  // Existence + bytes go through storage (#47): local disk as before, or the
+  // R2 key index + a GetObject.
+  const store = storage.get();
+  await store.ensureIndex();
   let onDisk = false;
-  try { onDisk = fs.existsSync(path.resolve(entry.savePath)); } catch { onDisk = false; }
+  try { onDisk = store.existsSync(entry.savePath); } catch { onDisk = false; }
   if (!onDisk) {
     throw Object.assign(new Error('That book is no longer available.'), { code: 'gone' });
   }
+  let att;
+  if (store.mode === 'local') {
+    att = { filePath: path.resolve(entry.savePath) };
+  } else {
+    try {
+      att = await store.attachment(entry.savePath);
+    } catch (err) {
+      // The index said present but the object is gone (deleted elsewhere since
+      // the last refresh) → the same friendly "gone", not a raw 500.
+      if (err && (err.name === 'NoSuchKey' || (err.$metadata && err.$metadata.httpStatusCode === 404))) {
+        throw Object.assign(new Error('That book is no longer available.'), { code: 'gone' });
+      }
+      throw err;
+    }
+  }
   await kindle.pushToKindle({
     kindleEmail: recipient.kindleEmail,
-    filePath: path.resolve(entry.savePath),
     filename: entry.filename,
+    ...att,
   });
   history.logNotify({
     downloadId,

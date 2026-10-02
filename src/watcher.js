@@ -25,6 +25,7 @@ const kindle = require('./kindle');
 const booktags = require('./booktags');
 const lists = require('./lists');
 const covers = require('./covers');
+const storage = require('./storage');
 
 const TICK_MS = Number(process.env.WATCH_TICK_MS) || 300000; // wake every 5 min
 // A watch that has gone this many no-match checks without a hit is retired —
@@ -170,11 +171,24 @@ async function autoDeliver(watch, results) {
   let delivered = 0;
   let kindlePushed = 0;
   const emailed = new Set();
+  // Fetched at most once for all recipients (#47): local passes the savePath
+  // as-is (unresolved, as before); r2 pulls the bytes from the bucket.
+  let att = null;
+  let attErr = null;
   for (const r of targets) {
     let pushed = false;
     if (download && r.kindleEmail) {
       try {
-        await kindle.pushToKindle({ kindleEmail: r.kindleEmail, filePath: download.savePath, filename: download.filename });
+        if (!att && !attErr) {
+          const store = storage.get();
+          try {
+            att = store.mode === 'local' ? { filePath: download.savePath } : await store.attachment(download.savePath);
+          } catch (e) {
+            attErr = e;
+          }
+        }
+        if (attErr) throw attErr;
+        await kindle.pushToKindle({ kindleEmail: r.kindleEmail, filename: download.filename, ...att });
         pushed = true;
         kindlePushed++;
       } catch (err) {
