@@ -1990,6 +1990,7 @@ async function loadStatus() {
     const d = s.download || {};
     const dl = el('div', { className: 'status-section' }, [el('h3', {}, 'Downloads')]);
     dl.append(statusItem('Folder', d.path || '—'));
+    if (d.storage) dl.append(statusItem('Storage', d.storage.ok ? `R2 (${d.storage.objectCount} objects)` : `R2 unreachable — ${d.storage.lastError || 'not loaded'}`, !!d.storage.ok));
     dl.append(statusItem('ePUBs saved', String(d.count || 0)));
     dl.append(statusItem('Total size', formatBytes(d.totalBytes || 0) || '0 B'));
     if (d.disk) dl.append(statusItem('Disk free', `${formatBytes(d.disk.freeBytes)} of ${formatBytes(d.disk.totalBytes)}`));
