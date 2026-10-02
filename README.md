@@ -127,7 +127,8 @@ and Chromium profile locks on boot, so `docker compose up -d` just works.
 |---|---|---|
 | `./.browser-profile` | `/app/.browser-profile` | Playwright persistent session (Cloudflare clearance + forum login) |
 | `./history.json` | `/app/history.json` | Search + download log |
-| `/mnt/c/epubs` | `/downloads` | Downloaded ePUBs |
+
+Books have no volume: they live in Cloudflare R2 (see *Book storage* below).
 
 > The container runs as `user: "1000:1000"` so these bind-mounted files stay
 > owned by you, not root. If files ever end up root-owned (e.g. from an older
@@ -168,9 +169,14 @@ Cloudflare R2 bucket `R2_BUCKET` instead (issue #47):
 6. Check Status shows `R2 (N objects)` and the Library shows every book present.
 7. Leave `/mnt/c/epubs` untouched as the backup.
 
-**Rollback:** set `STORAGE=local` and `npm run docker:up`. History is unchanged,
-so it works instantly — but books downloaded **while in r2 mode** exist only in
-R2 and must be copied back to `/mnt/c/epubs` by hand (not automated).
+**Current state (2026-10-02):** cut over to `STORAGE=r2`; the local
+`/mnt/c/epubs` copy was deleted and its `/downloads` bind mount removed from
+`docker-compose.yml`, so R2 is the only copy of the books.
+
+**Rollback:** copy the bucket's `books/` back to a host folder (e.g. with
+rclone), re-add that folder as a `/downloads` bind mount in
+`docker-compose.yml`, set `STORAGE=local`, and `npm run docker:up`. History is
+unchanged, so the Library resolves again once the files are back.
 
 Tests always run with `STORAGE=local` (pinned in `npm test`) and talk only to an
 in-memory fake S3 — never the real bucket.

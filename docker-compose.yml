@@ -59,8 +59,11 @@ services:
       - ./settings.json:/app/settings.json
       # New-release list radar state (snapshots, seen books, pending digest)
       - ./lists.json:/app/lists.json
-      # Downloads land in C:\epubs on the Windows side (via WSL2 path)
-      - /mnt/c/epubs:/downloads
+      # No books volume: books live in Cloudflare R2 (STORAGE=r2, issue #47) and
+      # downloads stage in container-local /tmp. To go back to STORAGE=local,
+      # re-add a books bind mount (e.g. /mnt/c/epubs:/downloads) first, or
+      # downloads would land in the container's ephemeral /downloads and vanish
+      # on the next recreate.
     environment:
       # Forum login credentials — read from .env
       - MOBILISM_USER=${MOBILISM_USER}
