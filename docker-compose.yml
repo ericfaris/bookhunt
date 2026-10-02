@@ -87,6 +87,16 @@ services:
       - TWILIO_ACCOUNT_SID=${TWILIO_ACCOUNT_SID:-}
       - TWILIO_AUTH_TOKEN=${TWILIO_AUTH_TOKEN:-}
       - TWILIO_FROM=${TWILIO_FROM:-}
+      # Book storage (issue #47): local disk (default) or a private Cloudflare R2
+      # bucket. STORAGE=r2 needs all four R2_* vars or the app refuses to start.
+      - STORAGE=${STORAGE:-local}
+      - R2_ACCOUNT_ID=${R2_ACCOUNT_ID:-}
+      - R2_ACCESS_KEY_ID=${R2_ACCESS_KEY_ID:-}
+      - R2_SECRET_ACCESS_KEY=${R2_SECRET_ACCESS_KEY:-}
+      - R2_BUCKET=${R2_BUCKET:-}
+      - STORAGE_STAGING_DIR=${STORAGE_STAGING_DIR:-}
+      - STORAGE_INDEX_REFRESH_MS=${STORAGE_INDEX_REFRESH_MS:-}
+      - STORAGE_STARTUP_TIMEOUT_MS=${STORAGE_STARTUP_TIMEOUT_MS:-}
       # Server binding — 0.0.0.0 inside the container; the ports mapping above
       # restricts host-side exposure to 127.0.0.1
       - HOST=0.0.0.0

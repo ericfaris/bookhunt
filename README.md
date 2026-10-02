@@ -134,6 +134,47 @@ and Chromium profile locks on boot, so `docker compose up -d` just works.
 > setup), fix them without sudo via:
 > `docker run --rm -v "$PWD/.browser-profile:/p" alpine chown -R 1000:1000 /p`
 
+### Book storage (local / Cloudflare R2)
+
+`STORAGE=local` (the default) keeps books as files in `DOWNLOAD_PATH`
+(`/mnt/c/epubs` → `/downloads`). `STORAGE=r2` stores them in the private
+Cloudflare R2 bucket `R2_BUCKET` instead (issue #47):
+
+- **Identity is unchanged.** History and tags still key on the logical
+  `/downloads/<file>.epub` path; the storage layer maps it to the object key
+  `books/<file>.epub`. Nothing in `history.json`/`booktags.json` is rewritten.
+- **Downloads** are saved and unpacked (ZIP/RAR) in a per-attempt staging dir
+  (`STORAGE_STAGING_DIR`, container-local), verified, and only the final file is
+  uploaded. The staging dir is always removed, success or failure.
+- **The Library** answers "is the file there?" from an in-memory index built from
+  one bucket listing (refreshed every `STORAGE_INDEX_REFRESH_MS`), never a request
+  per book. Send-to-Kindle fetches the bytes from R2 once per send.
+- **Health:** the Status view shows `R2 (N objects)` or `R2 unreachable — …`;
+  `/api/status` and `/healthz` carry a `storage` block (healthz stays 200 even if
+  R2 is down — a restart can't fix a remote outage). The app refuses to start if
+  `STORAGE=r2` and any `R2_*` var is missing.
+
+**Cutover** (manual, in order):
+
+1. Deploy this code (still `STORAGE=local`).
+2. On the host (`scripts/` is not in the Docker image; run `npm install` first):
+   `node scripts/migrate-to-r2.js --src /mnt/c/epubs` — a **dry run** that only
+   lists the bucket and prints the plan. Review it.
+3. `node scripts/migrate-to-r2.js --src /mnt/c/epubs --apply` — must end with
+   **0 failed and 0 verify mismatches** (re-running is safe; present objects are
+   skipped). It never deletes or modifies local files.
+4. Set `STORAGE=r2` in `.env`.
+5. `npm run docker:up`.
+6. Check Status shows `R2 (N objects)` and the Library shows every book present.
+7. Leave `/mnt/c/epubs` untouched as the backup.
+
+**Rollback:** set `STORAGE=local` and `npm run docker:up`. History is unchanged,
+so it works instantly — but books downloaded **while in r2 mode** exist only in
+R2 and must be copied back to `/mnt/c/epubs` by hand (not automated).
+
+Tests always run with `STORAGE=local` (pinned in `npm test`) and talk only to an
+in-memory fake S3 — never the real bucket.
+
 ---
 
 ## Cloudflare Tunnel (remote access via bookhunt.mooseflip.com)
@@ -298,6 +339,14 @@ Notification channels live in `src/notify/` and share one contract (`isConfigure
 | `TWILIO_ACCOUNT_SID` | No | — | Reserved for the future SMS/MMS channel |
 | `TWILIO_AUTH_TOKEN` | No | — | Reserved for the future SMS/MMS channel |
 | `TWILIO_FROM` | No | — | Reserved — Twilio sending number |
+| `STORAGE` | No | `local` | Where books live: `local` (files in `DOWNLOAD_PATH`) or `r2` (Cloudflare R2 bucket) — see [Book storage](#book-storage-local--cloudflare-r2) |
+| `R2_ACCOUNT_ID` | When `STORAGE=r2` | — | Cloudflare account id (R2 S3 endpoint) |
+| `R2_ACCESS_KEY_ID` | When `STORAGE=r2` | — | Bucket-scoped R2 API token (Object Read & Write) |
+| `R2_SECRET_ACCESS_KEY` | When `STORAGE=r2` | — | Its secret — never logged or committed |
+| `R2_BUCKET` | When `STORAGE=r2` | — | Bucket name (`bookhunt-library`) |
+| `STORAGE_STAGING_DIR` | No | `<os tmp>/bookhunt-staging` | r2 only: scratch dir for in-flight downloads/extraction |
+| `STORAGE_INDEX_REFRESH_MS` | No | `600000` | r2 only: how often the bucket listing (key index) is refreshed |
+| `STORAGE_STARTUP_TIMEOUT_MS` | No | `15000` | r2 only: max wait for the first bucket listing before serving anyway |
 
 ---
 
@@ -316,6 +365,7 @@ src/
   recipients.js   CRUD over recipients.json
   smtp.js         Shared Gmail SMTP transport
   kindle.js       Send-to-Kindle push (.epub → @kindle.com)
+  storage.js      Book storage: local disk or Cloudflare R2 (STORAGE)
   notify/
     index.js      Channel registry / fan-out
     email.js      Email notification channel (active)
