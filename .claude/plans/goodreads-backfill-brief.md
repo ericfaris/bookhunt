@@ -187,8 +187,8 @@ queue that piggybacks on the same daily `run()` tick and the same intake ceiling
 
 ## Repo commands & tree state
 
-- **Test:** `npm test` (⇒ `node --test test/*.test.js`). Node v24.14.0 on `PATH` at
-  `/home/eric/.nvm/versions/node/v24.14.0/bin/node`; no venv/other toolchain involved.
+- **Test:** `npm test` (⇒ `node --test test/*.test.js`). Node v26.10.0 on `PATH` at
+  `/home/eric/.nvm/versions/node/v26.10.0/bin/node`; no venv/other toolchain involved.
 - **Rebuild/redeploy (local Docker lab):** `npm run docker:up` (stamps `GIT_SHA`/`BUILD_TIME`
   into the image; do **not** use plain `docker compose up` per project convention). Deployment
   itself is delegated to the `deploy` skill in Phase 6 of this workflow — do not invoke
