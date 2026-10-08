@@ -20,16 +20,31 @@ function titleCase(s) {
     .join(' ');
 }
 
+// Franchise names that front continuation novels written by someone else
+// ("Vince Flynn: Kill Order" by Don Bentley). Before the colon is the brand,
+// not the title — keeping it searched the forum for "Vince Flynn".
+const BRAND_PREFIXES = new Set([
+  'vince flynn', 'tom clancy', 'robert ludlum', 'clive cussler', 'w.e.b. griffin',
+  'web griffin', 'robert b. parker', 'stuart woods', 'jack higgins', 'eric van lustbader',
+  'v.c. andrews', 'v. c. andrews', 'jack reacher', 'jason bourne', 'mitch rapp', 'jack ryan',
+]);
+function isBrandPrefix(prefix) {
+  const p = prefix.toLowerCase().replace(/[’']s$/, '').replace(/\s+/g, ' ').trim();
+  return BRAND_PREFIXES.has(p);
+}
+
 /** PURE: strip retail/series noise from a title — "(Vipers Book 3)"-style
  *  parentheticals and everything after the first colon ("Whistler: A Novel" →
  *  "Whistler"). Rare legitimate colons lose their subtitle, which both search
- *  and dedupe prefer anyway. */
+ *  and dedupe prefer anyway. A franchise prefix ("Vince Flynn: Kill Order")
+ *  is dropped in favor of the segment after it. */
 function cleanTitle(s) {
-  return String(s || '')
+  const parts = String(s || '')
     .replace(/\([^)]*\)/g, ' ')
-    .split(':')[0]
-    .replace(/\s+/g, ' ')
-    .trim();
+    .split(':')
+    .map((p) => p.replace(/\s+/g, ' ').trim());
+  if (parts.length > 1 && parts[1] && isBrandPrefix(parts[0])) return parts[1];
+  return parts[0];
 }
 
 /** PURE: collapse runs of whitespace (Goodreads pads author names). */

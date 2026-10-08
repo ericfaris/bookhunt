@@ -2854,7 +2854,10 @@ function watchStatusBadge(w) {
     fulfilled: ['Found ✓', 'ok-badge'],
     expired: ['Expired', ''],
   };
-  const [label, cls] = map[w.status] || [w.status, ''];
+  let [label, cls] = map[w.status] || [w.status, ''];
+  // Found but no file: say so instead of a misleading "Found ✓".
+  if (w.status === 'active' && w.downloadMisses > 0) [label, cls] = ['Found — retrying download', ''];
+  else if (w.status === 'fulfilled' && w.downloaded === false) [label, cls] = ['Found — not downloaded', ''];
   const badge = el('span', { className: 'badge ' + cls }, label);
   // List-origin watches carry a provenance badge so hand-added ones stand out.
   if (w.source !== 'list') return badge;
@@ -2893,9 +2896,11 @@ function renderWatchlist(watches) {
 
     // Delivery line — only for fulfilled watches: the match link + send counts.
     let deliveryLine = null;
-    if (w.status === 'fulfilled') {
+    const retrying = w.status === 'active' && w.downloadMisses > 0;
+    if (w.status === 'fulfilled' || retrying) {
       const dbits = [];
       if (w.foundUrl) dbits.push(el('a', { href: w.foundUrl, target: '_blank', rel: 'noopener' }, 'Open the match ↗'));
+      if (retrying && w.retryAfter) dbits.push(el('span', {}, `next try ${formatDate(w.retryAfter)}`));
       if (w.delivered || w.kindlePushed) {
         dbits.push(el('span', {}, `sent to ${w.delivered || 0}${w.kindlePushed ? `, ${w.kindlePushed} to Kindle` : ''}`));
       }
@@ -3067,6 +3072,10 @@ function renderHistoryItem(entry) {
     const label = [entry.title && `“${entry.title}”`, entry.author && `by ${entry.author}`].filter(Boolean).join(' ');
     if (entry.status === 'expired') {
       item.append(el('div', {}, `🔕 Watch expired — ${label || 'a book'} never turned up after repeated checks`));
+    } else if (entry.status === 'retrying') {
+      item.append(el('div', {}, `🔁 Watch matched — ${label || 'a book'}, but the download failed; will retry`));
+      if (entry.reason) item.append(el('div', { className: 'hint' }, entry.reason));
+      if (entry.url) item.append(el('a', { className: 'hint', href: entry.url, target: '_blank', rel: 'noopener' }, 'Open the match ↗'));
     } else {
       item.append(el('div', {}, `🔔 Watch matched — ${label || 'a book'} is available`));
       if (entry.url) item.append(el('a', { className: 'hint', href: entry.url, target: '_blank', rel: 'noopener' }, 'Open the match ↗'));

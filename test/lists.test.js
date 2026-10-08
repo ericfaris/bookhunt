@@ -100,6 +100,30 @@ test('cleanTitle: strips subtitles and series parentheticals', () => {
   assert.equal(cleanTitle('Whistler'), 'Whistler');
 });
 
+// Regression: Goodreads lists franchise continuations as "Vince Flynn: <title>"
+// (written by Don Bentley); keeping the part before the colon watched for a
+// book called "Vince Flynn".
+test('cleanTitle: a franchise-brand prefix yields the real title, not the brand', () => {
+  const { cleanTitle } = require('../src/lists');
+  assert.equal(cleanTitle('Vince Flynn: Kill Order (Mitch Rapp, #25)'), 'Kill Order');
+  assert.equal(cleanTitle("Tom Clancy's: Act of Defiance"), 'Act of Defiance');
+  assert.equal(cleanTitle('Clive Cussler: The Heist: A Fargo Adventure'), 'The Heist');
+  assert.equal(cleanTitle('VINCE FLYNN: CODE RED'), 'CODE RED');
+  // A brand with nothing after the colon keeps the brand rather than ''.
+  assert.equal(cleanTitle('Vince Flynn:'), 'Vince Flynn');
+  // Ordinary subtitles are untouched.
+  assert.equal(cleanTitle('Atomic Habits: An Easy & Proven Way to Build Good Habits'), 'Atomic Habits');
+  assert.equal(cleanTitle('Project Hail Mary: A Novel'), 'Project Hail Mary');
+});
+
+test('entryKey: a brand-prefixed title dedupes with the plain title', () => {
+  const { entryKey } = require('../src/listsources/util');
+  assert.equal(
+    entryKey({ title: 'Vince Flynn: Kill Order', author: 'Don Bentley' }),
+    entryKey({ title: 'KILL ORDER', author: 'Don Bentley' })
+  );
+});
+
 test('authorLastName: collaborations, suffixes, and Last-First order', () => {
   const { authorLastName } = require('../src/lists');
   assert.equal(authorLastName('Ann Patchett'), 'patchett');

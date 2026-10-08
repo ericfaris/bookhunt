@@ -8,8 +8,11 @@
 //
 // Watch shape:
 //   { id, title, author, sort, recipientIds[], status, createdAt,
-//     lastCheckedAt, checkCount, lastError, foundUrl, foundAt }
-//   status: 'active' | 'paused' | 'fulfilled'
+//     lastCheckedAt, checkCount, lastError, foundUrl, foundAt,
+//     downloadMisses, retryAfter }
+//   status: 'active' | 'paused' | 'fulfilled' | 'expired'
+// An ACTIVE watch with downloadMisses > 0 was found but didn't download; it is
+// not due again until retryAfter (the watcher's backoff).
 // A watch whose acquisition is verified AND positively title-matched is removed
 // outright by the watcher (src/watcher.js checkWatch) — 'fulfilled' persists only
 // for weaker matches (e.g. titleMatch null / notify-only).
@@ -188,22 +191,30 @@ function setStatus(id, status) {
   // "found" state and no-match count so it gets a fresh run (otherwise a
   // watch reactivated from 'expired' would hit the 20-check cap again on its
   // very next check).
-  const patch = status === 'active' ? { status, foundUrl: null, foundAt: null, lastError: null, checkCount: 0 } : { status };
+  const patch = status === 'active'
+    ? { status, foundUrl: null, foundAt: null, lastError: null, checkCount: 0, downloadMisses: 0, retryAfter: null }
+    : { status };
   return update(id, patch);
 }
 
 /**
  * PURE: which active watches are due for a re-check now (least-recently-checked
- * first). A never-checked watch (lastCheckedAt = null) is always due.
+ * first). A never-checked watch (lastCheckedAt = null) is always due; one
+ * backing off after a failed download waits for its retryAfter too.
  */
 function dueWatches(watches, now, intervalMs) {
   const at = (w) => {
     const t = w.lastCheckedAt ? Date.parse(w.lastCheckedAt) : 0;
     return Number.isNaN(t) ? 0 : t;
   };
+  const backingOff = (w) => {
+    const t = w.retryAfter ? Date.parse(w.retryAfter) : NaN;
+    return !Number.isNaN(t) && now < t;
+  };
   return (watches || [])
     .filter((w) => w && w.status === 'active')
     .filter((w) => now - at(w) >= intervalMs)
+    .filter((w) => !backingOff(w))
     .sort((x, y) => at(x) - at(y));
 }
 

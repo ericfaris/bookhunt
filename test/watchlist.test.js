@@ -76,6 +76,64 @@ test('dueWatches: never-checked sorts before a long-ago check', () => {
   assert.equal(due[0].id, 'never');
 });
 
+test('dueWatches: a watch backing off after a failed download waits for retryAfter', () => {
+  const now = 3_000_000_000_000;
+  const interval = 1000;
+  const due = dueWatches(
+    [
+      { id: 'backoff', status: 'active', lastCheckedAt: ISO(now - 10_000), retryAfter: ISO(now + 60_000) },
+      { id: 'ready', status: 'active', lastCheckedAt: ISO(now - 10_000), retryAfter: ISO(now - 1) },
+      { id: 'cleared', status: 'active', lastCheckedAt: ISO(now - 10_000), retryAfter: null },
+      { id: 'garbage', status: 'active', lastCheckedAt: ISO(now - 10_000), retryAfter: 'not a date' },
+    ],
+    now,
+    interval
+  );
+  assert.deepEqual(due.map((w) => w.id).sort(), ['cleared', 'garbage', 'ready']);
+});
+
+test('dueWatchesMixed: retryAfter applies to list watches too', () => {
+  const { dueWatchesMixed } = require('../src/watchlist');
+  const now = 3_000_000_000_000;
+  const due = dueWatchesMixed(
+    [
+      { id: 'list-backoff', status: 'active', source: 'list', lastCheckedAt: ISO(now - 2 * 86400e3), retryAfter: ISO(now + 1000) },
+      { id: 'list-due', status: 'active', source: 'list', lastCheckedAt: ISO(now - 2 * 86400e3) },
+    ],
+    now,
+    1000,
+    86400e3
+  );
+  assert.deepEqual(due.map((w) => w.id), ['list-due']);
+});
+
+test('setStatus active: clears found state AND the download-retry backoff (isolated file)', (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wl-status-'));
+  const file = path.join(dir, 'watchlist.json');
+  fs.writeFileSync(file, JSON.stringify([{
+    id: 'w1', title: 'Dune', status: 'fulfilled', foundUrl: 'u', foundAt: 'x', lastError: 'Gave up',
+    checkCount: 9, downloadMisses: 6, retryAfter: '2030-01-01T00:00:00.000Z',
+  }]));
+  const prev = process.env.WATCHLIST_FILE;
+  process.env.WATCHLIST_FILE = file;
+  const modPath = require.resolve('../src/watchlist');
+  delete require.cache[modPath];
+  t.after(() => {
+    delete require.cache[modPath];
+    if (prev === undefined) delete process.env.WATCHLIST_FILE; else process.env.WATCHLIST_FILE = prev;
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+  const isolated = require('../src/watchlist');
+  const w = isolated.setStatus('w1', 'active');
+  assert.equal(w.status, 'active');
+  assert.equal(w.downloadMisses, 0);
+  assert.equal(w.retryAfter, null);
+  assert.equal(w.foundUrl, null);
+  assert.equal(w.lastError, null);
+  assert.equal(w.checkCount, 0);
+  assert.equal(JSON.parse(fs.readFileSync(file, 'utf8'))[0].retryAfter, null, 'persisted');
+});
+
 test('dueWatches: tolerates empty / undefined input', () => {
   assert.deepEqual(dueWatches(undefined, Date.now(), 1000), []);
   assert.deepEqual(dueWatches([], Date.now(), 1000), []);

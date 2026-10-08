@@ -4,7 +4,9 @@
 // active watch through the SAME search pipeline as interactive search, and on the
 // first match notifies the user (email, with cover + thread link). A match whose
 // acquisition is verified AND positively title-matched removes the watch outright;
-// any weaker match (unverified, notify-only, or titleMatch null) marks it fulfilled.
+// a download with titleMatch null marks it fulfilled; a match that yields no
+// download stays active and retries on a backoff (MAX_DOWNLOAD_MISSES) before
+// settling as fulfilled (notify-only).
 //
 // Politeness & safety:
 //  - Re-checks each watch at most every WATCH_CHECK_INTERVAL_MS (default 30 min).
@@ -26,6 +28,7 @@ const booktags = require('./booktags');
 const lists = require('./lists');
 const covers = require('./covers');
 const storage = require('./storage');
+const smtp = require('./smtp');
 
 const TICK_MS = Number(process.env.WATCH_TICK_MS) || 300000; // wake every 5 min
 // A watch that has gone this many no-match checks without a hit is retired —
@@ -37,6 +40,17 @@ const MAX_NO_MATCH_CHECKS = Number(process.env.WATCH_MAX_CHECKS) || 20;
 // watchlist cadence — bestseller lists refresh weekly, and dozens of radar
 // watches on a tight cadence would be impolite to the forum.
 const LIST_RECHECK_FLOOR_MS = Number(process.env.LIST_RECHECK_FLOOR_MS) || 24 * 3600 * 1000;
+// A hit that doesn't yield a download (wrong thread, dead mirror, a transient
+// host/session outage) keeps the watch ACTIVE and retries on a backoff —
+// 1d, 2d, 4d, then weekly — instead of parking it in a terminal 'fulfilled'
+// state forever. After this many failed attempts it settles as fulfilled
+// (notify-only), as before.
+const MAX_DOWNLOAD_MISSES = Number(process.env.WATCH_MAX_DOWNLOAD_MISSES) || 6;
+const MISS_BACKOFF_BASE_MS = Number(process.env.WATCH_MISS_BACKOFF_MS) || 24 * 3600 * 1000;
+const MISS_BACKOFF_MAX_MS = 7 * 24 * 3600 * 1000;
+// This many hits in a row with no download (across all watches) looks like a
+// broken download path rather than bad luck — email the operator once.
+const OUTAGE_THRESHOLD = Number(process.env.WATCH_OUTAGE_THRESHOLD) || 5;
 // The per-watch re-check cadence is user-configurable in Settings (settings.js);
 // read it fresh each tick so changes take effect without a restart.
 
@@ -83,7 +97,7 @@ function deliveryRecipients(watch) {
  * positively title-matched — which is the watch-removal criterion (stricter than
  * the delivery bar, which also accepts titleMatch === null).
  */
-async function autoDeliver(watch, results) {
+async function autoDeliver(watch, results, opts = {}) {
   // Record the book we WATCHED FOR, not the forum post's title. A set post
   // ("Kings Of Mafia Series by Michelle Heard") legitimately CONTAINS the book —
   // the downloader digs the right ePUB out of it — but its title names the set
@@ -118,8 +132,14 @@ async function autoDeliver(watch, results) {
   // that dead end silently fell through to a notify-only email even when a
   // real download existed one result down.
   let download = null;
-  if (downloader.hasPremiumCreds()) {
+  // Why no download was accepted — persisted on the watch (lastError) so a
+  // failed acquisition is diagnosable without the container's logs.
+  let failReason = null;
+  if (!downloader.hasPremiumCreds()) {
+    failReason = 'no premium credentials configured';
+  } else {
     const candidates = results.filter((r) => r.url);
+    if (!candidates.length) failReason = 'no result had a thread link';
     if (candidates.length) {
       // runCandidates tries candidates in order and stops at the first one
       // that verifies (rank >= 3 — see downloadRank), so whenever `download`
@@ -127,7 +147,7 @@ async function autoDeliver(watch, results) {
       // the candidate that actually produced it — not necessarily `top.url`.
       let attemptedUrl = top.url;
       try {
-        const { result } = await downloader.runCandidates(
+        const { result, errors } = await downloader.runCandidates(
           candidates,
           (cand) => {
             attemptedUrl = cand.url;
@@ -139,12 +159,16 @@ async function autoDeliver(watch, results) {
         // Safety: never auto-send a book whose embedded title clearly mismatches.
         if (download && download.titleMatch === false) {
           console.warn('[watcher] downloaded "%s" but embedded title mismatched — not auto-sending', book.title);
+          failReason = 'downloaded ePUB is a different book (embedded title mismatch)';
           download = null;
         } else if (download) {
           download.url = download.url || attemptedUrl;
+        } else {
+          failReason = summarizeDownloadErrors(errors, candidates.length);
         }
       } catch (err) {
-        console.warn('[watcher] auto-download failed for "%s": %s', book.title, err.message);
+        failReason = (err && err.message) || 'download failed';
+        console.warn('[watcher] auto-download failed for "%s": %s', book.title, failReason);
       }
     }
   }
@@ -165,6 +189,14 @@ async function autoDeliver(watch, results) {
       try { booktags.setTags(download.savePath, watch.tags); } catch { /* best effort */ }
     }
   }
+
+  if (!download && failReason) {
+    console.warn('[watcher] no download for "%s": %s', book.title, failReason);
+  }
+  // A retry of a watch whose earlier hit already sent the notify-only email
+  // stays quiet when it fails again — one "found it, here's the link" per book,
+  // not one per daily retry.
+  const quiet = !download && opts.quiet === true;
 
   // 3) Deliver to recipients: push the file to Kindle (when we have it + an
   // address), then email them. Dedup emails so the operator isn't doubled up.
@@ -195,7 +227,7 @@ async function autoDeliver(watch, results) {
         console.warn('[watcher] Kindle push failed for %s: %s', r.kindleEmail, err.message);
       }
     }
-    if (r.email) {
+    if (r.email && !quiet) {
       const channelResults = await notify.notify(r, { ...book, pushedToKindle: pushed }, ['email']);
       const emailResult = channelResults.find((c) => c.channel === 'email');
       if (emailResult && emailResult.ok) {
@@ -220,7 +252,7 @@ async function autoDeliver(watch, results) {
   // 4) Always tell the operator (unless they were already emailed as a
   // recipient). List-origin watches stay quiet here — their outcome lands in
   // the radar's digest email instead of one email per book.
-  const op = watch.source === 'list' ? '' : operatorEmail();
+  const op = watch.source === 'list' || quiet ? '' : operatorEmail();
   if (op && !emailed.has(op.toLowerCase())) {
     const opResults = await notify.notify({ email: op, name: '' }, { ...book, pushedToKindle: false }, ['email']);
     const opEmail = opResults.find((c) => c.channel === 'email');
@@ -234,7 +266,17 @@ async function autoDeliver(watch, results) {
     delivered,
     kindlePushed,
     verifiedMatch: !!(download && download.verified === true && download.titleMatch === true),
+    failReason: download ? null : failReason,
   };
+}
+
+/** PURE: one short line out of runCandidates' per-candidate errors. */
+function summarizeDownloadErrors(errors, candidateCount) {
+  const msgs = [...new Set((errors || []).map((e) => e && e.error).filter(Boolean))];
+  if (!msgs.length) return `no verified ePUB in ${candidateCount} result${candidateCount === 1 ? '' : 's'}`;
+  const head = msgs.slice(0, 2).join('; ');
+  const line = msgs.length > 2 ? `${head} (+${msgs.length - 2} more)` : head;
+  return line.length > 240 ? line.slice(0, 237) + '…' : line;
 }
 
 /**
@@ -255,38 +297,62 @@ async function checkWatch(watch) {
 
   if (results && results.length) {
     const top = results[0];
-    let delivery = { downloaded: false, delivered: 0, kindlePushed: 0, verifiedMatch: false };
+    const priorMisses = watch.downloadMisses || 0;
+    let delivery = { downloaded: false, delivered: 0, kindlePushed: 0, verifiedMatch: false, failReason: null };
     try {
-      delivery = await autoDeliver(watch, results);
+      delivery = await autoDeliver(watch, results, { quiet: priorMisses > 0 });
     } catch (err) {
+      delivery.failReason = err.message;
       console.warn('[watcher] delivery failed for %s: %s', watch.id, err.message);
     }
+    const now = Date.now();
+    const misses = delivery.downloaded ? priorMisses : priorMisses + 1;
+    const retrying = !delivery.downloaded && misses < MAX_DOWNLOAD_MISSES;
+    const reason = delivery.failReason || 'no download';
     if (delivery.verifiedMatch) {
       // Verified, positively title-matched acquisition: the watch has done its job —
       // delete it outright rather than leaving a fulfilled row behind.
       watchlist.remove(watch.id);
+    } else if (retrying) {
+      watchlist.update(watch.id, {
+        ...base,
+        foundUrl: top.url || null,
+        foundAt: new Date(now).toISOString(),
+        delivered: delivery.delivered,
+        kindlePushed: delivery.kindlePushed,
+        downloaded: false,
+        downloadMisses: misses,
+        retryAfter: new Date(now + missBackoffMs(misses)).toISOString(),
+        lastError: `Found, not downloaded (${misses}/${MAX_DOWNLOAD_MISSES}): ${reason}`,
+      });
     } else {
       watchlist.update(watch.id, {
         ...base,
         status: 'fulfilled',
         foundUrl: top.url || null,
-        foundAt: new Date().toISOString(),
+        foundAt: new Date(now).toISOString(),
         delivered: delivery.delivered,
         kindlePushed: delivery.kindlePushed,
         downloaded: delivery.downloaded,
+        downloadMisses: misses,
+        retryAfter: null,
+        lastError: delivery.downloaded ? null : `Gave up after ${misses} download attempts: ${reason}`,
       });
     }
+    noteDeliveryOutcome(delivery.downloaded, { title: watch.title || top.title, reason });
     try {
       history.add({
         type: 'watch-hit',
         title: watch.title || top.matchedTitle || top.title,
         author: watch.author || top.author,
         url: top.url || null,
-        status: 'fulfilled',
+        status: retrying ? 'retrying' : 'fulfilled',
+        ...(delivery.downloaded ? {} : { reason }),
       });
     } catch { /* best effort */ }
     // Feed the radar's digest: verified acquisition vs. found-but-unverified.
-    if (watch.source === 'list') {
+    // A retry that fails again was already reported on its first miss.
+    if (watch.source === 'list' && (delivery.downloaded || priorMisses === 0)) {
       try {
         lists.recordEvent({
           type: delivery.downloaded ? 'added' : 'unverified',
@@ -304,7 +370,7 @@ async function checkWatch(watch) {
       delivery.downloaded ? 'downloaded' : 'notify-only',
       delivery.delivered,
       delivery.kindlePushed,
-      delivery.verifiedMatch ? ', watch removed' : ', watch fulfilled'
+      delivery.verifiedMatch ? ', watch removed' : retrying ? `, retrying (${misses}/${MAX_DOWNLOAD_MISSES})` : ', watch fulfilled'
     );
     return { matched: true, delivery };
   }
@@ -326,6 +392,52 @@ async function checkWatch(watch) {
 
   watchlist.update(watch.id, base);
   return { matched: false };
+}
+
+/** PURE: wait before re-trying a hit that didn't download (misses >= 1). */
+function missBackoffMs(misses) {
+  return Math.min(MISS_BACKOFF_BASE_MS * 2 ** Math.max(0, misses - 1), MISS_BACKOFF_MAX_MS);
+}
+
+// Consecutive watch hits that produced no download, across all watches. A run
+// of OUTAGE_THRESHOLD means the download path itself is likely broken (premium
+// session, file host, browser) — alert once per run; any download resets it.
+let _missStreak = [];
+let _outageAlerted = false;
+function noteDeliveryOutcome(downloaded, info) {
+  if (downloaded) {
+    _missStreak = [];
+    _outageAlerted = false;
+    return;
+  }
+  _missStreak.push(info);
+  if (_missStreak.length >= OUTAGE_THRESHOLD && !_outageAlerted) {
+    _outageAlerted = true;
+    const recent = _missStreak.slice(-OUTAGE_THRESHOLD);
+    sendOutageAlert(recent).catch((err) => console.warn('[watcher] outage alert failed:', err.message));
+  }
+}
+
+async function sendOutageAlert(recent) {
+  const to = operatorEmail();
+  console.warn('[watcher] %d watch hits in a row with no download — download path may be broken', recent.length);
+  if (!to || !smtp.isConfigured()) return;
+  const lines = recent.map((m) => `• ${m.title}: ${m.reason}`);
+  await smtp.getTransport().sendMail({
+    from: smtp.FROM,
+    to,
+    subject: `⚠️ BookHunt: ${recent.length} watch matches in a row failed to download`,
+    text:
+      `The watchlist found ${recent.length} books in a row but couldn't download any of them, ` +
+      `which usually means the download path is broken (premium session, file host, or browser) ` +
+      `rather than bad luck. The watches will retry automatically.\n\n${lines.join('\n')}`,
+  });
+  console.log('[watcher] outage alert sent to %s', to);
+}
+
+function _resetOutageState() {
+  _missStreak = [];
+  _outageAlerted = false;
 }
 
 let _inFlight = false;
@@ -399,4 +511,9 @@ function start() {
   );
 }
 
-module.exports = { start, tick, checkWatch, checkNow, autoDeliver, operatorEmail };
+module.exports = {
+  start, tick, checkWatch, checkNow, autoDeliver, operatorEmail,
+  // exported for unit tests
+  missBackoffMs, summarizeDownloadErrors, noteDeliveryOutcome, _resetOutageState,
+  MAX_DOWNLOAD_MISSES, OUTAGE_THRESHOLD,
+};

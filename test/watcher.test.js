@@ -15,6 +15,7 @@ const kindle = require('../src/kindle');
 const lists = require('../src/lists');
 const listwatcher = require('../src/listwatcher');
 const covers = require('../src/covers');
+const smtp = require('../src/smtp');
 const watcher = require('../src/watcher');
 
 async function withMocks(overrides, fn) {
@@ -34,7 +35,15 @@ async function withMocks(overrides, fn) {
     recordEvent: lists.recordEvent,
     scheduleDigestSoon: listwatcher.scheduleDigestSoon,
     resolveCover: covers.resolveCover,
+    smtpConfigured: smtp.isConfigured,
+    smtpTransport: smtp.getTransport,
   };
+  // The outage alert sends mail through smtp directly — never let a test reach
+  // a real SMTP server (.env may hold live creds). Streak state is per-test.
+  const sentMail = overrides.sentMail || [];
+  smtp.isConfigured = overrides.smtpConfigured || (() => true);
+  smtp.getTransport = () => ({ sendMail: async (m) => { sentMail.push(m); } });
+  watcher._resetOutageState();
   // Stubbed by default: autoDeliver resolves a catalog cover, and a test must
   // never reach the network for it.
   covers.resolveCover = overrides.resolveCover || (async () => null);
@@ -65,6 +74,8 @@ async function withMocks(overrides, fn) {
     Object.assign(lists, { recordEvent: orig.recordEvent });
     Object.assign(listwatcher, { scheduleDigestSoon: orig.scheduleDigestSoon });
     Object.assign(covers, { resolveCover: orig.resolveCover });
+    Object.assign(smtp, { isConfigured: orig.smtpConfigured, getTransport: orig.smtpTransport });
+    watcher._resetOutageState();
   }
 }
 
@@ -76,7 +87,7 @@ test('operatorEmail: honors WATCH_ALERT_EMAIL override', () => {
   else process.env.WATCH_ALERT_EMAIL = prev;
 });
 
-test('checkWatch: a match notifies (book.watch + link) and marks fulfilled', async () => {
+test('checkWatch: a match with no download notifies (book.watch + link) and stays active to retry', async () => {
   process.env.WATCH_ALERT_EMAIL = 'op@example.com';
   const updates = [];
   const notifies = [];
@@ -98,10 +109,15 @@ test('checkWatch: a match notifies (book.watch + link) and marks fulfilled', asy
   assert.equal(notifies[0].book.watch, true);
   assert.equal(notifies[0].book.link, 'https://forum.mobilism.org/t1');
   assert.equal(notifies[0].recipient.email, 'op@example.com');
-  // Marked fulfilled with the found URL.
-  const fulfilled = updates.find((p) => p.status === 'fulfilled');
-  assert.ok(fulfilled, 'an update set status fulfilled');
-  assert.equal(fulfilled.foundUrl, 'https://forum.mobilism.org/t1');
+  // Found but not downloaded: NOT parked as fulfilled — stays active, backing off.
+  assert.equal(updates.length, 1);
+  const patch = updates[0];
+  assert.ok(!('status' in patch), 'status stays active');
+  assert.equal(patch.foundUrl, 'https://forum.mobilism.org/t1');
+  assert.equal(patch.downloadMisses, 1);
+  assert.equal(patch.downloaded, false);
+  assert.ok(Date.parse(patch.retryAfter) > Date.now(), 'retryAfter is in the future');
+  assert.match(patch.lastError, /^Found, not downloaded \(1\/\d+\): no premium credentials configured$/);
 });
 
 test('checkWatch: no match records the check and does NOT notify or fulfill', async () => {
@@ -293,7 +309,7 @@ test('checkWatch: a failed email send is NOT counted as delivered', async () => 
       assert.equal(out.delivery.delivered, 0, 'a failed send must not count as delivered');
     }
   );
-  assert.ok(updatePatch, 'a fulfilled update was written');
+  assert.ok(updatePatch, 'an update was written');
   assert.equal(updatePatch.delivered, 0, 'watchlist record must not claim a send that failed');
   // The failure is still logged to history (for audit), just marked not-ok.
   assert.equal(notifyLogs.length, 1);
@@ -565,4 +581,244 @@ test('checkNow: a second concurrent call is rejected while one is in flight', as
       await first;
     }
   );
+});
+
+// --- Found-but-not-downloaded retries (stranded 'fulfilled' watches) ---------
+// Regression: any hit that failed to download — including a transient outage
+// (2026-10-07: 9 hits, 0 downloads) — parked the watch in a terminal
+// 'fulfilled' state that was never re-checked, stranding the book for good.
+
+const DUNE_HIT = { results: [{ title: 'Dune', author: 'Herbert', url: 'https://forum.mobilism.org/t1', premium: true }] };
+
+test('checkWatch: a failed download keeps the watch active, records the reason, and backs off', async () => {
+  let patch = null;
+  const removed = [];
+  await withMocks(
+    {
+      search: async () => DUNE_HIT,
+      hasPremiumCreds: () => true,
+      premiumDownload: async () => { throw new Error('Mirror returned Not Found'); },
+      update: (_id, p) => { patch = p; },
+      remove: (id) => { removed.push(id); return true; },
+    },
+    async () => {
+      const out = await watcher.checkWatch({ id: 'r1', title: 'Dune', author: 'Herbert', sort: 'newest', recipientIds: [], checkCount: 3 });
+      assert.equal(out.matched, true);
+      assert.equal(out.delivery.downloaded, false);
+      assert.equal(out.delivery.failReason, 'Mirror returned Not Found');
+    }
+  );
+  assert.deepEqual(removed, []);
+  assert.ok(!('status' in patch), 'still active');
+  assert.equal(patch.downloadMisses, 1);
+  assert.equal(patch.checkCount, 4);
+  assert.match(patch.lastError, /Mirror returned Not Found/);
+  const wait = Date.parse(patch.retryAfter) - Date.now();
+  assert.ok(wait > 23 * 3600e3 && wait <= 24 * 3600e3, 'first retry ~1 day out');
+});
+
+test('checkWatch: a repeat miss stays quiet — no second notify-only email, no second digest event', async () => {
+  process.env.WATCH_ALERT_EMAIL = 'op@example.com';
+  let notified = 0;
+  const events = [];
+  let patch = null;
+  await withMocks(
+    {
+      search: async () => DUNE_HIT,
+      byIds: () => [{ id: 'x', name: 'Sam', email: 'sam@example.com' }],
+      notify: async () => { notified++; return [{ channel: 'email', ok: true }]; },
+      recordEvent: (e) => events.push(e),
+      update: (_id, p) => { patch = p; },
+    },
+    async () => {
+      await watcher.checkWatch({ id: 'r2', title: 'Dune', sort: 'newest', recipientIds: ['x'], source: 'list', downloadMisses: 2, checkCount: 5 });
+    }
+  );
+  assert.equal(notified, 0, 'recipients and operator not re-emailed on a retry miss');
+  assert.equal(events.length, 0, 'digest already got the unverified event on the first miss');
+  assert.equal(patch.downloadMisses, 3);
+  const wait = Date.parse(patch.retryAfter) - Date.now();
+  assert.ok(wait > 3.9 * 86400e3 && wait <= 4 * 86400e3, 'third miss backs off ~4 days');
+});
+
+test('checkWatch: the first miss of a list watch still queues an unverified digest event', async () => {
+  const events = [];
+  await withMocks(
+    { search: async () => DUNE_HIT, recordEvent: (e) => events.push(e) },
+    async () => {
+      await watcher.checkWatch({ id: 'r3', title: 'Dune', sort: 'newest', recipientIds: [], source: 'list', checkCount: 0 });
+    }
+  );
+  assert.equal(events.length, 1);
+  assert.equal(events[0].type, 'unverified');
+});
+
+test('checkWatch: a retry that finally downloads is delivered normally and removes the watch', async () => {
+  process.env.WATCH_ALERT_EMAIL = 'op@example.com';
+  const removed = [];
+  const events = [];
+  let notified = 0;
+  await withMocks(
+    {
+      search: async () => DUNE_HIT,
+      hasPremiumCreds: () => true,
+      premiumDownload: async () => ({ downloads: [{ filename: 'Dune.epub', savePath: '/dl/Dune.epub', verified: true, titleMatch: true }], errors: [] }),
+      remove: (id) => { removed.push(id); return true; },
+      recordEvent: (e) => events.push(e),
+      notify: async () => { notified++; return [{ channel: 'email', ok: true }]; },
+    },
+    async () => {
+      await watcher.checkWatch({ id: 'r4', title: 'Dune', sort: 'newest', recipientIds: [], source: 'list', downloadMisses: 3, checkCount: 4 });
+    }
+  );
+  assert.deepEqual(removed, ['r4']);
+  assert.equal(events.length, 1);
+  assert.equal(events[0].type, 'added', 'a late success still reaches the digest');
+});
+
+test('checkWatch: the last allowed miss settles as fulfilled (notify-only) with the reason', async () => {
+  let patch = null;
+  await withMocks(
+    { search: async () => DUNE_HIT, update: (_id, p) => { patch = p; } },
+    async () => {
+      await watcher.checkWatch({ id: 'r5', title: 'Dune', sort: 'newest', recipientIds: [], downloadMisses: watcher.MAX_DOWNLOAD_MISSES - 1, checkCount: 9 });
+    }
+  );
+  assert.equal(patch.status, 'fulfilled');
+  assert.equal(patch.downloaded, false);
+  assert.equal(patch.downloadMisses, watcher.MAX_DOWNLOAD_MISSES);
+  assert.equal(patch.retryAfter, null);
+  assert.match(patch.lastError, /^Gave up after \d+ download attempts: no premium credentials configured$/);
+});
+
+test('checkWatch: a verified titleMatch=null download clears the error and stays fulfilled', async () => {
+  let patch = null;
+  await withMocks(
+    {
+      search: async () => DUNE_HIT,
+      hasPremiumCreds: () => true,
+      premiumDownload: async () => ({ downloads: [{ filename: 'X.epub', savePath: '/dl/X.epub', verified: true, titleMatch: null }], errors: [] }),
+      update: (_id, p) => { patch = p; },
+    },
+    async () => {
+      await watcher.checkWatch({ id: 'r6', title: 'Dune', sort: 'newest', recipientIds: [], downloadMisses: 2, checkCount: 1 });
+    }
+  );
+  assert.equal(patch.status, 'fulfilled');
+  assert.equal(patch.downloaded, true);
+  assert.equal(patch.lastError, null);
+});
+
+test('checkWatch: a wrong-book download records the mismatch as the reason', async () => {
+  let patch = null;
+  await withMocks(
+    {
+      search: async () => DUNE_HIT,
+      hasPremiumCreds: () => true,
+      premiumDownload: async () => ({ downloads: [{ filename: 'W.epub', savePath: '/dl/W.epub', verified: true, titleMatch: false }], errors: [] }),
+      update: (_id, p) => { patch = p; },
+    },
+    async () => {
+      await watcher.checkWatch({ id: 'r7', title: 'Dune', sort: 'newest', recipientIds: [], checkCount: 0 });
+    }
+  );
+  assert.match(patch.lastError, /different book/);
+});
+
+test('checkWatch: no verified ePUB summarizes per-candidate errors as the reason', async () => {
+  let patch = null;
+  const histories = [];
+  await withMocks(
+    {
+      search: async () => DUNE_HIT,
+      hasPremiumCreds: () => true,
+      premiumDownload: async () => ({ downloads: [], errors: [{ url: 'u', error: 'filedot: link expired' }] }),
+      update: (_id, p) => { patch = p; },
+      add: (h) => histories.push(h),
+    },
+    async () => {
+      await watcher.checkWatch({ id: 'r8', title: 'Dune', sort: 'newest', recipientIds: [], checkCount: 0 });
+    }
+  );
+  assert.match(patch.lastError, /filedot: link expired/);
+  assert.equal(histories[0].status, 'retrying');
+  assert.equal(histories[0].reason, 'filedot: link expired');
+});
+
+test('summarizeDownloadErrors: dedupes, caps at two messages, and has a no-error fallback', () => {
+  const s = watcher.summarizeDownloadErrors;
+  assert.equal(s([], 3), 'no verified ePUB in 3 results');
+  assert.equal(s(undefined, 1), 'no verified ePUB in 1 result');
+  assert.equal(s([{ error: 'a' }, { error: 'a' }, { error: 'b' }], 2), 'a; b');
+  assert.equal(s([{ error: 'a' }, { error: 'b' }, { error: 'c' }, { error: 'd' }], 4), 'a; b (+2 more)');
+  assert.ok(s([{ error: 'x'.repeat(500) }], 1).length <= 240);
+});
+
+test('missBackoffMs: 1d, 2d, 4d, then capped at 7d', () => {
+  const day = 86400e3;
+  assert.equal(watcher.missBackoffMs(1), day);
+  assert.equal(watcher.missBackoffMs(2), 2 * day);
+  assert.equal(watcher.missBackoffMs(3), 4 * day);
+  assert.equal(watcher.missBackoffMs(4), 7 * day);
+  assert.equal(watcher.missBackoffMs(10), 7 * day);
+});
+
+// --- Outage alert: a run of hits with no download emails the operator once ----
+
+test('noteDeliveryOutcome: alerts once after N consecutive misses, resets on a download', async () => {
+  process.env.WATCH_ALERT_EMAIL = 'op@example.com';
+  const sentMail = [];
+  await withMocks({ sentMail }, async () => {
+    const N = watcher.OUTAGE_THRESHOLD;
+    for (let i = 0; i < N - 1; i++) watcher.noteDeliveryOutcome(false, { title: `B${i}`, reason: 'session expired' });
+    await new Promise((r) => setImmediate(r));
+    assert.equal(sentMail.length, 0, 'no alert below the threshold');
+    watcher.noteDeliveryOutcome(false, { title: 'Last', reason: 'session expired' });
+    await new Promise((r) => setImmediate(r));
+    assert.equal(sentMail.length, 1, 'alert at the threshold');
+    assert.equal(sentMail[0].to, 'op@example.com');
+    assert.match(sentMail[0].text, /Last: session expired/);
+    watcher.noteDeliveryOutcome(false, { title: 'More', reason: 'x' });
+    await new Promise((r) => setImmediate(r));
+    assert.equal(sentMail.length, 1, 'only one alert per outage');
+    // A download ends the outage; a fresh run alerts again.
+    watcher.noteDeliveryOutcome(true, {});
+    for (let i = 0; i < N - 1; i++) watcher.noteDeliveryOutcome(false, { title: `C${i}`, reason: 'y' });
+    await new Promise((r) => setImmediate(r));
+    assert.equal(sentMail.length, 1, 'streak restarted from zero after a download');
+    watcher.noteDeliveryOutcome(false, { title: 'C-last', reason: 'y' });
+    await new Promise((r) => setImmediate(r));
+    assert.equal(sentMail.length, 2);
+  });
+});
+
+test('noteDeliveryOutcome: a download in between breaks the streak (no alert)', async () => {
+  const sentMail = [];
+  await withMocks({ sentMail }, async () => {
+    for (let i = 0; i < watcher.OUTAGE_THRESHOLD * 2; i++) watcher.noteDeliveryOutcome(i % 2 === 0, { title: 't', reason: 'r' });
+    await new Promise((r) => setImmediate(r));
+  });
+  assert.equal(sentMail.length, 0);
+});
+
+test('noteDeliveryOutcome: no SMTP configured → no send attempt, no throw', async () => {
+  const sentMail = [];
+  await withMocks({ sentMail, smtpConfigured: () => false }, async () => {
+    for (let i = 0; i < watcher.OUTAGE_THRESHOLD; i++) watcher.noteDeliveryOutcome(false, { title: 't', reason: 'r' });
+    await new Promise((r) => setImmediate(r));
+  });
+  assert.equal(sentMail.length, 0);
+});
+
+test('checkWatch: consecutive failed hits feed the outage alert', async () => {
+  process.env.WATCH_ALERT_EMAIL = 'op@example.com';
+  const sentMail = [];
+  await withMocks({ sentMail, search: async () => DUNE_HIT }, async () => {
+    for (let i = 0; i < watcher.OUTAGE_THRESHOLD; i++) {
+      await watcher.checkWatch({ id: `o${i}`, title: `Book ${i}`, sort: 'newest', recipientIds: [], source: 'list', checkCount: 0 });
+    }
+    await new Promise((r) => setImmediate(r));
+  });
+  assert.equal(sentMail.length, 1);
+  assert.match(sentMail[0].text, /Book 4: no premium credentials configured/);
 });
