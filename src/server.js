@@ -108,19 +108,30 @@ app.use('/reader/api', (_req, res, next) => {
   next();
 });
 
-// Cloudflare's Browser Cache TTL rewrites /reader/app.js to `max-age=14400`
-// regardless of our no-cache, so phones kept running the OLD script against
-// the NEW page for hours after a deploy (the tap-a-book modal did nothing).
-// The page itself stays no-cache (CF passes HTML through as DYNAMIC), so we
-// stamp the script URL with a content hash of reader.js: a changed script is a
-// new URL that no browser or edge cache has seen.
-const READER_HTML = path.join(__dirname, '..', 'public', 'reader.html');
-const READER_JS = path.join(__dirname, '..', 'public', 'reader.js');
-function readerPageHtml() {
-  const html = fs.readFileSync(READER_HTML, 'utf8');
-  const v = require('crypto').createHash('sha256').update(fs.readFileSync(READER_JS)).digest('hex').slice(0, 12);
-  return html.replace('src="/reader/app.js"', `src="/reader/app.js?v=${v}"`);
+// Cloudflare's Browser Cache TTL rewrites our static JS/CSS to `max-age=14400`
+// whatever Cache-Control we send (HTML passes through untouched as DYNAMIC).
+// So after a deploy, browsers ran the OLD script against the NEW page for
+// hours — on the reader shelf the tap-a-book modal did nothing. Fix: pages are
+// served through stampAssets(), which appends `?v=<content hash>` to their
+// script/stylesheet URLs. A changed file is a new URL that no browser, edge,
+// or service-worker cache has seen; an unchanged one keeps its cached copy.
+const PUBLIC_DIR = path.join(__dirname, '..', 'public');
+function assetHash(file) {
+  return require('crypto').createHash('sha256').update(fs.readFileSync(path.join(PUBLIC_DIR, file))).digest('hex').slice(0, 12);
 }
+/** Read public/<page> and version each `attr="url"` → hash of public/<file>. */
+function stampAssets(page, assets) {
+  let html = fs.readFileSync(path.join(PUBLIC_DIR, page), 'utf8');
+  for (const { attr, url, file } of assets) {
+    html = html.replace(`${attr}="${url}"`, `${attr}="${url}?v=${assetHash(file)}"`);
+  }
+  return html;
+}
+const readerPageHtml = () => stampAssets('reader.html', [{ attr: 'src', url: '/reader/app.js', file: 'reader.js' }]);
+const appPageHtml = () => stampAssets('index.html', [
+  { attr: 'src', url: 'app.js', file: 'app.js' },
+  { attr: 'href', url: 'style.css', file: 'style.css' },
+]);
 
 app.get('/reader', (_req, res) => {
   res.setHeader('Cache-Control', 'no-cache');
@@ -252,6 +263,13 @@ app.get('/warm', (_req, res) =>
 // express strips the /warm mount prefix from req.url, so assets resolve at the
 // websockify web root.
 app.use('/warm', (req, res) => warmProxy.web(req, res));
+
+// The operator app shell, with versioned app.js/style.css (see stampAssets).
+// Registered before express.static so it wins for `/` and `/index.html`.
+app.get(['/', '/index.html'], (_req, res) => {
+  res.setHeader('Cache-Control', 'no-cache');
+  res.type('html').send(appPageHtml());
+});
 
 // Serve the app shell with `no-cache` on HTML/JS/CSS so a redeploy is picked up
 // immediately. The browser may still STORE these, but must revalidate against
