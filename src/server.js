@@ -1213,7 +1213,9 @@ app.post('/api/send', async (req, res) => {
   // the Mobilism "[Author]" filename so enrichment can disambiguate.
   const author = (book && book.author) || entry.author || library.authorFromFilename(entry.filename) || '';
   const bookInfo = {
-    title: (book && book.title) || entry.title || '',
+    // The stored entry's title is cleaned + title-cased at ingest; the client's
+    // copy is often the raw search-box text ("every summer after").
+    title: entry.title || (book && book.title) || '',
     author,
     cover: (book && book.cover) || entry.cover || null,
     description: (book && book.description) || '',

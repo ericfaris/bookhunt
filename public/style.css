@@ -442,6 +442,7 @@ input:focus, select:focus, textarea:focus { border-color: var(--accent); box-sha
 }
 .dl-btn.premium { background: var(--good); color: #fff; border-color: transparent; font-weight: 600; }
 .dl-btn:hover { filter: brightness(1.08); }
+.dl-btn.done, .dl-btn.done:hover { background: var(--surface-2); color: var(--good); border-color: var(--good); cursor: default; filter: none; }
 
 .dl-result { margin-top: 0.5rem; font-size: 0.8rem; color: var(--good); }
 .dl-result.err { color: var(--danger); }

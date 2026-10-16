@@ -1106,6 +1106,8 @@ async function premiumDownload(result, btn) {
     return;
   }
 
+  const idleLabel = btn ? btn.textContent : '';
+  let downloaded = false;
   if (btn) { btn.disabled = true; btn.textContent = 'Downloading…'; }
   openDownloadModal(result);
 
@@ -1147,14 +1149,27 @@ async function premiumDownload(result, btn) {
         const line = frame.split('\n').find((l) => l.startsWith('data:'));
         if (!line) continue;
         try {
-          handleDownloadEvent(JSON.parse(line.slice(5).trim()), result);
+          const ev = JSON.parse(line.slice(5).trim());
+          if (ev.step === 'done' && Array.isArray(ev.downloads) && ev.downloads.length) downloaded = true;
+          handleDownloadEvent(ev, result);
         } catch { /* ignore a malformed frame */ }
       }
     }
   } catch (err) {
     renderDownloadError(err.message);
   } finally {
-    if (btn) { btn.disabled = false; btn.textContent = 'Download (Premium)'; }
+    // A finished download leaves the result marked done (and not clickable) so
+    // it doesn't invite a second, duplicate download after Send closes the
+    // modal. Re-downloading stays available from the Library. A failure
+    // restores the original label ("Download set (Premium)" included).
+    if (btn && downloaded) {
+      btn.textContent = 'Downloaded ✓';
+      btn.classList.add('done');
+      btn.title = 'Already downloaded — it’s in your Library';
+    } else if (btn) {
+      btn.disabled = false;
+      btn.textContent = idleLabel;
+    }
     $('#dlClose').hidden = false;
   }
 }

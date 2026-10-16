@@ -7,6 +7,10 @@ const path = require('path');
 // temp file instead of the live history. Unset in production → the real file.
 const HISTORY_FILE = process.env.HISTORY_FILE || path.join(__dirname, '..', 'history.json');
 
+// A repeat download of the same file within this window updates the existing
+// history entry rather than adding another one.
+const REDOWNLOAD_WINDOW_MS = 10 * 60 * 1000;
+
 function readAll() {
   try {
     const raw = fs.readFileSync(HISTORY_FILE, 'utf8');
@@ -78,7 +82,21 @@ function logSearch({ title, author, sort, resultCount }) {
 function logDownload({ title, author, filename, savePath, url, mode, verified, size, cover }) {
   const titles = require('./titles');
   const clean = titles.displayTitle({ title, author, filename });
-  return add({ type: 'download', title: clean, author, filename, savePath, url, mode, verified, size, cover });
+  const fields = { title: clean, author, filename, savePath, url, mode, verified, size, cover };
+  // Re-downloading the same file from the same link moments later (a second
+  // click after sending) overwrote the same file — refresh the existing entry
+  // instead of logging a duplicate "Downloaded" line. Keeping its id keeps any
+  // send already tied to it (notify.downloadId) pointing at the book.
+  const cutoff = Date.now() - REDOWNLOAD_WINDOW_MS;
+  let existing = null;
+  mutate((entries) => {
+    existing = entries.find((e) => e.type === 'download'
+      && e.url === url && e.filename === filename && e.savePath === savePath
+      && Date.parse(e.timestamp) >= cutoff);
+    if (!existing) return false;
+    Object.assign(existing, fields);
+  });
+  return existing || add({ type: 'download', ...fields });
 }
 
 /**
@@ -91,4 +109,4 @@ function logNotify({ downloadId, title, filename, to, kindlePushed, channels }) 
   return add({ type: 'notify', downloadId, title, filename, to, kindlePushed, channels });
 }
 
-module.exports = { readAll, writeAll, mutate, add, logSearch, logDownload, logNotify };
+module.exports = { REDOWNLOAD_WINDOW_MS, readAll, writeAll, mutate, add, logSearch, logDownload, logNotify };
