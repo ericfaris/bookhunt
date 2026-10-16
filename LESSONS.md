@@ -58,3 +58,9 @@
 - Gotcha: a full-screen transparent `<dialog>` can't use `e.target === dlg` alone for click-outside; also treat its stage/layout wrappers as empty space. Never call `showModal()` on an already-open dialog (prev/next re-opens): guard with `if (!dlg.open)`.
 - Kept internal ids that persist user state (`shelf-search-2026-07` spotlight key, `setupLazyShelf`) unchanged while renaming visible copy. Renaming the key would re-show a dismissed tip.
 - Verify UI changes with a harness that requires `src/server` (no schedulers start on require) against temp copies of history/watchlist/recipients, SMTP blanked, `DOWNLOAD_PATH=/downloads`, and a temp `COVER_IMAGE_DIR`.
+
+## 2026-10-16 — sharp for covers; Backfill tag data cleanup; dead CSS
+- Added `sharp` (prebuilt binaries work on `node:26-slim`; Playwright's `--with-deps` already installs fonts, so SVG text renders). Covers fit 900×1350 as JPEG q82, and old oversized files are fixed on next read. Generated SVG jackets go to PNG for email, so every email now has a cover.
+- `npm install <pkg>` also syncs local `node_modules` to the lockfile, which can move Playwright to a version whose browser isn't downloaded yet. Run `npx playwright install chromium` locally; the image installs its own.
+- The Backfill tag lived in `booktags.json` (57 books) and on 18 watches (one active, which would have re-tagged its download). Stripped in-container (bind-mounted single files) after host backups `*.bak-20261016-112413`, then diffed against the backups: only that tag changed. `watchlist.writeAll` isn't exported; use `watchlist.update(id, patch)`.
+- Dead-CSS pruning: find unused classes with an exact-token regex (`\b` treats `-` as a boundary, so `watch-recip` "matches" `watch-recip-label`). A naive `selectors{…}` regex swallows the comment before a rule; restore section-header comments afterwards and diff the result.

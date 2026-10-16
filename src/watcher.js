@@ -205,11 +205,11 @@ async function autoDeliver(watch, results, opts = {}) {
   let kindlePushed = 0;
   const emailed = new Set();
   // The stored cover image (coverstore), without the ePUB step (that would read
-  // the book again on top of the Kindle attachment). Generated SVG jackets are
-  // skipped (email clients won't render SVG); the email keeps its placeholder.
+  // the book again on top of the Kindle attachment). A generated SVG jacket
+  // arrives rasterized to PNG, since email clients won't render SVG.
   try {
-    const img = await coverstore.getCoverImage({ ...book, savePath: download && download.savePath, filePresent: !!download }, { epub: false });
-    if (!img.generated) { book.coverBuffer = img.bytes; book.coverMime = img.mime; }
+    const img = await coverstore.getEmailCoverImage({ ...book, savePath: download && download.savePath, filePresent: !!download }, { epub: false });
+    if (img) { book.coverBuffer = img.bytes; book.coverMime = img.mime; }
   } catch { /* URL / placeholder fallback */ }
 
   // Fetched at most once for all recipients (#47): local passes the savePath

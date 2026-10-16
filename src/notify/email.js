@@ -98,7 +98,8 @@ function buildMessage({ recipient, book }) {
   const hasBuffer = Buffer.isBuffer(book.coverBuffer) && book.coverBuffer.length > 0;
   const hasCover = hasBuffer || /^https?:\/\//i.test(String(book.cover || ''));
   if (hasBuffer) {
-    attachments.push({ filename: 'cover.jpg', content: book.coverBuffer, contentType: book.coverMime || 'image/jpeg', cid: 'cover@book' });
+    const mime = book.coverMime || 'image/jpeg';
+    attachments.push({ filename: `cover.${mime === 'image/png' ? 'png' : 'jpg'}`, content: book.coverBuffer, contentType: mime, cid: 'cover@book' });
   } else if (hasCover) {
     attachments.push({ filename: 'cover.jpg', path: book.cover, cid: 'cover@book' });
   }

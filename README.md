@@ -296,7 +296,7 @@ Every cover in the app (Library, search results, watchlist, the reader shelf, an
 3. Catalogs (`src/covers.js`): Open Library, then Apple Books (iTunes Search), then Google Books (loose query, then a field-specific one), then Open Library general search. Transient failures (429, 5xx, timeouts) are retried with backoff. A miss caused by a failure is cached for 1 hour; a clean miss for 7 days.
 4. A generated SVG jacket with the title and author, so a cover is never blank. It's re-tried against real sources after 24 hours.
 
-Endpoints: `/cover-image/book/:id` (Library), `/cover-image/lookup?title=&author=` (books not in the Library), and `/reader/cover?t=&id=` (shelf; token-gated, with its own rate limit). `cover-images/` is a re-derivable cache, so deleting it only costs re-fetches. Emails use stored real images but skip generated jackets, because email clients don't render SVG.
+Endpoints: `/cover-image/book/:id` (Library), `/cover-image/lookup?title=&author=` (books not in the Library), and `/reader/cover?t=&id=` (shelf; token-gated, with its own rate limit). `cover-images/` is a re-derivable cache, so deleting it only costs re-fetches. Stored covers are normalized with `sharp`: anything over 900×1350 or 350 KB is resized and saved as a JPEG, and covers saved before this are shrunk the next time they're served. Emails use the same stored image; a generated jacket is converted to PNG for email (`getEmailCoverImage`), because email clients don't render SVG.
 
 ### Reader shelf: book details + feature announcements
 

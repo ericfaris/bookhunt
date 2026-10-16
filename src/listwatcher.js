@@ -307,10 +307,10 @@ async function sendDigest() {
   for (const e of events) {
     if (COVER_SECTIONS.has(e.type)) {
       // Same stored-image chain as the rest of the app (catalog lookup +
-      // on-disk image cache). Generated SVG jackets don't render in email.
+      // on-disk image cache); generated jackets arrive as PNG for email.
       try {
-        const img = await coverstore.getCoverImage({ title: e.title, author: e.author, cover: e.cover || null }, { epub: false });
-        if (!img.generated) e.coverBuffer = img.bytes;
+        const img = await coverstore.getEmailCoverImage({ title: e.title, author: e.author, cover: e.cover || null }, { epub: false });
+        if (img) { e.coverBuffer = img.bytes; e.coverMime = img.mime; }
       } catch { /* placeholder */ }
     }
   }

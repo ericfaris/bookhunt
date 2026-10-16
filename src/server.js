@@ -1230,10 +1230,10 @@ app.post('/api/send', async (req, res) => {
   // The same stored image the Library shows (incl. the ePUB's own cover once
   // the Library has resolved it). The ePUB step is skipped here — it would read
   // the book a second time on top of the Kindle attachment. A generated SVG
-  // jacket is skipped too (email clients won't render SVG).
+  // jacket arrives rasterized to PNG, since email clients won't render SVG.
   try {
-    const img = await coverstore.getCoverImage({ ...bookInfo, savePath: entry.savePath, filePresent: true }, { epub: false });
-    if (!img.generated) { bookInfo.coverBuffer = img.bytes; bookInfo.coverMime = img.mime; }
+    const img = await coverstore.getEmailCoverImage({ ...bookInfo, savePath: entry.savePath, filePresent: true }, { epub: false });
+    if (img) { bookInfo.coverBuffer = img.bytes; bookInfo.coverMime = img.mime; }
   } catch { /* fall back to the URL / placeholder */ }
   const results = [];
   // The attachment is fetched at most once per send (not per recipient): local

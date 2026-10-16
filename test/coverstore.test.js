@@ -215,3 +215,73 @@ test('keyFor: re-downloads (same title/author, any case/punctuation) share one i
   assert.equal(coverstore.keyFor({ title: 'The Safe Room!', author: 'LISA UNGER' }), coverstore.keyFor(BOOK));
   assert.notEqual(coverstore.keyFor({ title: 'Other', author: 'Lisa Unger' }), coverstore.keyFor(BOOK));
 });
+
+// --- Image processing: normalize big covers, rasterize jackets for email ------
+
+const sharp = require('sharp');
+// A real, noisy (so it can't compress to nothing) JPEG of the given size.
+async function realJpeg(w, h, quality = 95) {
+  const raw = Buffer.alloc(w * h * 3);
+  for (let i = 0; i < raw.length; i++) raw[i] = (i * 2654435761) >>> 24;
+  return sharp(raw, { raw: { width: w, height: h, channels: 3 } }).jpeg({ quality }).toBuffer();
+}
+
+test('optimizeImage: a huge embedded cover is shrunk to fit 900×1350 as JPEG', async () => {
+  const big = await realJpeg(1600, 2400);
+  assert.ok(big.length > coverstore.OPTIMIZE_OVER_BYTES, `fixture is big (${big.length})`);
+  const out = await coverstore.optimizeImage({ bytes: big, mime: 'image/jpeg' });
+  const meta = await sharp(out.bytes).metadata();
+  assert.equal(out.mime, 'image/jpeg');
+  assert.ok(meta.width <= coverstore.MAX_W && meta.height <= coverstore.MAX_H, `${meta.width}x${meta.height}`);
+  assert.ok(out.bytes.length < big.length / 2, `${big.length} → ${out.bytes.length}`);
+});
+
+test('optimizeImage: small covers, SVGs, corrupt bytes and a missing sharp pass through untouched', async () => {
+  const small = { bytes: await realJpeg(300, 450, 70), mime: 'image/jpeg' };
+  assert.equal(await coverstore.optimizeImage(small), small);
+  const svg = { bytes: Buffer.from('<svg/>'), mime: 'image/svg+xml' };
+  assert.equal(await coverstore.optimizeImage(svg), svg);
+  const junk = { bytes: Buffer.concat([Buffer.from([0xff, 0xd8, 0xff]), Buffer.alloc(500000, 3)]), mime: 'image/jpeg' };
+  assert.equal(await coverstore.optimizeImage(junk), junk, 'corrupt image → unchanged, no throw');
+  const big = { bytes: await realJpeg(1600, 2400), mime: 'image/jpeg' };
+  assert.equal(await coverstore.optimizeImage(big, { sharp: null }), big, 'no sharp → unchanged');
+});
+
+test('getCoverImage: a newly found oversized cover is stored small', async () => {
+  const dir = tmpDir();
+  const big = await realJpeg(1600, 2400);
+  const out = await coverstore.getCoverImage({ ...BOOK, cover: 'https://x/big.jpg' }, { dir, fetchImage: async () => big });
+  const onDisk = fs.readFileSync(path.join(dir, coverstore.keyFor(BOOK) + '.jpg'));
+  assert.ok(onDisk.length < big.length / 2);
+  assert.ok(out.bytes.equals(onDisk));
+});
+
+test('getCoverImage: an oversized cover stored before normalizing is shrunk on next read', async () => {
+  const dir = tmpDir();
+  const big = await realJpeg(1600, 2400);
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, coverstore.keyFor(BOOK) + '.jpg'), big);
+  const out = await coverstore.getCoverImage(BOOK, { dir, fetchImage: async () => { throw new Error('no network'); } });
+  assert.ok(out.bytes.length < big.length / 2);
+  assert.ok(fs.readFileSync(path.join(dir, coverstore.keyFor(BOOK) + '.jpg')).length < big.length / 2, 'rewritten in place');
+});
+
+test('rasterize / getEmailCoverImage: a generated jacket becomes a PNG for email', async () => {
+  const dir = tmpDir();
+  const img = await coverstore.getEmailCoverImage(BOOK, { dir, epub: false, fetchImage: async () => null, resolveCover: async () => null });
+  assert.equal(img.mime, 'image/png');
+  assert.equal(img.bytes.readUInt32BE(0), 0x89504e47, 'PNG magic');
+  assert.equal(img.generated, true);
+  assert.equal((await sharp(img.bytes).metadata()).width, 600);
+  // Real images pass through.
+  const jpg = { bytes: JPEG, mime: 'image/jpeg' };
+  assert.equal(await coverstore.rasterize(jpg), jpg);
+});
+
+test('email: a PNG cover attaches as cover.png with its real content type', () => {
+  const { buildMessage } = require('../src/notify/email');
+  const msg = buildMessage({ recipient: { name: 'R', email: 'r@example.com' }, book: { title: 'T', coverBuffer: Buffer.from('png-bytes'), coverMime: 'image/png' } });
+  const att = (msg.attachments || [])[0];
+  assert.equal(att.filename, 'cover.png');
+  assert.equal(att.contentType, 'image/png');
+});

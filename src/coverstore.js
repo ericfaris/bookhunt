@@ -12,7 +12,11 @@
 //   1. the cover stored with the download (exact edition, from the search hit)
 //   2. the cover embedded in the ePUB itself (exact edition, always right)
 //   3. the catalog chain in covers.js (Open Library → Apple Books → Google…)
-//   4. a generated cover — title + author typeset on a colored jacket
+//   4. a generated cover — title + author typeset on a colored jacket (SVG;
+//      converted to PNG for email by getEmailCoverImage)
+//
+// Real images are normalized on the way in (optimizeImage: fit 900×1350,
+// JPEG) so a 3 MB embedded ePUB cover is stored at roughly 100 KB.
 //
 // Real images are kept indefinitely; a GENERATED one is re-attempted after
 // GENERATED_TTL_MS so a book that later gains a catalog cover picks it up.
@@ -34,6 +38,13 @@ const DIR = process.env.COVER_IMAGE_DIR || path.join(__dirname, '..', 'cover-ima
 // small isn't a real jacket.
 const MIN_IMAGE_BYTES = 1000;
 const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
+// Stored covers are normalized to at most this size (a 2:3 jacket that still
+// looks sharp at the mega view's ~760px tall on a 2x screen) and re-encoded as
+// JPEG when bigger than OPTIMIZE_OVER_BYTES. Embedded ePUB covers run to
+// 3+ MB; after this they're typically 50–150 KB.
+const MAX_W = 900;
+const MAX_H = 1350;
+const OPTIMIZE_OVER_BYTES = 350 * 1024;
 const GENERATED_TTL_MS = 24 * 60 * 60 * 1000;
 
 const EXT_BY_MIME = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/gif': 'gif', 'image/webp': 'webp', 'image/svg+xml': 'svg' };
@@ -87,6 +98,54 @@ async function fetchImage(url, opts) {
 async function fetchBest(url, opts) {
   const large = covers.largeCoverUrl(url);
   return (large && large !== url && (await fetchImage(large, opts))) || fetchImage(url, opts);
+}
+
+// --- Image processing (sharp, lazy + fail-soft) -------------------------------
+
+let sharpLib;
+function loadSharp() {
+  if (sharpLib === undefined) {
+    try { sharpLib = require('sharp'); } catch { sharpLib = null; }
+  }
+  return sharpLib;
+}
+
+/**
+ * Shrink an oversized cover: fit inside MAX_W×MAX_H and re-encode as JPEG.
+ * Only kicks in above OPTIMIZE_OVER_BYTES or the size limits, and only keeps
+ * the result when it's actually smaller. Any failure (no sharp, corrupt image)
+ * returns the original unchanged. NEVER throws.
+ */
+async function optimizeImage(img, opts = {}) {
+  const sharp = opts.sharp === undefined ? loadSharp() : opts.sharp;
+  if (!sharp || !img || img.mime === 'image/svg+xml') return img;
+  try {
+    const meta = await sharp(img.bytes).metadata();
+    const tooBig = img.bytes.length > OPTIMIZE_OVER_BYTES || (meta.width || 0) > MAX_W || (meta.height || 0) > MAX_H;
+    if (!tooBig) return img;
+    const out = await sharp(img.bytes)
+      .rotate() // honor EXIF orientation before it's stripped
+      .resize({ width: MAX_W, height: MAX_H, fit: 'inside', withoutEnlargement: true })
+      .flatten({ background: '#ffffff' }) // JPEG has no alpha
+      .jpeg({ quality: 82, mozjpeg: true })
+      .toBuffer();
+    return out.length < img.bytes.length ? { ...img, bytes: out, mime: 'image/jpeg' } : img;
+  } catch {
+    return img;
+  }
+}
+
+/** A generated SVG jacket as PNG, for email clients (which don't render SVG).
+ *  Real images pass through. Falls back to the input on any failure. */
+async function rasterize(img, opts = {}) {
+  const sharp = opts.sharp === undefined ? loadSharp() : opts.sharp;
+  if (!sharp || !img || img.mime !== 'image/svg+xml') return img;
+  try {
+    const bytes = await sharp(img.bytes, { density: 144 }).resize({ width: 600 }).png().toBuffer();
+    return { ...img, bytes, mime: 'image/png' };
+  } catch {
+    return img;
+  }
 }
 
 // --- Generated cover --------------------------------------------------------
@@ -167,15 +226,25 @@ async function getCoverImage(book, opts = {}) {
   const key = keyFor(book || {});
   const stored = findStored(key, dir);
   if (stored && (!stored.generated || now - stored.mtimeMs < GENERATED_TTL_MS)) {
+    let img = null;
     try {
-      return { bytes: fs.readFileSync(stored.file), mime: stored.mime, source: 'stored', generated: stored.generated };
+      img = { bytes: fs.readFileSync(stored.file), mime: stored.mime, source: 'stored', generated: stored.generated };
     } catch { /* fall through and rebuild */ }
+    if (img) {
+      // Covers stored before images were normalized get shrunk once, in place.
+      if (!img.generated && img.bytes.length > OPTIMIZE_OVER_BYTES) {
+        const small = await optimizeImage(img, opts);
+        if (small !== img) { writeStored(key, dir, small.bytes, small.mime); return small; }
+      }
+      return img;
+    }
   }
 
   const flightKey = dir + '|' + key;
   if (inflight.has(flightKey)) return inflight.get(flightKey);
   const p = (async () => {
-    const found = await findRealCover(book || {}, opts);
+    const raw = await findRealCover(book || {}, opts);
+    const found = raw && (await optimizeImage(raw, opts));
     if (found) {
       writeStored(key, dir, found.bytes, found.mime);
       return { ...found, generated: false };
@@ -214,6 +283,19 @@ async function findRealCover(book, opts) {
   return null;
 }
 
+/**
+ * The cover for an EMAIL: same chain as getCoverImage, but a generated SVG
+ * jacket is rasterized to PNG (Gmail and most clients won't show SVG), so
+ * every email gets a real cover image. NEVER throws (null on total failure).
+ */
+async function getEmailCoverImage(book, opts = {}) {
+  try {
+    return await rasterize(await getCoverImage(book, opts), opts);
+  } catch {
+    return null;
+  }
+}
+
 /** Forget a book's stored image (e.g. its cover was just changed by hand). */
 function invalidate(book, opts = {}) {
   const dir = opts.dir || DIR;
@@ -242,12 +324,18 @@ function send(res, img) {
 module.exports = {
   DIR,
   getCoverImage,
+  getEmailCoverImage,
   invalidate,
   versionFor,
   send,
   // exported for tests
   generatedCoverSvg,
   wrapWords,
+  optimizeImage,
+  rasterize,
+  OPTIMIZE_OVER_BYTES,
+  MAX_W,
+  MAX_H,
   keyFor,
   MIN_IMAGE_BYTES,
   GENERATED_TTL_MS,
