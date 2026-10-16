@@ -164,6 +164,22 @@ app.get('/reader/api/search', async (req, res) => {
   }
 });
 
+// Tap-a-book details modal: larger cover + catalog blurb for ONE shelf book.
+// Same token gate as the rest; unknown/unsendable ids 404 like a bad token.
+app.get('/reader/api/book', async (req, res) => {
+  const r = reader.byToken(String(req.query.t || ''));
+  if (!r) return res.status(404).json({ error: 'Not found' });
+  const id = String(req.query.id || '').slice(0, 100);
+  try {
+    const book = await reader.bookDetailsForReader(r, id);
+    if (!book) return res.status(404).json({ error: 'Not found' });
+    res.json({ kindleSet: !!r.kindleEmail, book });
+  } catch (err) {
+    console.error('Reader book details failed:', err);
+    res.status(500).json({ error: 'Could not load that book.' });
+  }
+});
+
 app.post('/reader/api/watchlist', (req, res) => {
   const { t, title, author } = req.body || {};
   const r = reader.byToken(String(t || ''));

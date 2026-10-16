@@ -55,6 +55,7 @@
   /* Gentle, dismissable "add to home screen" hint — never a blocker. */
   .install { background: var(--surface); border: 1px solid var(--border); border-radius: 14px;
     padding: 14px 16px; margin: 0 0 16px; display: flex; align-items: center; gap: 12px; }
+  .install[hidden] { display: none; }
   .install img { width: 44px; height: 44px; border-radius: 10px; flex-shrink: 0; }
   .install .it { flex: 1; min-width: 0; }
   .install .it b { display: block; font-size: 0.95rem; }
@@ -95,6 +96,41 @@
   .watchForm { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
   .watchForm input { background: var(--bg); color: var(--text); border: 1px solid var(--border);
     border-radius: 9px; padding: 10px 12px; font-size: 0.9rem; }
+  /* Tap-a-book details modal. The tile itself is the trigger; the Send
+     button inside it keeps its own behavior. */
+  .tile { cursor: pointer; transition: transform 0.15s ease, box-shadow 0.15s ease; }
+  .tile:hover { transform: translateY(-2px); box-shadow: 0 8px 22px rgba(0,0,0,0.12); }
+  .tile:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+  body.modal-open { overflow: hidden; }
+  dialog.book { border: 0; padding: 0; background: transparent; color: var(--text);
+    width: min(560px, calc(100vw - 32px)); max-width: none; max-height: calc(100dvh - 32px); }
+  dialog.book::backdrop { background: rgba(10, 14, 30, 0.6); backdrop-filter: blur(3px); }
+  dialog.book[open] { animation: bhPop 0.18s ease-out; }
+  @keyframes bhPop { from { opacity: 0; transform: translateY(10px) scale(0.98); } to { opacity: 1; transform: none; } }
+  @media (prefers-reduced-motion: reduce) { dialog.book[open], .tile { animation: none; transition: none; } }
+  .book .card { position: relative; background: var(--surface); border: 1px solid var(--border);
+    border-radius: 18px; padding: 22px 20px 20px; max-height: calc(100dvh - 32px); overflow-y: auto;
+    box-shadow: 0 20px 50px rgba(0,0,0,0.3); }
+  .book .close { position: absolute; top: 8px; right: 8px; width: 44px; height: 44px; border: 0;
+    border-radius: 50%; background: var(--bg); color: var(--text); font-size: 1.2rem; line-height: 1;
+    cursor: pointer; display: flex; align-items: center; justify-content: center; }
+  .book .close:hover { background: var(--border); }
+  .book .close:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .book .body { display: flex; flex-direction: column; align-items: center; gap: 18px; }
+  .book .art { width: min(220px, 62vw); flex-shrink: 0; }
+  .book .art .cover { box-shadow: 0 10px 28px rgba(0,0,0,0.28); }
+  .book .art .cover.ph { font-size: 3.5rem; }
+  .book .info { width: 100%; display: flex; flex-direction: column; gap: 6px; }
+  .book h2 { margin: 0; font-size: 1.25rem; line-height: 1.25; padding-right: 36px; }
+  .book .by { color: var(--dim); font-size: 0.95rem; }
+  .book .desc { margin: 10px 0 6px; font-size: 0.95rem; line-height: 1.6; white-space: pre-line; }
+  .book .desc.loading, .book .desc.none { color: var(--dim); font-style: italic; }
+  .book button.send { margin-top: 8px; padding: 12px; font-size: 0.95rem; }
+  @media (min-width: 600px) {
+    .book .card { padding: 26px; }
+    .book .body { flex-direction: row; align-items: flex-start; }
+    .book .art { width: 200px; }
+  }
   footer { text-align: center; margin-top: 34px; font-size: 0.8rem; color: var(--dim); }
   footer a { color: var(--dim); }
 </style>
@@ -119,6 +155,21 @@
     <a href="#" id="unsub">Stop the new-book emails</a>
   </footer>
 </div>
+  <dialog id="bookDialog" class="book" aria-labelledby="bookTitle">
+    <div class="card">
+      <button type="button" id="bookClose" class="close" aria-label="Close">✕</button>
+      <div class="body">
+        <div id="bookCover" class="art"></div>
+        <div class="info">
+          <h2 id="bookTitle"></h2>
+          <div id="bookAuthor" class="by"></div>
+          <p id="bookDesc" class="desc"></p>
+          <button id="bookSend" type="button" class="send"></button>
+          <div id="bookErr" class="err"></div>
+        </div>
+      </div>
+    </div>
+  </dialog>
 <script src="/reader/app.js"></script>
 </body>
 </html>

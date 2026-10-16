@@ -287,6 +287,12 @@ The reader portal (issue #34) lets invited readers open a passwordless magic lin
 
 > Title and author tokens are matched at **word starts**, not bare substrings — short tokens like `it`/`us` in *It Ends with Us* no longer match inside `with`/`trust`, while stems like `demon` → `demons` still do.
 
+### Reader shelf: book details + feature announcements
+
+Tapping a book on the reader shelf opens a details modal (`<dialog>` in `public/reader.html`) with a larger cover and the catalog description, served by `GET /reader/api/book?t=&id=`. Only sendable books resolve; anything else returns 404. Descriptions come from the disk-cached `covers.resolveMeta`. New shelf features announce themselves once per device with `spotlightFeature()` in `public/reader.js`.
+
+To email readers about a feature, run `scripts/announce-book-details.js` inside the container. It is a dry run by default: it lists recipients and writes an HTML preview. `--only <id|email> --send` sends a test to one recipient, and `--send` emails everyone. Readers who unsubscribed are skipped. Each recipient is stamped `readerAnnouncements[<id>]`, so re-running never emails anyone twice.
+
 ### Downloads
 
 - **Premium** (`img.MobilismDownloaderIcon` found in post): each associated download link is fetched through the amember downloader into a staging dir, verified, and stored (R2 in production, `DOWNLOAD_PATH` with `STORAGE=local`). Credentials are entered in the UI once per session and never written to disk (or optionally set via `MOBILISM_PREMIUM_USER`/`MOBILISM_PREMIUM_PASS` in `.env`). If a mirror serves the book wrapped in a **ZIP or RAR archive**, it's unpacked automatically: the inner `.epub` is extracted (the matching book is chosen when a bundle holds several), the archive is deleted, and verification + send-to-reader run on the real `.epub`.

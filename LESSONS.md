@@ -28,3 +28,11 @@
 - N (`WATCH_OUTAGE_THRESHOLD`=5) consecutive no-download hits email the operator once. Watcher tests stub `smtp` in `withMocks` — `.env` has live SMTP creds.
 - Goodreads lists franchise continuations as "Vince Flynn: <title>"; `cleanTitle` keeps the part before the colon, so the radar watched for "Vince Flynn". Fixed with a brand-prefix allowlist (a generic "Name Name: X" rule would break real subtitles like "Atomic Habits: …").
 - Retrying a watch from the CLI: `cloudflared access token --app=https://bookhunt.mooseflip.com` → `Cf-Access-Jwt-Assertion` header against `http://127.0.0.1:3000` (skips the tunnel's 100s timeout); `POST /api/watchlist/:id/status {"status":"active"}` then `/check`.
+
+## 2026-10-15 — Reader shelf tap-a-book modal + announcement email
+- Native `<dialog>` + `showModal()` gives Esc and focus trapping for free. For click-outside-to-close, make the visible card an inner element that fills the dialog box (dialog `padding:0`, transparent bg); then `e.target === dialog` only happens on the backdrop.
+- The tile is now the modal trigger, so the Send button must `stopPropagation()`. Tile and modal Send buttons share `wireSend()` and mutate the same `b.sent` object to stay in sync.
+- `spotlightFeature()` now returns a dismiss fn and takes `bubbleAt` (the callout goes before the grid, not inside it as a grid item). The feature dismisses its own tip on first use.
+- Pre-existing bug: `.install { display:flex }` beat the `[hidden]` attribute, so the install hint showed as an empty pill when no install event fired (e.g. desktop). Any class that sets `display` needs a `[hidden]{display:none}` override (same as `.search`).
+- Running a single test file with bare `node --test` loads `.env` → `STORAGE=r2` → a real (read-only) R2 index list. Always run `STORAGE=local node --test ...`.
+- One-off reader emails: dry run by default, per-recipient stamp written right after each send (fresh mutate), failures left unstamped so a re-run retries them. Preview HTML uses a placeholder token so no real magic link lands in /tmp.

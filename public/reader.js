@@ -43,18 +43,20 @@
       '⚠ No Kindle address is saved for you yet — ask Eric to add it, then these buttons will work.'));
   }
 
-  // One tile builder shared by the recent-shelf grid and search results, so
-  // both render identically and POST the same send call.
-  function renderTile(b, kindleSet) {
-    const cover = b.cover
-      ? el('img', { className: 'cover', src: b.cover, alt: '', loading: 'lazy' })
-      : el('div', { className: 'cover ph' }, '📕');
-    if (cover.tagName === 'IMG') cover.onerror = () => cover.replaceWith(el('div', { className: 'cover ph' }, '📕'));
-    const err = el('div', { className: 'err' });
-    const btn = el('button', { className: 'send' + (b.sent ? ' sent' : ''), type: 'button' },
-      b.sent ? '✓ On your Kindle' : '📤 Send to my Kindle');
+  // Tap-a-book details modal (larger cover + description). One instance,
+  // reused for every tile on the shelf and in search results.
+  const details = setupBookDetails({ $, el, t, wireSend });
+
+  // Wires a Send-to-Kindle button for book `b`. Shared by the tile and the
+  // details modal so both POST the same call; `onSent` lets the other copy of
+  // the button (tile ↔ modal) flip to "sent" too.
+  function wireSend(btn, err, b, kindleSet, onSent) {
+    btn.className = 'send' + (b.sent ? ' sent' : '');
+    btn.type = 'button';
+    btn.textContent = b.sent ? '✓ On your Kindle' : '📤 Send to my Kindle';
     btn.disabled = b.sent || !kindleSet;
-    btn.onclick = async () => {
+    btn.onclick = async (e) => {
+      e.stopPropagation(); // never also open the details modal
       btn.disabled = true;
       btn.textContent = 'Sending…';
       err.textContent = '';
@@ -66,21 +68,52 @@
         });
         const out = await res.json();
         if (!res.ok) throw new Error(out.error || 'Send failed');
+        b.sent = true;
         btn.classList.add('sent');
         btn.textContent = '✓ On its way!';
-      } catch (e) {
+        if (onSent) onSent();
+      } catch (e2) {
         btn.disabled = false;
         btn.textContent = '📤 Send to my Kindle';
-        err.textContent = e.message;
+        err.textContent = e2.message;
       }
     };
-    return el('div', { className: 'tile' }, [
+  }
+
+  // One tile builder shared by the recent-shelf grid and search results, so
+  // both render identically and POST the same send call. The tile itself
+  // (cover/title) opens the details modal; the Send button does not.
+  function renderTile(b, kindleSet) {
+    const cover = b.cover
+      ? el('img', { className: 'cover', src: b.cover, alt: '', loading: 'lazy' })
+      : el('div', { className: 'cover ph' }, '📕');
+    if (cover.tagName === 'IMG') cover.onerror = () => cover.replaceWith(el('div', { className: 'cover ph' }, '📕'));
+    const err = el('div', { className: 'err' });
+    const btn = el('button');
+    const markSent = () => {
+      btn.disabled = true;
+      btn.classList.add('sent');
+      btn.textContent = '✓ On its way!';
+    };
+    wireSend(btn, err, b, kindleSet);
+    const tile = el('div', { className: 'tile' }, [
       cover,
       el('div', { className: 't' }, b.title),
       b.author ? el('div', { className: 'a' }, b.author) : null,
       btn,
       err,
     ]);
+    tile.tabIndex = 0;
+    tile.setAttribute('role', 'button');
+    tile.setAttribute('aria-haspopup', 'dialog');
+    tile.setAttribute('aria-label', `Details for ${b.title}${b.author ? ' by ' + b.author : ''}`);
+    tile.onclick = () => details.open(b, kindleSet, markSent);
+    tile.onkeydown = (e) => {
+      if (e.target !== tile || (e.key !== 'Enter' && e.key !== ' ')) return;
+      e.preventDefault();
+      details.open(b, kindleSet, markSent);
+    };
+    return tile;
   }
 
   const main = $('#main');
@@ -93,6 +126,7 @@
     const grid = el('div', { className: 'grid' });
     for (const b of data.books) grid.append(renderTile(b, data.kindleSet));
     main.append(grid);
+    details.announce(grid);
     setupLazyShelf({ $, el, t, grid, renderTile, kindleSet: data.kindleSet, offset: data.offset, limit: data.limit, hasMore: data.hasMore });
   }
 
@@ -245,10 +279,15 @@ function setupLazyShelf({ $, el, t, grid, renderTile, kindleSet, offset, limit, 
 // localStorage per browser/device (same posture as the install-hint dismiss
 // flag), since the reader portal has no server-side "seen" state to hang this
 // off — a leaked/shared link seeing the tip again is harmless.
-function spotlightFeature({ id, target, title, body, el }) {
-  if (!id || !target) return;
+//
+// `bubbleAt` (optional) — `{ el, where }` for insertAdjacentElement — places
+// the callout somewhere other than right after the target (e.g. above a grid
+// when the target is one tile in it). Returns a dismiss function (no-op when
+// nothing was shown) so the feature can retire its own tip once it's used.
+function spotlightFeature({ id, target, title, body, el, bubbleAt }) {
+  if (!id || !target) return () => {};
   const key = 'bh_spotlight_' + id;
-  try { if (localStorage.getItem(key) === '1') return; } catch { /* no storage — just skip the tip */ }
+  try { if (localStorage.getItem(key) === '1') return () => {}; } catch { return () => {}; /* no storage — just skip the tip */ }
 
   target.classList.add('spotlight-ring');
   const dismiss = () => {
@@ -263,7 +302,109 @@ function spotlightFeature({ id, target, title, body, el }) {
     el('div', { className: 'sb' }, body),
     btn,
   ]);
-  target.insertAdjacentElement('afterend', bubble);
+  if (bubbleAt && bubbleAt.el) bubbleAt.el.insertAdjacentElement(bubbleAt.where || 'beforebegin', bubble);
+  else target.insertAdjacentElement('afterend', bubble);
+  return dismiss;
+}
+
+// Tap-a-book details modal: a native <dialog> (focus trap, Esc-to-close and
+// top-layer stacking for free) showing a bigger cover, title/author and the
+// catalog description, plus the same Send button as the tile. Opens
+// instantly with what the tile already knows, then fills in the larger cover
+// + description from /reader/api/book (cached per book for the visit, so
+// re-opening costs no request against the reader rate limit). Closes on the
+// ✕, Esc, or a tap anywhere on the dimmed backdrop.
+function setupBookDetails({ $, el, t, wireSend }) {
+  const dlg = $('#bookDialog');
+  const cache = new Map();
+  let seq = 0;
+  let dismissTip = () => {};
+  if (!dlg || typeof dlg.showModal !== 'function') {
+    return { open() {}, announce() {} };
+  }
+
+  const close = () => { if (dlg.open) dlg.close(); };
+  $('#bookClose').onclick = close;
+  // A click whose target is the <dialog> itself landed on the backdrop: the
+  // visible card is an inner element that fills the dialog box, so any click
+  // on the card's content targets a descendant instead.
+  dlg.addEventListener('click', (e) => { if (e.target === dlg) close(); });
+  dlg.addEventListener('close', () => {
+    document.body.classList.remove('modal-open');
+    seq++; // drop any in-flight details response
+  });
+
+  function setCover(src, fallback) {
+    const box = $('#bookCover');
+    box.textContent = '';
+    if (!src) { box.append(el('div', { className: 'cover ph' }, '📕')); return; }
+    const img = el('img', { className: 'cover', src, alt: '' });
+    img.onerror = () => {
+      if (fallback && img.src !== fallback) { img.src = fallback; fallback = null; return; }
+      img.replaceWith(el('div', { className: 'cover ph' }, '📕'));
+    };
+    box.append(img);
+  }
+
+  function setDescription(text, state) {
+    const d = $('#bookDesc');
+    d.className = 'desc' + (state ? ' ' + state : '');
+    d.textContent = text;
+  }
+
+  function fill(b, kindleSet, onSent) {
+    $('#bookTitle').textContent = b.title;
+    const a = $('#bookAuthor');
+    a.textContent = b.author ? 'by ' + b.author : '';
+    a.hidden = !b.author;
+    const err = $('#bookErr');
+    err.textContent = '';
+    wireSend($('#bookSend'), err, b, kindleSet, onSent);
+  }
+
+  async function open(b, kindleSet, onSent) {
+    dismissTip();
+    const mySeq = ++seq;
+    fill(b, kindleSet, onSent);
+    const hit = cache.get(b.id);
+    setCover((hit && hit.coverLarge) || b.cover, b.cover);
+    if (hit) setDescription(hit.description || 'No description is available for this book yet.', hit.description ? '' : 'none');
+    else setDescription('Loading the description…', 'loading');
+    document.body.classList.add('modal-open');
+    dlg.showModal();
+    $('#bookClose').focus();
+    if (hit) return;
+    try {
+      const res = await fetch('/reader/api/book?t=' + encodeURIComponent(t) + '&id=' + encodeURIComponent(b.id));
+      if (!res.ok) throw new Error(res.status);
+      const { book } = await res.json();
+      cache.set(b.id, book);
+      if (mySeq !== seq) return; // closed, or another book opened meanwhile
+      if (book.coverLarge && book.coverLarge !== b.cover) setCover(book.coverLarge, b.cover);
+      else if (!b.cover && book.cover) setCover(book.cover);
+      setDescription(book.description || 'No description is available for this book yet.', book.description ? '' : 'none');
+    } catch {
+      if (mySeq !== seq) return;
+      setDescription('Couldn’t load the description right now — try again in a moment.', 'none');
+    }
+  }
+
+  // One-time "what's new" tip on the first shelf tile; retired as soon as the
+  // reader actually opens a book (they've found it — no need to keep nagging).
+  function announce(grid) {
+    const first = grid && grid.querySelector('.tile');
+    if (!first) return;
+    dismissTip = spotlightFeature({
+      id: 'book-details-2026-10',
+      target: first,
+      bubbleAt: { el: grid, where: 'beforebegin' },
+      title: '📖 New: tap a book to learn more',
+      body: 'Tap or click any book to see a bigger cover and what it’s about. Give it a try!',
+      el,
+    });
+  }
+
+  return { open, announce };
 }
 
 // Search box for the WHOLE library (not just the recent shelf) + the

@@ -219,6 +219,51 @@ async function toReaderTile(b, recipient) {
   };
 }
 
+/** PURE: best-effort upgrade of a tile-sized cover URL to a larger rendition
+ *  for the book-details modal. Only rewrites hosts whose size convention we
+ *  know (Open Library `-S/-M` → `-L`; Amazon `._SX300_` style size tokens
+ *  stripped → original upload); anything else is returned unchanged. The
+ *  client falls back to the tile cover if the larger one fails to load. */
+function largeCoverUrl(url) {
+  const u = String(url || '');
+  if (!u) return null;
+  if (/^https?:\/\/covers\.openlibrary\.org\//.test(u)) return u.replace(/-[SM](\.jpg)$/i, '-L$1');
+  if (/^https?:\/\/[^/]*(media-amazon|images-amazon|ssl-images-amazon)\.com\//.test(u)) {
+    return u.replace(/\._[^/]*?_(\.[a-z]+)$/i, '$1');
+  }
+  return u;
+}
+
+/**
+ * Details for ONE shelf book (the tap-a-book modal): the same safe tile
+ * payload plus a larger cover and the catalog blurb. Only sendable books are
+ * reachable — an unknown/unsendable id returns null (→ 404), so the endpoint
+ * can't be used to probe the rest of history. The blurb comes from the
+ * disk-cached covers.resolveMeta (each book looked up at most once); a lookup
+ * failure just means no description, never an error.
+ * `opts.resolveMeta` is injectable for tests (no network).
+ */
+async function bookDetailsForReader(recipient, id, opts = {}) {
+  if (!id || typeof id !== 'string') return null;
+  const pendingIndex = ensureStorageIndex();
+  if (pendingIndex) await pendingIndex;
+  const b = sendableBooks(buildBooks()).find((x) => x.id === id);
+  if (!b) return null;
+  const tile = await toReaderTile(b, recipient);
+  const resolve = opts.resolveMeta || covers.resolveMeta;
+  let meta = { cover: null, description: null };
+  try {
+    meta = (await resolve({ title: b.title, author: b.author })) || meta;
+  } catch { /* no blurb — the modal still shows the cover + title */ }
+  const cover = tile.cover || meta.cover || null;
+  return {
+    ...tile,
+    cover,
+    coverLarge: largeCoverUrl(cover),
+    description: meta.description || '',
+  };
+}
+
 /** PURE: slice a page off an ordered list. `hasMore` tells the client whether
  *  to keep observing for the next scroll-triggered page. */
 function paginate(list, offset, limit) {
@@ -578,6 +623,187 @@ function buildNewBooksEmail(recipient, books) {
   };
 }
 
+// --- feature announcements ------------------------------------------------------
+// One-off "what's new" emails to readers. Each announcement has a stable id;
+// a recipient is stamped (`readerAnnouncements[id]`) right after their send so
+// re-running never double-emails anyone. Readers who unsubscribed
+// (readerEnabled === false) are skipped — this is still a reader email.
+
+const BOOK_DETAILS_ANNOUNCEMENT = 'book-details-2026-10';
+
+/** PURE: trim a catalog blurb to a teaser that ends on a word, with an ellipsis. */
+function teaser(text, max = 220) {
+  const t = String(text || '').replace(/\s+/g, ' ').trim();
+  if (t.length <= max) return t;
+  const cut = t.slice(0, max);
+  const sp = cut.lastIndexOf(' ');
+  return (sp > max * 0.6 ? cut.slice(0, sp) : cut).replace(/[\s.,;:—-]+$/, '') + '…';
+}
+
+/** PURE: the "tap a book to peek inside" announcement email. `sample` is an
+ *  optional real shelf book `{ title, author, cover, description }` rendered
+ *  as a mini version of the new details card, so the reader sees exactly what
+ *  they'll get; without one, a generic illustrated card stands in. Covers ride
+ *  as an inline CID image (like the new-books email). */
+function buildBookDetailsAnnouncement(recipient, sample = null) {
+  const link = readerLink(recipient);
+  const name = String(recipient.name || '').split(/\s+/)[0] || 'there';
+  const attachments = [];
+
+  const s = sample && sample.title ? sample : null;
+  let coverCell = `<div style="width:96px;height:144px;border-radius:9px;
+      background:linear-gradient(135deg,${NAVY},#2a3a72);text-align:center;line-height:144px;font-size:40px">📖</div>`;
+  if (s && /^https?:\/\//i.test(String(s.cover || ''))) {
+    attachments.push({ filename: 'cover.jpg', path: s.cover, cid: 'feature-cover@book' });
+    coverCell = `<img src="cid:feature-cover@book" alt="" width="96"
+      style="width:96px;height:auto;display:block;border-radius:9px;box-shadow:0 6px 18px rgba(0,0,0,0.25)">`;
+  }
+  const cardTitle = s ? escapeHtml(s.title) : 'Your next great read';
+  const cardAuthor = s ? (s.author ? 'by ' + escapeHtml(s.author) : '') : 'by a favorite author';
+  const cardDesc = s && s.description
+    ? escapeHtml(teaser(s.description))
+    : 'A bigger look at the cover, plus what the book is about — so you can decide if it’s the one before you send it.';
+
+  // A little mock of the new modal: dimmed "shelf" behind, a white card in
+  // front with the ✕, a big cover, the blurb and the orange Send button.
+  const mock = `
+    <tr><td style="padding:18px 28px 0">
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0"
+             style="background:#2b3150;border-radius:14px">
+        <tr><td style="padding:18px">
+          <table role="presentation" width="100%" cellpadding="0" cellspacing="0"
+                 style="background:#ffffff;border-radius:12px;box-shadow:0 10px 30px rgba(0,0,0,0.35)">
+            <tr><td align="right" style="padding:10px 12px 0">
+              <span style="display:inline-block;width:26px;height:26px;line-height:26px;text-align:center;
+                           border-radius:13px;background:${PAPER};color:${INK};font-size:13px">✕</span>
+            </td></tr>
+            <tr><td style="padding:0 18px 18px">
+              <table role="presentation" cellpadding="0" cellspacing="0" width="100%"><tr>
+                <td valign="top" width="96" style="padding:0 16px 0 0">${coverCell}</td>
+                <td valign="top">
+                  <p style="margin:0 0 3px;font-size:16px;font-weight:800;color:${INK};line-height:1.3">${cardTitle}</p>
+                  ${cardAuthor ? `<p style="margin:0 0 8px;font-size:13px;color:${MUTED}">${cardAuthor}</p>` : ''}
+                  <p style="margin:0 0 12px;font-size:13px;color:#3a3f47;line-height:1.55">${cardDesc}</p>
+                  <span style="display:inline-block;background:${ACCENT};color:#ffffff;font-size:12px;font-weight:700;
+                               padding:8px 12px;border-radius:8px">📤 Send to my Kindle</span>
+                </td>
+              </tr></table>
+            </td></tr>
+          </table>
+        </td></tr>
+      </table>
+    </td></tr>`;
+
+  const steps = [
+    ['👆', 'Tap or click any book on your shelf.'],
+    ['📖', 'See a bigger cover and what the story is about.'],
+    ['📤', 'Like it? Send it to your Kindle right from there.'],
+  ].map(([icon, txt]) => `<tr>
+      <td valign="top" width="30" style="padding:0 10px 10px 0;font-size:18px;line-height:1.4">${icon}</td>
+      <td valign="top" style="padding:0 0 10px;font-size:15px;color:${INK};line-height:1.5">${txt}</td>
+    </tr>`).join('');
+
+  const body = `
+    <tr><td style="padding:14px 28px 0">
+      <p style="margin:0 0 10px;font-size:16px;color:${INK};line-height:1.6">Hi ${escapeHtml(name)},</p>
+      <p style="margin:0;font-size:15px;color:${MUTED};line-height:1.65">
+        Your BookHunt shelf just got a little better. Not sure what a book is about?
+        Now you can <b style="color:${INK}">tap it to take a closer look</b> before you send it.
+      </p>
+    </td></tr>
+    ${mock}
+    <tr><td style="padding:20px 28px 0">
+      <table role="presentation" cellpadding="0" cellspacing="0" width="100%">${steps}</table>
+    </td></tr>
+    ${ctaRow(link, 'Try it on my shelf →', '10px 28px 6px')}
+    <tr><td style="padding:8px 28px 22px">
+      <div style="background:${PAPER};border-left:3px solid ${ACCENT};border-radius:8px;
+                  padding:12px 15px;color:#3a3f47;font-size:13px;line-height:1.6">
+        💡 To close it, tap the ✕ or anywhere outside the card — you’re right back on your shelf.
+      </div>
+    </td></tr>`;
+
+  const footerNote =
+    `Rather not get BookHunt emails? <a href="${escapeHtml(link + '&unsub=1')}" style="color:#9a93a1">Stop these emails</a> ` +
+    `— your shelf still works anytime.`;
+
+  return {
+    subject: `✨ New on your shelf: tap a book to peek inside`,
+    text:
+      `Hi ${name},\n\n` +
+      `Your BookHunt shelf just got a little better. Not sure what a book is about? ` +
+      `Now you can tap it to take a closer look before you send it:\n\n` +
+      `  1. Tap or click any book on your shelf.\n` +
+      `  2. See a bigger cover and what the story is about.\n` +
+      `  3. Like it? Send it to your Kindle right from there.\n\n` +
+      `Try it out:\n${link}\n\n` +
+      `To close it, tap the X or anywhere outside the card.\n\n` +
+      `Sent with love by Eric via BookHunt`,
+    html: emailShell('New on your shelf', body, footerNote),
+    attachments,
+  };
+}
+
+/** PURE: who gets a feature announcement — readers with a shelf link and an
+ *  email, still opted in, and not already sent this announcement id. */
+function announcementTargets(list, id) {
+  return (list || []).filter((r) =>
+    r && r.readerToken && r.email && r.readerEnabled !== false &&
+    !(r.readerAnnouncements && r.readerAnnouncements[id]));
+}
+
+/** Pick a real shelf book to feature in the announcement: the newest sendable
+ *  book that has a cover AND a catalog blurb (checks at most `tries` books).
+ *  Null when none qualifies — the email then uses its generic card. */
+async function pickAnnouncementSample(opts = {}) {
+  const resolve = opts.resolveMeta || covers.resolveMeta;
+  const tries = opts.tries || 8;
+  const pendingIndex = ensureStorageIndex();
+  if (pendingIndex) await pendingIndex;
+  for (const b of sendableBooks(buildBooks()).slice(0, tries)) {
+    let meta = { cover: null, description: null };
+    try { meta = (await resolve({ title: b.title, author: b.author })) || meta; } catch { continue; }
+    const cover = b.cover || meta.cover;
+    if (cover && meta.description) {
+      return { title: b.title, author: b.author || '', cover: largeCoverUrl(cover), description: meta.description };
+    }
+  }
+  return null;
+}
+
+/**
+ * Send the tap-a-book announcement. Dry run unless `send: true`: returns the
+ * target list and the sample without emailing or stamping anyone. Each real
+ * send stamps that recipient (fresh read-modify-write, like notifyNewBooks),
+ * so a re-run only reaches readers not yet emailed. `only` limits to one
+ * recipient id (e.g. send yourself a test first). Never throws per-recipient;
+ * failures are reported in the result.
+ */
+async function announceBookDetails({ send = false, only = null, sample, now = Date.now() } = {}) {
+  const id = BOOK_DETAILS_ANNOUNCEMENT;
+  let targets = announcementTargets(recipients.readAll(), id);
+  if (only) targets = targets.filter((r) => r.id === only || r.email === only);
+  const featured = sample !== undefined ? sample : await pickAnnouncementSample();
+  const result = { id, dryRun: !send, sample: featured, targets: targets.map((r) => ({ id: r.id, name: r.name, email: r.email })), sent: [], failed: [] };
+  if (!send) return result;
+  if (!smtp.isConfigured()) throw new Error('SMTP is not configured');
+  for (const r of targets) {
+    try {
+      const msg = buildBookDetailsAnnouncement(r, featured);
+      await smtp.getTransport().sendMail({ from: smtp.FROM, to: r.email, ...msg });
+      recipients.mutate((fresh) => {
+        const target = fresh.find((x) => x.id === r.id);
+        if (!target) return false;
+        target.readerAnnouncements = { ...(target.readerAnnouncements || {}), [id]: new Date(now).toISOString() };
+      });
+      result.sent.push(r.email);
+    } catch (err) {
+      result.failed.push({ email: r.email, error: err.message });
+    }
+  }
+  return result;
+}
+
 /** Email the invite (mints the token if needed). */
 async function invite(id) {
   const r = ensureToken(id);
@@ -655,9 +881,12 @@ module.exports = {
   buildManifest,
   booksForReaderPage,
   searchForReader,
+  bookDetailsForReader,
   sendToReader,
   invite,
   notifyNewBooks,
+  announceBookDetails,
+  BOOK_DETAILS_ANNOUNCEMENT,
   emailShell, // shared branded card shell (also used by the radar digest)
   // exported for unit tests
   recentBooks,
@@ -673,4 +902,9 @@ module.exports = {
   fuzzyScore,
   planReaderWatch,
   toReaderTile,
+  largeCoverUrl,
+  buildBookDetailsAnnouncement,
+  announcementTargets,
+  pickAnnouncementSample,
+  teaser,
 };
