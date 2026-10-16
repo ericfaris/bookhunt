@@ -71,3 +71,10 @@
 - Gotcha: the focus-trap `MutationObserver` focuses the first focusable *after* the dialog opens, so any `.focus()` you set on open gets overridden. That's why Cancel (not OK) gets default focus on confirms, which is the safe default for destructive ones anyway. To focus something else, reorder the markup.
 - The dialog uses `z-index: 80` because it can open from the mega view (35) and lightbox (60).
 - The reader footer's "Stop the new-book emails" used to unsubscribe on a single tap. The reader UI has no modal, so it now uses the same inline `.note` Yes/Keep bar as the `?unsub=1` email path.
+
+## 2026-10-16 — House app-icon standard (all *.mooseflip.com apps)
+- The standard comes from redline (heat) and jambo. Each app has one bold, dimensional mark on a rich tile. The file set is `favicon.ico` (16/32/48), `apple-touch-icon.png` (180, square), `icon-192/512.png` (rounded, transparent corners) and `icon-maskable-512.png` (mark at 0.8 scale), all listed in the manifest. Every repo got `scripts/icons/{icon.svg,build.py}`. The master has `#bg`, `#mark` and an optional `#mark-small` (favicon-only) layer, and Playwright renders the variants. Python is the only dependency, even in Node repos.
+- Detailed marks turn to mush at 16px, so add a `#mark-small` that zooms in or drops detail (slipcast drops its waves, meal-mate drops the platter).
+- Before redrawing a project's icon, check it for an existing brand mark (meal-mate's Two Cloches, tools' drafting compass) and render that mark dimensionally instead of inventing a new one.
+- Check what else uses the old icon files. vandal-preachers uses `/icon-192.png` as an in-app emblem. That project was skipped at the user's request.
+- A service worker that caches icons needs its cache name bumped, or installed copies keep showing the old icons. bookhunt sw v6, study sw v6 and meal-mate's version bump all handle this.
