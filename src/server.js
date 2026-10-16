@@ -108,9 +108,23 @@ app.use('/reader/api', (_req, res, next) => {
   next();
 });
 
+// Cloudflare's Browser Cache TTL rewrites /reader/app.js to `max-age=14400`
+// regardless of our no-cache, so phones kept running the OLD script against
+// the NEW page for hours after a deploy (the tap-a-book modal did nothing).
+// The page itself stays no-cache (CF passes HTML through as DYNAMIC), so we
+// stamp the script URL with a content hash of reader.js: a changed script is a
+// new URL that no browser or edge cache has seen.
+const READER_HTML = path.join(__dirname, '..', 'public', 'reader.html');
+const READER_JS = path.join(__dirname, '..', 'public', 'reader.js');
+function readerPageHtml() {
+  const html = fs.readFileSync(READER_HTML, 'utf8');
+  const v = require('crypto').createHash('sha256').update(fs.readFileSync(READER_JS)).digest('hex').slice(0, 12);
+  return html.replace('src="/reader/app.js"', `src="/reader/app.js?v=${v}"`);
+}
+
 app.get('/reader', (_req, res) => {
   res.setHeader('Cache-Control', 'no-cache');
-  res.sendFile(path.join(__dirname, '..', 'public', 'reader.html'));
+  res.type('html').send(readerPageHtml());
 });
 
 // The page's script must live under /reader/* too — anywhere else and the CF

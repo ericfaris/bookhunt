@@ -306,3 +306,22 @@ test('pickAnnouncementSample: newest shelf book with cover + blurb, large cover 
   });
   assert.deepEqual(out, { title: 'Older', author: 'Someone', cover: 'https://covers.openlibrary.org/b/id/1-L.jpg', description: 'Great book.' });
 });
+
+// --- Cache-busting: the page must reference the CURRENT script ----------------------
+// Regression: Cloudflare rewrote /reader/app.js to max-age=14400, so phones ran
+// the old script (no tap handler) against the new page and taps did nothing.
+
+test('GET /reader: script URL carries a content hash of reader.js', async () => {
+  const crypto = require('node:crypto');
+  const v = crypto.createHash('sha256').update(fs.readFileSync(path.join(PUBLIC, 'reader.js'))).digest('hex').slice(0, 12);
+  await withServer(app, async (port) => {
+    const res = await request(port, 'GET', '/reader');
+    assert.equal(res.status, 200);
+    assert.ok(res.body.includes(`<script src="/reader/app.js?v=${v}"></script>`), 'versioned script tag');
+    assert.ok(!res.body.includes('src="/reader/app.js"'), 'no unversioned script tag left');
+    assert.ok(res.body.includes('id="bookDialog"'), 'still the full reader page');
+    const js = await request(port, 'GET', `/reader/app.js?v=${v}`);
+    assert.equal(js.status, 200);
+    assert.ok(js.body.includes('setupBookDetails'), 'versioned URL serves the script');
+  });
+});
