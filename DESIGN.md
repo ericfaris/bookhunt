@@ -369,6 +369,11 @@ page heading, and closes any dialog left open from the previous page.
   ("Delete", "New link"), red via `.danger-btn` when destructive. Focus
   starts on the field or Cancel; Escape and scrim click cancel. z-index 80
   so it sits above the mega view and lightbox.
+  **Every destructive action confirms first** — deletes, removing a watch,
+  rotating a reader link, cancelling re-upload requests (`test/dialogs.test.js`
+  enforces this per request). Reversible toggles (Pause/Resume) and in-flight
+  Cancel buttons don't. The reader Library has no modal: "Stop the new-book
+  emails" asks with an inline `.note` bar (Yes / Keep them).
 
 **Copy rules.** Actions are labeled with words ("Pause", "Remove", "Copy
 link"), not bare icons. The people books are shared with are **Readers**

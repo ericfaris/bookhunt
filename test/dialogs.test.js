@@ -56,3 +56,36 @@ test('destructive actions confirm via the danger dialog', () => {
   assert.match(js, /async function editBookTags[\s\S]*?await promptDialog\(/);
   assert.match(js, /if \(input === null\) return;/, 'cancelled tag prompt is a no-op');
 });
+
+// Every call that destroys or withdraws something must sit behind a confirm.
+// Each entry: the request that does the damage, and the confirm that must
+// come before it within the same handler.
+test('every destructive request is preceded by a confirmation', () => {
+  const guarded = [
+    ["fetch('/api/recipients/' + r.id + '/reader-token'", 'confirmDialog'],
+    ["fetch('/api/recipients/' + r.id, { method: 'DELETE' })", 'confirmDialog'],
+    ["fetch('/api/recipient-groups/' + g.id, { method: 'DELETE' })", 'confirmDialog'],
+    ["fetch('/api/library/' + id, { method: 'DELETE' })", 'confirmDialog'],
+    ["fetch('/api/library/' + book.id, { method: 'DELETE' })", 'confirmDialog'],
+    ['fetch(`/api/watchlist/${w.id}`, { method: \'DELETE\' })', 'confirmDialog'],
+    ["fetch('/api/reupload/cancel'", 'confirmDialog'],
+  ];
+  for (const [call, guard] of guarded) {
+    const at = js.indexOf(call);
+    assert.ok(at > 0, `found ${call}`);
+    const before = js.slice(Math.max(0, at - 700), at);
+    assert.ok(before.includes(`await ${guard}(`), `${call} is confirmed first`);
+  }
+  // Nothing new deletes without being added above.
+  const deletes = js.match(/method: 'DELETE'/g) || [];
+  assert.equal(deletes.length, 5, 'a new DELETE call needs a confirm + an entry here');
+});
+
+test('reader: stopping emails always asks first, never on load', () => {
+  const rjs = read('reader.js');
+  const click = rjs.slice(rjs.indexOf("$('#unsub').onclick"));
+  assert.match(click.slice(0, 200), /askStopEmails\(/, 'footer link asks instead of unsubscribing');
+  assert.ok(!/\$\('#unsub'\)\.onclick[^}]*\/reader\/api\/unsubscribe/.test(rjs), 'footer link does not POST directly');
+  assert.match(rjs, /yes\.onclick = \(\) => \{ bar\.remove\(\); stopEmails\(\); \}/);
+  assert.match(rjs, /if \(qs\.get\('unsub'\) === '1'\) askStopEmails\(/);
+});

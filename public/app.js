@@ -2878,6 +2878,13 @@ function renderReupRequests(data) {
   cancelBtn.textContent = 'Cancel selected';
   cancelBtn.onclick = async () => {
     if (!selected.size) return;
+    if (!await confirmDialog({
+      title: `Cancel ${selected.size} re-upload request${selected.size === 1 ? '' : 's'}?`,
+      message: "They're withdrawn on Mobilism. To get one back you'd have to request it again.",
+      confirmLabel: 'Cancel requests',
+      cancelLabel: 'Keep',
+      danger: true,
+    })) return;
     cancelBtn.disabled = true;
     const prev = cancelBtn.textContent;
     cancelBtn.textContent = 'Cancelling…';
@@ -3137,6 +3144,12 @@ function renderWatchlist(allWatches) {
     }
     const del = el('button', { className: 'ghost-btn watch-del btn-danger', type: 'button' }, 'Remove');
     del.addEventListener('click', async () => {
+      if (!await confirmDialog({
+        title: `Remove the watch for “${w.title || 'this book'}”?`,
+        message: 'BookHunt stops checking for it and no one is emailed if it shows up.',
+        confirmLabel: 'Remove',
+        danger: true,
+      })) return;
       del.disabled = true; del.textContent = 'Removing…';
       try {
         const res = await fetch(`/api/watchlist/${w.id}`, { method: 'DELETE' });

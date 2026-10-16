@@ -133,8 +133,7 @@
 
   setupSearch(t, $, el, renderTile);
 
-  $('#unsub').onclick = async (e) => {
-    e.preventDefault();
+  const stopEmails = async () => {
     try {
       await fetch('/reader/api/unsubscribe', {
         method: 'POST',
@@ -145,20 +144,30 @@
     } catch { /* ignore */ }
   };
 
-  // Arriving from the email's "Stop these emails" link: ask, don't act.
-  // Auto-firing the unsubscribe here would let email link-scanners (which
-  // sometimes execute JS) silently unsubscribe readers just by prefetching.
-  if (qs.get('unsub') === '1') {
+  // Stopping the emails always asks first, wherever it starts. From the
+  // email's "Stop these emails" link (?unsub=1) we also must never act on
+  // load: email link-scanners (which sometimes execute JS) would silently
+  // unsubscribe readers just by prefetching.
+  const askStopEmails = (where, place) => {
+    if (document.getElementById('unsubAsk')) return;
     const yes = el('button', { className: 'add', type: 'button', textContent: 'Yes, stop the emails' });
     const no = el('button', { className: 'plain', type: 'button', textContent: 'Keep them' });
-    const bar = el('div', { className: 'note' }, [
+    const bar = el('div', { className: 'note', id: 'unsubAsk' }, [
       el('div', { style: 'margin-bottom:10px' }, 'Stop the new-book emails? Your Library link keeps working either way.'),
       yes, ' ', no,
     ]);
-    yes.onclick = () => { bar.remove(); $('#unsub').click(); };
+    yes.onclick = () => { bar.remove(); stopEmails(); };
     no.onclick = () => bar.remove();
-    $('#banner').append(bar);
-  }
+    place(where, bar);
+    no.focus();
+  };
+
+  $('#unsub').onclick = (e) => {
+    e.preventDefault();
+    askStopEmails($('#unsub'), (link, bar) => link.after(bar));
+  };
+
+  if (qs.get('unsub') === '1') askStopEmails($('#banner'), (banner, bar) => banner.append(bar));
 })();
 
 // A gentle, dismissable "Add BookHunt to your home screen" hint. Written for
