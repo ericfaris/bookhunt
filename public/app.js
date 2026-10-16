@@ -79,7 +79,12 @@ pasteBtn.addEventListener('click', async () => {
   let text = '';
   try { text = ((await navigator.clipboard.readText()) || '').trim(); } catch { /* blocked */ }
   if (!text) {
-    text = (window.prompt('Paste an Amazon link, or “Title — Author”:') || '').trim();
+    text = ((await promptDialog({
+      title: 'Paste a book',
+      message: "Couldn't read the clipboard. Paste an Amazon link, or “Title — Author”.",
+      confirmLabel: 'Fill',
+      input: { label: 'Amazon link or title', placeholder: 'Project Hail Mary — Andy Weir' },
+    })) || '').trim();
   }
   if (!text) return;
 
@@ -470,6 +475,60 @@ function el(tag, props = {}, children = []) {
   }
   return node;
 }
+
+// ---------------------------------------------------------------------------
+// In-app dialogs. The app never uses window.confirm/prompt/alert — the browser's
+// "<host> says" box ignores the design system. askDialog() drives #dialogModal
+// and resolves with true/false (confirm) or the entered string/null (prompt).
+// ---------------------------------------------------------------------------
+let dialogResolve = null;
+
+function askDialog({ title, message = '', confirmLabel = 'OK', cancelLabel = 'Cancel', danger = false, input = null }) {
+  if (dialogResolve) settleDialog(input ? null : false); // never stack two
+  $('#dialogTitle').textContent = title;
+  $('#dialogMessage').textContent = message;
+  $('#dialogOk').textContent = confirmLabel;
+  $('#dialogOk').classList.toggle('danger-btn', !!danger);
+  $('#dialogCancel').textContent = cancelLabel;
+  const field = $('#dialogField');
+  const box = $('#dialogInput');
+  field.hidden = !input;
+  if (input) {
+    $('#dialogLabel').textContent = input.label || '';
+    box.placeholder = input.placeholder || '';
+    box.value = input.value || '';
+  }
+  const modal = $('#dialogModal');
+  modal.dataset.kind = input ? 'prompt' : 'confirm';
+  return new Promise((resolve) => {
+    dialogResolve = resolve;
+    modal.hidden = false;
+    // Focus lands on the first control (the field, else Cancel — so Enter on a
+    // destructive confirm never deletes by accident) via the focus-trap observer.
+    if (input) { box.focus(); box.select(); }
+  });
+}
+
+function settleDialog(value) {
+  const resolve = dialogResolve;
+  dialogResolve = null;
+  $('#dialogModal').hidden = true;
+  if (resolve) resolve(value);
+}
+
+const confirmDialog = (opts) => askDialog(opts);
+const promptDialog = (opts) => askDialog({ confirmLabel: 'Save', ...opts, input: opts.input || {} });
+
+function cancelDialog() {
+  settleDialog($('#dialogModal').dataset.kind === 'prompt' ? null : false);
+}
+
+$('#dialogForm').addEventListener('submit', (e) => {
+  e.preventDefault();
+  settleDialog($('#dialogModal').dataset.kind === 'prompt' ? $('#dialogInput').value : true);
+});
+$('#dialogCancel').addEventListener('click', cancelDialog);
+$('#dialogModal').addEventListener('click', (e) => { if (e.target.id === 'dialogModal') cancelDialog(); });
 
 // Trailing-edge debounce: coalesces rapid calls (e.g. keystrokes) into one.
 function debounce(fn, ms) {
@@ -1505,7 +1564,12 @@ function renderManageList() {
     }, { title: 'Copy their private Library link' }) : null;
 
     const rotate = r.readerToken ? actionBtn('New link', async () => {
-      if (!window.confirm(`Give ${r.name} a new Library link? Their current link stops working until you re-invite them.`)) return;
+      if (!await confirmDialog({
+        title: `Give ${r.name} a new link?`,
+        message: 'Their current Library link stops working until you re-invite them.',
+        confirmLabel: 'New link',
+        danger: true,
+      })) return;
       await fetch('/api/recipients/' + r.id + '/reader-token', { method: 'POST' });
       await loadRecipients();
     }, { title: 'Replace their link (use if it was shared by mistake)' }) : null;
@@ -1527,7 +1591,12 @@ function renderManageList() {
     });
 
     const del = actionBtn('Delete', async () => {
-      if (!window.confirm(`Delete ${r.name}? Their Library link stops working and they're removed from every watch and group.`)) return;
+      if (!await confirmDialog({
+        title: `Delete ${r.name}?`,
+        message: "Their Library link stops working and they're removed from every watch and group.",
+        confirmLabel: 'Delete',
+        danger: true,
+      })) return;
       const res = await fetch('/api/recipients/' + r.id, { method: 'DELETE' });
       if (!res.ok) return fail('Could not delete. Try again.');
       await loadRecipients();
@@ -1740,7 +1809,12 @@ function renderGroupManageList() {
   for (const g of groupsCache) {
     const names = g.recipientIds.map((id) => (recipientsCache.find((r) => r.id === id) || {}).name).filter(Boolean);
     const del = actionBtn('Delete', async () => {
-      if (!window.confirm(`Delete the group “${g.name}”? The readers in it aren't affected.`)) return;
+      if (!await confirmDialog({
+        title: `Delete the group “${g.name}”?`,
+        message: "The readers in it aren't affected.",
+        confirmLabel: 'Delete',
+        danger: true,
+      })) return;
       await fetch('/api/recipient-groups/' + g.id, { method: 'DELETE' });
       await loadGroups();
     }, { danger: true });
@@ -2204,7 +2278,12 @@ function sendSelectedLibrary() {
 async function deleteSelectedLibrary() {
   const ids = [...librarySelection];
   if (!ids.length) return;
-  if (!window.confirm(`Delete ${ids.length} book${ids.length === 1 ? '' : 's'}? This removes the file from disk and clears its send history.`)) return;
+  if (!await confirmDialog({
+    title: `Delete ${ids.length} book${ids.length === 1 ? '' : 's'}?`,
+    message: 'This removes the file from the library and clears its send history.',
+    confirmLabel: 'Delete',
+    danger: true,
+  })) return;
   for (const id of ids) {
     try { await fetch('/api/library/' + id, { method: 'DELETE' }); } catch { /* keep going */ }
   }
@@ -2216,14 +2295,23 @@ async function deleteSelectedLibrary() {
 // selection dance. Removes the file from disk and the book's send history.
 async function deleteLibraryBook(book) {
   const name = book.title || book.filename || 'this book';
-  if (!window.confirm(`Delete “${name}”? This removes the file from disk and clears its send history.`)) return;
+  if (!await confirmDialog({
+    title: `Delete “${name}”?`,
+    message: 'This removes the file from the library and clears its send history.',
+    confirmLabel: 'Delete',
+    danger: true,
+  })) return;
   try { await fetch('/api/library/' + book.id, { method: 'DELETE' }); } catch { /* best effort */ }
   librarySelection.delete(book.id);
   await openLibrary();
 }
 
 async function editBookTags(book) {
-  const input = window.prompt('Tags for this book (comma-separated):', (book.tags || []).join(', '));
+  const input = await promptDialog({
+    title: 'Edit tags',
+    message: book.title || book.filename || '',
+    input: { label: 'Tags (comma-separated)', value: (book.tags || []).join(', ') },
+  });
   if (input === null) return;
   const tags = input.split(',').map((s) => s.trim()).filter(Boolean);
   try {
@@ -3744,7 +3832,7 @@ window.addEventListener('hashchange', showRoute);
 // surface, focus the first control when one opens, and restore focus to whatever
 // opened it on close. Surfaces are listed in dismissal priority (top-most first).
 // ---------------------------------------------------------------------------
-const FOCUS_SURFACES = ['#sendModal', '#credModal', '#batchModal', '#downloadModal'];
+const FOCUS_SURFACES = ['#dialogModal', '#sendModal', '#credModal', '#batchModal', '#downloadModal'];
 let focusReturnEl = null;
 
 function focusablesIn(container) {
@@ -3843,6 +3931,7 @@ document.addEventListener('click', (e) => {
 // ---------------------------------------------------------------------------
 document.addEventListener('keydown', (e) => {
   if (e.key !== 'Escape') return;
+  if (!$('#dialogModal').hidden) return cancelDialog();
   if (topbar.classList.contains('nav-open')) return closeNav();
   const lb = $('#lightbox');
   if (lb && !lb.hidden) return closeLightbox();

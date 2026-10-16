@@ -41,7 +41,7 @@ test('router: hash routes, hashchange listener, aria-current, per-page titles', 
 
 test('Readers page: labeled actions, confirmations, no alert() popups', () => {
   for (const label of ["'Re-invite'", "'Copy link'", "'New link'", "'Edit'", "'Delete'"]) assert.ok(js.includes(label), label);
-  assert.match(js, /window\.confirm\(`Delete \$\{r\.name\}\?/);
+  assert.match(js, /confirmDialog\(\{\s*title: `Delete \$\{r\.name\}\?`/);
   assert.ok(!/\balert\(/.test(js), 'no alert() left in app.js');
   assert.ok(html.includes('class="data-table readers-table"'));
 });

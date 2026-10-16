@@ -779,6 +779,15 @@ img.lib-cover { overflow: hidden; }
 .modal-card form { display: grid; gap: 0.9rem; margin-top: 1rem; }
 .modal-actions { display: flex; justify-content: flex-end; gap: 0.6rem; }
 
+/* In-app confirm / prompt (askDialog): sits above every other surface,
+   including the mega view and lightbox, since it can be raised from either. */
+.ask-modal { z-index: 80; }
+.ask-card { width: min(420px, 92vw); }
+.ask-message { margin: 0.5rem 0 0; color: var(--text-dim); line-height: 1.5; }
+.ask-message:empty { display: none; }
+.primary-btn.danger-btn { background: var(--danger); box-shadow: 0 2px 8px color-mix(in srgb, var(--danger) 35%, transparent); }
+.primary-btn.danger-btn:hover { background: color-mix(in srgb, var(--danger) 88%, #000); box-shadow: 0 4px 14px color-mix(in srgb, var(--danger) 45%, transparent); }
+
 [hidden] { display: none !important; }
 
 /* --- Batch mode ----------------------------------------------------------- */

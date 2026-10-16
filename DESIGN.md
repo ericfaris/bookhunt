@@ -358,9 +358,17 @@ page heading, and closes any dialog left open from the previous page.
   secondary or destructive row actions, so rows stay one line.
 - `.btn-sm`, `.btn-danger` (red text, red border on hover),
   `.link-btn` (a button that reads as text).
-- `.form-error` / `.row-error`: inline error text. The admin uses no
-  `alert()`; destructive actions use a plain `confirm()` that names
-  what will happen.
+- `.form-error` / `.row-error`: inline error text.
+- **Confirm / prompt dialog** (`#dialogModal`, `.ask-modal` + `.ask-card`):
+  the app never uses native `alert()` / `confirm()` / `prompt()` — the
+  browser's "<host> says" box ignores the design system. Call
+  `confirmDialog({ title, message, confirmLabel, danger })` (resolves
+  true/false) or `promptDialog({ title, message, input: { label, value } })`
+  (resolves string/null). The title asks the question and names the thing;
+  the message says the consequence; the confirm button is a verb
+  ("Delete", "New link"), red via `.danger-btn` when destructive. Focus
+  starts on the field or Cancel; Escape and scrim click cancel. z-index 80
+  so it sits above the mega view and lightbox.
 
 **Copy rules.** Actions are labeled with words ("Pause", "Remove", "Copy
 link"), not bare icons. The people books are shared with are **Readers**

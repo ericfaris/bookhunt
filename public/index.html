@@ -419,6 +419,26 @@
     </div>
   </div>
 
+  <!-- In-app confirm / prompt dialog: replaces native confirm()/prompt() so
+       every question the app asks matches the design system. Driven by
+       askDialog() in app.js. -->
+  <div id="dialogModal" class="modal ask-modal" role="alertdialog" aria-modal="true" aria-labelledby="dialogTitle" aria-describedby="dialogMessage" hidden>
+    <div class="modal-card ask-card">
+      <h2 id="dialogTitle"></h2>
+      <p id="dialogMessage" class="ask-message"></p>
+      <form id="dialogForm">
+        <div id="dialogField" class="field" hidden>
+          <label for="dialogInput" id="dialogLabel"></label>
+          <input id="dialogInput" type="text" autocomplete="off" />
+        </div>
+        <div class="modal-actions">
+          <button type="button" id="dialogCancel" class="ghost-btn">Cancel</button>
+          <button type="submit" id="dialogOk" class="primary-btn">OK</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
   <!-- Book "mega view": large cover + details over a blurred, see-through backdrop -->
   <div id="mega" class="mega" role="dialog" aria-modal="true" aria-labelledby="megaTitle" hidden>
     <button id="megaClose" class="mega-close" type="button" aria-label="Close">✕</button>
