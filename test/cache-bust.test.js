@@ -61,3 +61,13 @@ test('every local <script>/<link rel=stylesheet> in the shell pages is versioned
     }
   });
 });
+
+test('backfill removed: POST /api/lists/backfill/start is gone; /api/status has no backfill block', async () => {
+  await withServer(app, async (port) => {
+    const res = await request(port, 'POST', '/api/lists/backfill/start', {});
+    assert.equal(res.status, 404);
+    const st = await request(port, 'GET', '/api/status');
+    assert.equal(st.status, 200);
+    assert.ok(st.json.lists && !('backfill' in st.json.lists));
+  });
+});

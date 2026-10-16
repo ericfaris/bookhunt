@@ -383,3 +383,22 @@ test('buildDigest: skipped section shows the per-title reason note', () => {
   assert.ok(msg.text.includes('daily intake limit reached'));
   assert.ok(msg.html.includes('daily intake limit reached'));
 });
+
+// --- Most Read backfill removed (2026-10-16) ----------------------------------
+// The one-time backfill finished in Aug 2026 and was removed: no route, no
+// Settings control, no radar drain step, no digest section.
+
+test('backfill removed: no exports, no Settings button, no digest section', () => {
+  const lists = require('../src/lists');
+  const lw = require('../src/listwatcher');
+  for (const k of ['BACKFILL_TAG', 'defaultBackfill', 'buildBackfillQueue']) assert.equal(lists[k], undefined, k);
+  for (const k of ['drainBackfill', 'backfillDrawCount', 'classifyBackfillEntry']) assert.equal(lw[k], undefined, k);
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'index.html'), 'utf8');
+  const js = fs.readFileSync(path.join(__dirname, '..', 'public', 'app.js'), 'utf8');
+  assert.ok(!html.includes('setBackfillRun') && !js.includes('/api/lists/backfill'), 'UI control gone');
+  // A leftover "backfill-done" event in old state renders nothing.
+  const msg = buildDigest([{ type: 'backfill-done', count: 88 }]);
+  assert.ok(!msg || !String(msg.html).includes('Backfill complete'));
+});

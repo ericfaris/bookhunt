@@ -48,3 +48,4 @@
 - On the host, `.env` has an empty `DOWNLOAD_PATH`, so every book reads `filePresent:false` under r2. The container sets `/downloads`. Set `DOWNLOAD_PATH=/downloads` when running library scripts on the host.
 - `/reader/cover` is registered BEFORE the `/reader` 40/min limiter (a shelf page loads ~24 images), with its own 600/min limit.
 - Email covers skip the EPUB step (`epub:false`): it would read the book a second time on top of the Kindle attachment, and r2 send tests pin exactly one GetObject.
+- 2026-10-16: removed the one-time Goodreads Most Read backfill (finished Aug 2026: 88 watched). Route, Settings button, radar drain step, and digest section are gone; `lists.readState()` drops the legacy `backfill` key. The Most Read list stays a live-radar source, and the 18 watches it created keep their 'Backfill' tag as plain data.
