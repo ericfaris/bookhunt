@@ -31,14 +31,14 @@
     </h1>
     <button id="navToggle" class="nav-toggle ghost-btn" type="button"
             aria-label="Menu" aria-expanded="false" aria-controls="topbarActions">☰</button>
-    <div class="topbar-actions" id="topbarActions">
-      <button id="libraryToggle" class="ghost-btn" type="button">Library</button>
-      <button id="watchlistToggle" class="ghost-btn" type="button" title="Watchlist — get notified when a book shows up">🔔 Watchlist</button>
-      <button id="historyToggle" class="ghost-btn" type="button">History</button>
-      <button id="statusToggle" class="ghost-btn" type="button" title="Session, downloads & channels">Status</button>
-      <button id="recipientsToggle" class="ghost-btn" type="button" title="Manage recipients &amp; reader invites">👥 Recipients</button>
-      <button id="settingsToggle" class="ghost-btn" type="button" title="Settings" aria-label="Settings">⚙</button>
-    </div>
+    <nav class="topbar-actions topnav" id="topbarActions" aria-label="Sections">
+      <a href="#/" data-route="search">Search</a>
+      <a href="#/library" data-route="library">Library</a>
+      <a href="#/watchlist" data-route="watchlist">Watchlist</a>
+      <a href="#/readers" data-route="readers">Readers</a>
+      <a href="#/activity" data-route="activity">Activity</a>
+      <a href="#/settings" data-route="settings">Settings</a>
+    </nav>
   </header>
 
   <div id="warmBanner" class="warm-banner" hidden aria-live="polite">
@@ -57,7 +57,9 @@
     <span class="warm-shimmer" aria-hidden="true"></span>
   </div>
 
-  <main>
+  <main id="main">
+    <section class="page page-search" data-page="search" aria-labelledby="searchHeading">
+    <h2 id="searchHeading" class="sr-only">Search</h2>
     <form id="searchForm" class="search-card">
       <div class="card-toolbar">
         <button id="batchToggle" type="button" class="ghost-btn"
@@ -102,76 +104,239 @@
           or use Batch to look up a whole list at once.</p>
       </div>
     </section>
-  </main>
 
-  <!-- Library drawer -->
-  <aside id="libraryPanel" class="library-panel" role="dialog" aria-modal="true" aria-label="Library" hidden>
-    <div class="library-head">
-      <h2>Library</h2>
-      <button id="libraryClose" class="ghost-btn" type="button">✕</button>
-    </div>
-    <div class="library-search">
-      <input id="librarySearch" type="search" placeholder="Search by title or author…"
-             autocomplete="off" aria-label="Search library by title or author" />
-      <div id="libViewToggle" class="lib-view-toggle" role="group" aria-label="Library view">
-        <button id="libViewList" class="lib-view-btn" type="button" aria-label="List view" title="List view">☰</button>
-        <button id="libViewGrid" class="lib-view-btn" type="button" aria-label="Cover grid view" title="Cover grid">▦</button>
+    </section><!-- /search page -->
+
+    <!-- Library (admin) -->
+    <section class="page page-wide" data-page="library" aria-labelledby="libraryHeading" hidden>
+      <header class="page-head">
+        <div>
+          <h2 id="libraryHeading">Library</h2>
+          <p class="hint">Every book you've downloaded. Readers see the same books in their own Library.</p>
+        </div>
+        <span id="libraryCount" class="page-count" aria-live="polite"></span>
+      </header>
+      <div class="page-toolbar library-search">
+        <input id="librarySearch" type="search" placeholder="Search by title or author…"
+               autocomplete="off" aria-label="Search library by title or author" />
+        <label class="toolbar-field">Sort
+          <select id="librarySort">
+            <option value="newest">Newest first</option>
+            <option value="oldest">Oldest first</option>
+            <option value="title">Title A–Z</option>
+            <option value="author">Author A–Z</option>
+            <option value="sent">Most sent</option>
+          </select>
+        </label>
+        <label class="toolbar-field">Show
+          <select id="libraryShow">
+            <option value="all">All books</option>
+            <option value="unsent">Not sent yet</option>
+            <option value="sent">Sent</option>
+            <option value="missing">File missing</option>
+          </select>
+        </label>
+        <div id="libViewToggle" class="lib-view-toggle" role="group" aria-label="Library view">
+          <button id="libViewGrid" class="lib-view-btn" type="button" title="Cover wall">▦ Covers</button>
+          <button id="libViewList" class="lib-view-btn" type="button" title="Detail list">☰ Details</button>
+        </div>
       </div>
-      <span id="libraryCount" class="library-count" aria-live="polite"></span>
-    </div>
-    <div id="libTagBar" class="lib-tagbar" hidden></div>
-    <div id="libraryList" class="library-list"></div>
-    <div id="libActionBar" class="lib-actionbar" hidden></div>
-  </aside>
+      <div id="libTagBar" class="lib-tagbar" hidden></div>
+      <div id="libraryList" class="library-list"></div>
+      <div class="page-more"><button id="libraryMore" class="ghost-btn" type="button" hidden>Show more</button></div>
+      <div id="libActionBar" class="lib-actionbar" hidden></div>
+    </section>
 
-  <!-- History drawer -->
-  <aside id="historyPanel" class="history-panel" role="dialog" aria-modal="true" aria-label="Search history" hidden>
-    <div class="history-head">
-      <h2>Search History</h2>
-      <div class="history-head-actions">
-        <button id="reupReqOpen" class="ghost-btn" type="button" title="View &amp; cancel your Mobilism re-upload requests">↻ Requests</button>
-        <button id="historyClose" class="ghost-btn" type="button">✕</button>
-      </div>
-    </div>
-    <div id="historyList" class="history-list"></div>
-  </aside>
-  <div id="overlay" class="overlay" hidden></div>
-
-  <!-- Re-upload requests modal (issue #27) -->
-  <div id="reupReqModal" class="modal" role="dialog" aria-modal="true" aria-label="Re-upload requests" hidden>
-    <div class="modal-card reupreq-card">
-      <button id="reupReqClose" class="dl-close" type="button" aria-label="Close">✕</button>
-      <h2>Re-upload requests</h2>
-      <p class="hint">Your pending requests on Mobilism — the authoritative list.</p>
-      <div id="reupReqBody" class="reupreq-body"><p class="hint">Loading…</p></div>
-      <div class="modal-actions">
-        <button id="reupReqCancelSel" class="ghost-btn" type="button" hidden>Cancel selected</button>
-        <span class="spacer"></span>
-        <button id="reupReqRefresh" class="ghost-btn" type="button">↻ Refresh</button>
-      </div>
-    </div>
-  </div>
-
-  <!-- Watchlist modal (issue #7) -->
-  <div id="watchlistModal" class="modal" role="dialog" aria-modal="true" aria-label="Watchlist" hidden>
-    <div class="modal-card watchlist-card">
-      <button id="watchlistClose" class="dl-close" type="button" aria-label="Close">✕</button>
-      <h2>🔔 Watchlist</h2>
-      <p class="hint">We re-check these on Mobilism in the background and email you the moment one shows up.</p>
+    <!-- Watchlist (issue #7) -->
+    <section class="page page-wide" data-page="watchlist" aria-labelledby="watchlistHeading" hidden>
+      <header class="page-head">
+        <div>
+          <h2 id="watchlistHeading">Watchlist</h2>
+          <p class="hint">Books BookHunt keeps checking for on Mobilism. You're emailed the moment one shows up.</p>
+        </div>
+      </header>
       <div id="watchlistNotice" class="reup-msg warn" hidden></div>
-
-      <form id="watchForm" class="watch-form">
+      <form id="watchForm" class="watch-form panel">
         <div class="watch-form-row">
-          <input id="watchTitle" type="text" placeholder="Title" autocomplete="off" />
-          <input id="watchAuthor" type="text" placeholder="Author (optional)" autocomplete="off" />
+          <label class="field-inline">Title<input id="watchTitle" type="text" placeholder="e.g. The Safe Room" autocomplete="off" /></label>
+          <label class="field-inline">Author<input id="watchAuthor" type="text" placeholder="optional" autocomplete="off" /></label>
           <button type="submit" class="primary-btn">Add watch</button>
         </div>
         <div id="watchAddRecipients" class="watch-recipients"></div>
       </form>
-
+      <div id="watchTabs" class="tabs" role="tablist" aria-label="Watch status"></div>
       <div id="watchlistBody" class="watchlist-body"><p class="hint">Loading…</p></div>
-    </div>
-  </div>
+    </section>
+
+    <!-- Readers (was Recipients) -->
+    <section class="page page-wide" data-page="readers" aria-labelledby="readersHeading" hidden>
+      <header class="page-head">
+        <div>
+          <h2 id="readersHeading">Readers</h2>
+          <p class="hint">The people you share books with. Each gets a private Library link and can send books to their own Kindle.</p>
+        </div>
+        <span id="readersCount" class="page-count"></span>
+      </header>
+      <div class="readers-layout">
+        <div class="readers-main">
+          <div class="table-wrap"><table class="data-table readers-table">
+            <thead><tr><th scope="col">Reader</th><th scope="col">Library link</th><th scope="col"><span class="sr-only">Actions</span></th></tr></thead>
+            <tbody id="manageList"></tbody>
+          </table></div>
+
+          <section class="panel groups-panel" aria-labelledby="groupsHeading">
+            <h3 id="groupsHeading">Groups</h3>
+            <p class="hint">Pick a whole set of readers in one click when sending.</p>
+            <div id="groupManageList" class="group-list"></div>
+            <form id="groupForm" class="group-form">
+              <label class="field-inline">New group<input id="groupName" placeholder="e.g. Family" autocomplete="off" /></label>
+              <div id="groupMembers" class="group-members" role="group" aria-label="Members"></div>
+              <button type="submit" class="primary-btn">Save group</button>
+            </form>
+          </section>
+        </div>
+
+        <aside class="panel reader-form-panel" aria-labelledby="recipFormHeading">
+          <h3 id="recipFormHeading">Add a reader</h3>
+          <form id="recipForm" class="recip-form">
+            <label>Name<input id="rName" autocomplete="off" required /></label>
+            <label>Email <small class="hint">for notifications and their Library link</small><input id="rEmail" type="email" autocomplete="off" /></label>
+            <label>Kindle address <small class="hint">optional</small><input id="rKindle" type="email" placeholder="name@kindle.com" autocomplete="off" /></label>
+            <details class="recip-sms">
+              <summary>Text messages (not set up yet)</summary>
+              <label>Phone<input id="rPhone" placeholder="+1…" autocomplete="off" /></label>
+              <label>Carrier<input id="rCarrier" autocomplete="off" /></label>
+            </details>
+            <div class="form-actions">
+              <button type="submit" class="primary-btn" id="recipSubmit">Add reader</button>
+              <button type="button" class="ghost-btn" id="recipCancelEdit" hidden>Cancel</button>
+            </div>
+          </form>
+        </aside>
+      </div>
+    </section>
+
+    <!-- Activity (was History) + re-upload requests (issue #27) -->
+    <section class="page page-wide" data-page="activity" aria-labelledby="activityHeading" hidden>
+      <header class="page-head">
+        <div>
+          <h2 id="activityHeading">Activity</h2>
+          <p class="hint">Everything BookHunt has done: downloads, sends, watch matches and searches.</p>
+        </div>
+        <span id="activityCount" class="page-count"></span>
+      </header>
+      <div class="tabs" role="tablist" aria-label="Activity views">
+        <button id="actTabLog" class="tab" role="tab" type="button" aria-selected="true">Activity log</button>
+        <button id="actTabReq" class="tab" role="tab" type="button" aria-selected="false">Re-upload requests</button>
+      </div>
+      <div id="activityLogView">
+        <div id="activityFilters" class="chip-row" role="group" aria-label="Filter by type"></div>
+        <div id="historyList" class="activity-list"></div>
+        <div class="page-more"><button id="activityMore" class="ghost-btn" type="button" hidden>Show older</button></div>
+      </div>
+      <div id="activityReqView" hidden>
+        <p class="hint">Your pending requests on Mobilism (the authoritative list).</p>
+        <div id="reupReqBody" class="reupreq-body"><p class="hint">Loading…</p></div>
+        <div class="page-actions">
+          <button id="reupReqCancelSel" class="ghost-btn" type="button" hidden>Cancel selected</button>
+          <span class="spacer"></span>
+          <button id="reupReqRefresh" class="ghost-btn" type="button">↻ Refresh</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- Settings + system status -->
+    <section class="page page-wide" data-page="settings" aria-labelledby="settingsHeading" hidden>
+      <header class="page-head">
+        <div><h2 id="settingsHeading">Settings</h2></div>
+      </header>
+      <div class="settings-layout">
+        <nav class="settings-nav" aria-label="Settings sections">
+          <a href="#set-status">System status</a>
+          <a href="#set-downloader">Downloader</a>
+          <a href="#set-notifications">Notifications</a>
+          <a href="#set-watchlist">Watchlist</a>
+          <a href="#set-radar">Release radar</a>
+          <a href="#set-version">Version</a>
+        </nav>
+        <div class="settings-body">
+          <section class="set-section" id="set-status">
+            <div class="set-section-head"><h3>System status</h3><button id="statusRefresh" class="ghost-btn" type="button">↻ Refresh</button></div>
+            <div id="statusBody" class="status-body"><p class="hint">Loading…</p></div>
+          </section>
+          <section class="set-section" id="set-downloader">
+            <h3>Premium downloader</h3>
+            <p class="hint" id="setPremStatus">Checking…</p>
+            <button id="setPremUpdate" class="ghost-btn" type="button">Update credentials</button>
+          </section>
+
+          <section class="set-section" id="set-notifications">
+            <h3>Notifications</h3>
+            <div id="setChannels" class="set-channels"></div>
+            <p class="hint">Send yourself a test email to confirm SMTP works:</p>
+            <div class="set-test">
+              <input id="setTestEmail" type="email" placeholder="you@example.com" autocomplete="off" />
+              <button id="setTestBtn" class="primary-btn" type="button">Send test</button>
+            </div>
+            <div id="setTestResult" class="set-test-result"></div>
+          </section>
+
+          <section class="set-section" id="set-watchlist">
+            <h3>Watchlist</h3>
+            <p class="hint">How often each saved search is re-checked on Mobilism in the background.</p>
+            <div class="set-cadence">
+              <label for="setWatchCadence">Re-check every</label>
+              <select id="setWatchCadence">
+                <option value="15">15 minutes</option>
+                <option value="30">30 minutes</option>
+                <option value="60">1 hour</option>
+                <option value="180">3 hours</option>
+                <option value="360">6 hours</option>
+                <option value="720">12 hours</option>
+                <option value="1440">Daily</option>
+              </select>
+            </div>
+            <div id="setWatchResult" class="set-test-result"></div>
+          </section>
+
+          <section class="set-section" id="set-radar">
+            <h3>New-release radar</h3>
+            <p class="hint">Follows NYT bestseller and Goodreads popular fiction lists — automatically watches, downloads, and shelves new entrants, with a digest email when there's news.</p>
+            <label class="set-toggle"><input id="setListsEnabled" type="checkbox" /> Watch bestseller lists</label>
+            <div class="set-cadence">
+              <label for="setListCadence">Check lists every</label>
+              <select id="setListCadence">
+                <option value="6">6 hours</option>
+                <option value="12">12 hours</option>
+                <option value="24">Daily</option>
+                <option value="168">Weekly</option>
+              </select>
+            </div>
+            <div class="set-cadence">
+              <label for="setListMaxPerRun">Add at most</label>
+              <select id="setListMaxPerRun">
+                <option value="5">5 books / check</option>
+                <option value="10">10 books / check</option>
+                <option value="15">15 books / check</option>
+                <option value="25">25 books / check</option>
+                <option value="50">50 books / check</option>
+              </select>
+            </div>
+            <p class="hint">Caps how many new books each check adds to your watchlist, so a busy list can't flood it — the rest carry over to the next check.</p>
+            <div class="set-lists-row">
+              <button id="setListsRun" class="ghost-btn" type="button">⟳ Check lists now</button>
+              <span id="setListsStatus" class="hint"></span>
+            </div>
+            <div id="setListsResult" class="set-test-result"></div>
+          </section>
+          <section class="set-section" id="set-version">
+            <h3>Version</h3>
+            <div id="setVersion" class="set-version">Checking…</div>
+          </section>
+        </div>
+      </div>
+    </section>
+  </main>
 
   <!-- Batch input modal -->
   <div id="batchModal" class="modal" role="dialog" aria-modal="true" aria-label="Batch search" hidden>
@@ -246,133 +411,30 @@
       <div id="sendResults" class="send-results"></div>
 
       <div class="modal-actions">
-        <button type="button" id="manageToggle" class="ghost-btn">Manage recipients</button>
-        <button type="button" id="groupsToggle" class="ghost-btn">Groups</button>
+        <a href="#/readers" id="manageToggle" class="ghost-btn">Manage readers &amp; groups</a>
         <span class="spacer"></span>
         <button type="button" id="sendCancel" class="ghost-btn">Close</button>
         <button type="button" id="sendGo" class="primary-btn">Send</button>
       </div>
+    </div>
+  </div>
 
-      <div id="managePanel" hidden>
-        <h3>Groups</h3>
-        <p class="hint">Check recipients above, then save them as a reusable group.</p>
-        <form id="groupForm" class="group-form">
-          <input id="groupName" placeholder="Group name (e.g. Family)" autocomplete="off" />
-          <button type="submit" class="primary-btn">Save selected as group</button>
-        </form>
-        <div id="groupManageList" class="manage-list"></div>
+  <!-- Book "mega view": large cover + details over a blurred, see-through backdrop -->
+  <div id="mega" class="mega" role="dialog" aria-modal="true" aria-labelledby="megaTitle" hidden>
+    <button id="megaClose" class="mega-close" type="button" aria-label="Close">✕</button>
+    <button id="megaPrev" class="mega-nav mega-prev" type="button" aria-label="Previous book">‹</button>
+    <button id="megaNext" class="mega-nav mega-next" type="button" aria-label="Next book">›</button>
+    <div id="megaStage" class="mega-stage">
+      <div id="megaArt" class="mega-art"></div>
+      <div class="mega-info">
+        <p id="megaEyebrow" class="mega-eyebrow"></p>
+        <h2 id="megaTitle" class="mega-title"></h2>
+        <p id="megaAuthor" class="mega-author"></p>
+        <div id="megaMeta" class="mega-meta"></div>
+        <div id="megaDesc" class="mega-desc"></div>
+        <div id="megaSends" class="mega-sends"></div>
+        <div id="megaActions" class="mega-actions"></div>
       </div>
-    </div>
-  </div>
-
-  <!-- Settings modal -->
-  <div id="settingsModal" class="modal" role="dialog" aria-modal="true" aria-label="Settings" hidden>
-    <div class="modal-card settings-card">
-      <button id="settingsClose" class="dl-close" type="button" aria-label="Close">✕</button>
-      <h2>Settings</h2>
-
-      <section class="set-section">
-        <h3>Premium downloader</h3>
-        <p class="hint" id="setPremStatus">Checking…</p>
-        <button id="setPremUpdate" class="ghost-btn" type="button">Update credentials</button>
-      </section>
-
-      <section class="set-section">
-        <h3>Notifications</h3>
-        <div id="setChannels" class="set-channels"></div>
-        <p class="hint">Send yourself a test email to confirm SMTP works:</p>
-        <div class="set-test">
-          <input id="setTestEmail" type="email" placeholder="you@example.com" autocomplete="off" />
-          <button id="setTestBtn" class="primary-btn" type="button">Send test</button>
-        </div>
-        <div id="setTestResult" class="set-test-result"></div>
-      </section>
-
-      <section class="set-section">
-        <h3>Watchlist</h3>
-        <p class="hint">How often each saved search is re-checked on Mobilism in the background.</p>
-        <div class="set-cadence">
-          <label for="setWatchCadence">Re-check every</label>
-          <select id="setWatchCadence">
-            <option value="15">15 minutes</option>
-            <option value="30">30 minutes</option>
-            <option value="60">1 hour</option>
-            <option value="180">3 hours</option>
-            <option value="360">6 hours</option>
-            <option value="720">12 hours</option>
-            <option value="1440">Daily</option>
-          </select>
-        </div>
-        <div id="setWatchResult" class="set-test-result"></div>
-      </section>
-
-      <section class="set-section">
-        <h3>New-release radar</h3>
-        <p class="hint">Follows NYT bestseller and Goodreads popular fiction lists — automatically watches, downloads, and shelves new entrants, with a digest email when there's news.</p>
-        <label class="set-toggle"><input id="setListsEnabled" type="checkbox" /> Watch bestseller lists</label>
-        <div class="set-cadence">
-          <label for="setListCadence">Check lists every</label>
-          <select id="setListCadence">
-            <option value="6">6 hours</option>
-            <option value="12">12 hours</option>
-            <option value="24">Daily</option>
-            <option value="168">Weekly</option>
-          </select>
-        </div>
-        <div class="set-cadence">
-          <label for="setListMaxPerRun">Add at most</label>
-          <select id="setListMaxPerRun">
-            <option value="5">5 books / check</option>
-            <option value="10">10 books / check</option>
-            <option value="15">15 books / check</option>
-            <option value="25">25 books / check</option>
-            <option value="50">50 books / check</option>
-          </select>
-        </div>
-        <p class="hint">Caps how many new books each check adds to your watchlist, so a busy list can't flood it — the rest carry over to the next check.</p>
-        <div class="set-lists-row">
-          <button id="setListsRun" class="ghost-btn" type="button">⟳ Check lists now</button>
-          <span id="setListsStatus" class="hint"></span>
-        </div>
-        <div id="setListsResult" class="set-test-result"></div>
-      </section>
-
-      <section class="set-section">
-        <h3>Version</h3>
-        <div id="setVersion" class="set-version">Checking…</div>
-      </section>
-    </div>
-  </div>
-
-  <!-- Status / health modal -->
-  <div id="statusModal" class="modal" role="dialog" aria-modal="true" aria-label="Status" hidden>
-    <div class="modal-card status-card">
-      <button id="statusClose" class="dl-close" type="button" aria-label="Close">✕</button>
-      <h2>Status</h2>
-      <div id="statusBody" class="status-body"><p class="hint">Loading…</p></div>
-      <div class="modal-actions">
-        <span class="spacer"></span>
-        <button id="statusRefresh" class="ghost-btn" type="button">↻ Refresh</button>
-      </div>
-    </div>
-  </div>
-
-  <!-- Recipients management modal (top-level; no download/send context needed) -->
-  <div id="recipientsModal" class="modal" role="dialog" aria-modal="true" aria-label="Recipients" hidden>
-    <div class="modal-card recipients-card">
-      <button id="recipientsClose" class="dl-close" type="button" aria-label="Close">✕</button>
-      <h2>Recipients</h2>
-      <p class="hint">Add readers, invite them to their personal shelf, or remove them. No download needed.</p>
-      <form id="recipForm" class="recip-form">
-        <input id="rName" placeholder="Name" autocomplete="off" />
-        <input id="rEmail" type="email" placeholder="Email (notification)" autocomplete="off" />
-        <input id="rKindle" type="email" placeholder="name@kindle.com (optional)" autocomplete="off" />
-        <input id="rPhone" placeholder="Phone +1… (optional, future SMS)" autocomplete="off" />
-        <input id="rCarrier" placeholder="Carrier (optional)" autocomplete="off" />
-        <button type="submit" class="primary-btn" id="recipSubmit">Add</button>
-        <button type="button" class="ghost-btn" id="recipCancelEdit" hidden>Cancel edit</button>
-      </form>
-      <div id="manageList" class="manage-list"></div>
     </div>
   </div>
 

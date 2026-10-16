@@ -10,6 +10,9 @@ if ('serviceWorker' in navigator) {
 
 const $ = (sel) => document.querySelector(sel);
 
+// The page the hash router is showing (see "Pages & routing" near the end).
+let currentRoute = 'search';
+
 const searchForm = $('#searchForm');
 const searchBtn = $('#searchBtn');
 const statusEl = $('#status');
@@ -1372,7 +1375,7 @@ $('#credForm').addEventListener('submit', async (e) => {
   if (!res.ok) return;
   closeCredModal();
   $('#premPass').value = '';
-  if (settingsModal && !settingsModal.hidden) loadSettings();
+  if (currentRoute === 'settings') loadSettings();
   if (pendingPremium) {
     const { result, btn } = pendingPremium;
     pendingPremium = null;
@@ -1405,7 +1408,6 @@ async function openSendModal(ctx) {
   $('#sendBookLabel').textContent =
     `${b.title || b.filename}${b.author ? ' — ' + b.author : ''}`;
   $('#sendResults').innerHTML = '';
-  $('#managePanel').hidden = true;
   await loadChannels();
   await loadRecipients();
   await loadGroups();
@@ -1413,20 +1415,17 @@ async function openSendModal(ctx) {
 }
 function closeSendModal() { sendModal.hidden = true; sendCtx = null; }
 
-const recipientsModal = $('#recipientsModal');
-async function openRecipientsModal() {
-  await loadRecipients();     // refreshes recipientsCache + re-renders #manageList
-  recipientsModal.hidden = false;
+// Readers page (was the Recipients modal): entered via the router.
+async function enterReadersPage() {
+  await loadRecipients();     // refreshes recipientsCache + re-renders the table
+  await loadGroups();
 }
-function closeRecipientsModal() {
-  recipientsModal.hidden = true;
-  // Drop any in-progress edit. Without this, closing mid-edit leaves
+function leaveReadersPage() {
+  // Drop any in-progress edit. Without this, leaving mid-edit keeps
   // editingRecipientId set, and the next "Add" would silently PUT over the
-  // recipient that was being edited instead of creating a new one.
+  // reader that was being edited instead of creating a new one.
   resetRecipForm($('#recipForm'));
 }
-$('#recipientsToggle').addEventListener('click', openRecipientsModal);
-$('#recipientsClose').addEventListener('click', closeRecipientsModal);
 
 async function loadChannels() {
   try {
@@ -1447,7 +1446,7 @@ async function loadRecipients() {
   const list = $('#recipientList');
   list.innerHTML = '';
   if (!recipientsCache.length) {
-    list.append(el('p', { className: 'hint' }, 'No recipients yet — add one via “Manage recipients”.'));
+    list.append(el('p', { className: 'hint' }, 'No readers yet. Add one on the Readers page.'));
   }
   for (const r of recipientsCache) {
     const id = 'rc_' + r.id;
@@ -1458,71 +1457,119 @@ async function loadRecipients() {
     list.append(el('label', { className: 'recip-row', htmlFor: id }, [cb, ` ${r.name}${tag}`]));
   }
   renderManageList();
+  renderGroupMembers();
+}
+
+// The reader's private Library link (same shape the server emails).
+function readerLinkFor(r) {
+  return `${location.origin}/reader?t=${encodeURIComponent(r.readerToken || '')}`;
+}
+
+/** A small labeled action button that shows progress, then its outcome. */
+function actionBtn(label, onClick, { title, danger } = {}) {
+  const b = el('button', { className: 'ghost-btn btn-sm' + (danger ? ' btn-danger' : ''), type: 'button', title: title || '' }, label);
+  b.addEventListener('click', async () => {
+    b.disabled = true;
+    try { await onClick(b); } finally { if (b.isConnected) b.disabled = false; }
+  });
+  return b;
 }
 
 function renderManageList() {
-  const ml = $('#manageList');
-  ml.innerHTML = '';
+  const body = $('#manageList');
+  body.innerHTML = '';
+  $('#readersCount').textContent = recipientsCache.length ? `${recipientsCache.length} reader${recipientsCache.length === 1 ? '' : 's'}` : '';
   if (!recipientsCache.length) {
-    ml.append(el('p', { className: 'hint' }, 'No recipients yet — add one above.'));
+    const td = el('td', { colSpan: 3, className: 'table-empty' }, 'No readers yet. Add one with the form on the right.');
+    body.append(el('tr', {}, [td]));
     return;
   }
   for (const r of recipientsCache) {
-    const del = el('button', { className: 'ghost-btn', type: 'button' }, 'Delete');
-    del.addEventListener('click', async () => {
-      await fetch('/api/recipients/' + r.id, { method: 'DELETE' });
+    const err = el('div', { className: 'row-error', role: 'status' });
+    const fail = (msg) => { err.textContent = msg; };
+
+    // Reader portal (issue #34): invite (emails their magic link), copy the
+    // link, rotate it if it leaks.
+    const invite = actionBtn(r.readerToken ? 'Re-invite' : 'Invite', async (b) => {
+      b.textContent = 'Sending…';
+      const res = await fetch('/api/recipients/' + r.id + '/invite', { method: 'POST' });
+      const out = await res.json().catch(() => ({}));
+      if (!res.ok) { b.textContent = r.readerToken ? 'Re-invite' : 'Invite'; return fail(out.error || 'Invite failed.'); }
       await loadRecipients();
-    });
-    // Edit in place (issue #7): repopulate the add-form and PUT instead of
-    // POST, so this recipient keeps their id + reader token (magic link,
-    // installed home-screen app, and every watch's recipientIds survive).
-    const edit = el('button', { className: 'ghost-btn', type: 'button' }, 'Edit');
-    edit.addEventListener('click', () => {
+    }, { title: 'Email them their private Library link' });
+
+    const copy = r.readerToken ? actionBtn('Copy link', async (b) => {
+      try { await navigator.clipboard.writeText(readerLinkFor(r)); b.textContent = 'Copied ✓'; }
+      catch { fail(readerLinkFor(r)); }
+      setTimeout(() => { if (b.isConnected) b.textContent = 'Copy link'; }, 1500);
+    }, { title: 'Copy their private Library link' }) : null;
+
+    const rotate = r.readerToken ? actionBtn('New link', async () => {
+      if (!window.confirm(`Give ${r.name} a new Library link? Their current link stops working until you re-invite them.`)) return;
+      await fetch('/api/recipients/' + r.id + '/reader-token', { method: 'POST' });
+      await loadRecipients();
+    }, { title: 'Replace their link (use if it was shared by mistake)' }) : null;
+
+    // Edit in place (issue #7): repopulate the form and PUT instead of POST,
+    // so this reader keeps their id + token (magic link, installed home-screen
+    // app, and every watch's recipientIds survive).
+    const edit = actionBtn('Edit', async () => {
       editingRecipientId = r.id;
       $('#rName').value = r.name || '';
       $('#rEmail').value = r.email || '';
       $('#rKindle').value = r.kindleEmail || '';
       $('#rPhone').value = r.phone || '';
       $('#rCarrier').value = r.carrier || '';
+      $('#recipFormHeading').textContent = `Edit ${r.name}`;
       $('#recipSubmit').textContent = 'Save changes';
       $('#recipCancelEdit').hidden = false;
       $('#rName').focus();
     });
-    // Reader portal (issue #34): invite (emails their magic link), rotate the
-    // link if it leaks, and toggle their new-book emails.
-    const status = el('span', { className: 'hint recip-reader-status' },
-      r.readerToken ? (r.readerEnabled === false ? '🔕 shelf on, emails off' : '📖 shelf reader') : '');
-    const invite = el('button', { className: 'ghost-btn', type: 'button',
-      title: 'Email them their personal shelf link' }, r.readerToken ? '✉ Re-invite' : '✉ Invite');
-    invite.addEventListener('click', async () => {
-      invite.disabled = true;
-      invite.textContent = 'Sending…';
-      try {
-        const res = await fetch('/api/recipients/' + r.id + '/invite', { method: 'POST' });
-        const out = await res.json();
-        if (!res.ok) throw new Error(out.error || 'Invite failed');
-        invite.textContent = '✓ Invited';
-        await loadRecipients();
-      } catch (e) {
-        invite.disabled = false;
-        invite.textContent = '✕ ' + (e.message || 'Failed');
-      }
-    });
-    const rotate = r.readerToken
-      ? el('button', { className: 'ghost-btn', type: 'button',
-          title: 'New link — the old one stops working (use if a link leaks)' }, '♻')
-      : null;
-    if (rotate) rotate.addEventListener('click', async () => {
-      if (!window.confirm(`Give ${r.name} a new shelf link? Their old link stops working until you re-invite them.`)) return;
-      await fetch('/api/recipients/' + r.id + '/reader-token', { method: 'POST' });
+
+    const del = actionBtn('Delete', async () => {
+      if (!window.confirm(`Delete ${r.name}? Their Library link stops working and they're removed from every watch and group.`)) return;
+      const res = await fetch('/api/recipients/' + r.id, { method: 'DELETE' });
+      if (!res.ok) return fail('Could not delete. Try again.');
       await loadRecipients();
-    });
-    ml.append(
-      el('div', { className: 'manage-row' }, [
-        el('span', {}, [`${r.name} · ${r.email}${r.kindleEmail ? ' · ' + r.kindleEmail : ''} `, status]),
-        el('span', { className: 'manage-actions' }, [invite, rotate, edit, del]),
-      ])
-    );
+      await loadGroups();
+    }, { danger: true });
+
+    const linkCell = r.readerToken
+      ? el('td', {}, [
+          el('span', { className: 'pill pill-good' }, 'Invited'),
+          ' ',
+          el('span', { className: 'pill' + (r.readerEnabled === false ? '' : ' pill-soft') }, r.readerEnabled === false ? 'Emails off' : 'Emails on'),
+        ])
+      : el('td', {}, el('span', { className: 'pill pill-muted' }, 'Not invited'));
+
+    // Rarely-used and destructive actions sit behind "More" so the row stays
+    // one line wide.
+    const more = el('details', { className: 'menu' }, [
+      el('summary', { className: 'ghost-btn btn-sm' }, 'More ▾'),
+      el('div', { className: 'menu-list' }, [rotate, del].filter(Boolean)),
+    ]);
+    more.addEventListener('click', (ev) => { if (ev.target.closest('.menu-list button')) more.open = false; });
+
+    body.append(el('tr', {}, [
+      el('td', { className: 'cell-reader' }, [
+        el('div', { className: 'cell-title' }, r.name),
+        el('div', { className: 'cell-sub' }, r.email || 'No email'),
+        el('div', { className: 'cell-sub' }, r.kindleEmail ? `Kindle: ${r.kindleEmail}` : 'No Kindle address'),
+      ]),
+      linkCell,
+      el('td', { className: 'cell-actions' }, [el('div', { className: 'row-actions' }, [invite, copy, edit, more].filter(Boolean)), err]),
+    ]));
+  }
+}
+
+// Member checkboxes for the "new group" form on the Readers page.
+function renderGroupMembers() {
+  const box = $('#groupMembers');
+  if (!box) return;
+  box.innerHTML = '';
+  for (const r of recipientsCache) {
+    const cb = el('input', { type: 'checkbox', value: r.id });
+    box.append(el('label', { className: 'check-chip' }, [cb, ' ', r.name]));
   }
 }
 
@@ -1552,17 +1599,18 @@ function renderSendResults(results) {
 }
 
 $('#sendCancel').addEventListener('click', closeSendModal);
-$('#manageToggle').addEventListener('click', openRecipientsModal);
-$('#groupsToggle').addEventListener('click', () => {
-  const p = $('#managePanel');
-  p.hidden = !p.hidden;
-});
+// "Manage readers & groups" is a plain link to #/readers; just get the
+// dialog out of the way as the page changes.
+$('#manageToggle').addEventListener('click', () => { closeSendModal(); closeDownloadModal(); });
 
 function resetRecipForm(form) {
   editingRecipientId = null;
   form.reset();
-  $('#recipSubmit').textContent = 'Add';
+  $('#recipSubmit').textContent = 'Add reader';
+  $('#recipFormHeading').textContent = 'Add a reader';
   $('#recipCancelEdit').hidden = true;
+  const err = $('#recipError');
+  if (err) err.remove();
 }
 
 $('#recipCancelEdit').addEventListener('click', () => resetRecipForm($('#recipForm')));
@@ -1582,8 +1630,13 @@ $('#recipForm').addEventListener('submit', async (e) => {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   });
-  const data = await res.json();
-  if (!res.ok) { alert(data.error || (editing ? 'Could not save changes' : 'Could not add recipient')); return; }
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    let err = $('#recipError');
+    if (!err) { err = el('p', { id: 'recipError', className: 'form-error', role: 'alert' }); e.target.append(err); }
+    err.textContent = data.error || (editing ? 'Could not save changes.' : 'Could not add the reader.');
+    return;
+  }
   resetRecipForm(e.target);
   await loadRecipients();
 });
@@ -1685,13 +1738,14 @@ function renderGroupManageList() {
     return;
   }
   for (const g of groupsCache) {
-    const del = el('button', { className: 'ghost-btn', type: 'button' }, 'Delete');
-    del.addEventListener('click', async () => {
+    const names = g.recipientIds.map((id) => (recipientsCache.find((r) => r.id === id) || {}).name).filter(Boolean);
+    const del = actionBtn('Delete', async () => {
+      if (!window.confirm(`Delete the group “${g.name}”? The readers in it aren't affected.`)) return;
       await fetch('/api/recipient-groups/' + g.id, { method: 'DELETE' });
       await loadGroups();
-    });
-    ml.append(el('div', { className: 'manage-row' }, [
-      el('span', {}, `${g.name} · ${g.recipientIds.length} recipient${g.recipientIds.length === 1 ? '' : 's'}`),
+    }, { danger: true });
+    ml.append(el('div', { className: 'group-row' }, [
+      el('div', {}, [el('div', { className: 'cell-title' }, g.name), el('div', { className: 'cell-sub' }, names.join(', ') || `${g.recipientIds.length} readers`)]),
       del,
     ]));
   }
@@ -1700,26 +1754,30 @@ function renderGroupManageList() {
 $('#groupForm').addEventListener('submit', async (e) => {
   e.preventDefault();
   const name = $('#groupName').value.trim();
-  const recipientIds = recipientsCache.filter((r) => $('#rc_' + r.id) && $('#rc_' + r.id).checked).map((r) => r.id);
-  if (!name) { alert('Name the group first.'); return; }
-  if (!recipientIds.length) { alert('Check the recipients to include, then save the group.'); return; }
+  const recipientIds = [...$('#groupMembers').querySelectorAll('input:checked')].map((c) => c.value);
+  const say = (msg) => {
+    let err = $('#groupError');
+    if (!err) { err = el('p', { id: 'groupError', className: 'form-error', role: 'alert' }); e.target.append(err); }
+    err.textContent = msg;
+  };
+  if (!name) return say('Name the group first.');
+  if (!recipientIds.length) return say('Tick the readers to include.');
   const res = await fetch('/api/recipient-groups', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ name, recipientIds }),
   });
   const data = await res.json();
-  if (!res.ok) { alert(data.error || 'Could not save group'); return; }
+  if (!res.ok) return say(data.error || 'Could not save the group.');
   $('#groupName').value = '';
+  $('#groupError')?.remove();
+  renderGroupMembers();
   await loadGroups();
 });
 
 // ---------------------------------------------------------------------------
 // Settings — premium creds, notification channels, test email
 // ---------------------------------------------------------------------------
-const settingsModal = $('#settingsModal');
-$('#settingsToggle').addEventListener('click', openSettings);
-$('#settingsClose').addEventListener('click', closeSettings);
 $('#setPremUpdate').addEventListener('click', () => openCredModal());
 $('#setTestBtn').addEventListener('click', sendTestEmail);
 $('#setWatchCadence').addEventListener('change', saveWatchCadence);
@@ -1759,9 +1817,9 @@ async function saveWatchCadence() {
   }
 }
 
-function closeSettings() { settingsModal.hidden = true; }
-async function openSettings() {
-  settingsModal.hidden = false;
+// Settings page (Settings + Status, previously two modals): entered via the router.
+async function enterSettingsPage() {
+  loadStatus();
   $('#setTestResult').textContent = '';
   $('#setTestResult').className = 'set-test-result';
   await loadSettings();
@@ -1931,13 +1989,7 @@ async function sendTestEmail() {
 // ---------------------------------------------------------------------------
 // Status / health — session warmth, downloads, channels
 // ---------------------------------------------------------------------------
-const statusModal = $('#statusModal');
-$('#statusToggle').addEventListener('click', openStatus);
-$('#statusClose').addEventListener('click', closeStatus);
 $('#statusRefresh').addEventListener('click', loadStatus);
-
-function closeStatus() { statusModal.hidden = true; }
-async function openStatus() { statusModal.hidden = false; await loadStatus(); }
 
 function statusItem(label, value, ok) {
   const cls = 'status-item' + (ok === true ? ' ok' : ok === false ? ' warn' : '');
@@ -1971,7 +2023,8 @@ async function loadStatus() {
     const dl = el('div', { className: 'status-section' }, [el('h3', {}, 'Downloads')]);
     dl.append(statusItem('Folder', d.path || '—'));
     if (d.storage) dl.append(statusItem('Storage', d.storage.ok ? `R2 (${d.storage.objectCount} objects)` : `R2 unreachable — ${d.storage.lastError || 'not loaded'}`, !!d.storage.ok));
-    dl.append(statusItem('ePUBs saved', String(d.count || 0)));
+    dl.append(statusItem('Files stored', String(d.count || 0)));
+    dl.append(el('p', { className: 'hint status-note' }, 'Can be higher than the Library’s book count: re-downloads and replaced files of the same book show as one book there.'));
     dl.append(statusItem('Total size', formatBytes(d.totalBytes || 0) || '0 B'));
     if (d.disk) dl.append(statusItem('Disk free', `${formatBytes(d.disk.freeBytes)} of ${formatBytes(d.disk.totalBytes)}`));
     if (!d.exists) dl.append(statusItem('Folder', 'Not created yet', false));
@@ -1991,18 +2044,23 @@ async function loadStatus() {
 // ---------------------------------------------------------------------------
 // Library — every downloaded book with its send history inline + resend
 // ---------------------------------------------------------------------------
-const libraryPanel = $('#libraryPanel');
 const libraryList = $('#libraryList');
 const librarySearch = $('#librarySearch');
 const libraryCount = $('#libraryCount');
-$('#libraryToggle').addEventListener('click', openLibrary);
-$('#libraryClose').addEventListener('click', closeLibrary);
+// Books render a page at a time ("Show more"), so a big Library stays fast.
+const LIBRARY_PAGE = 60;
+let libraryLimit = LIBRARY_PAGE;
+const resetLibraryPaging = (fn) => () => { libraryLimit = LIBRARY_PAGE; fn(); };
 // Live title/author filter — debounced so each keystroke doesn't thrash the DOM.
-librarySearch.addEventListener('input', debounce(applyLibraryFilter, 120));
+librarySearch.addEventListener('input', debounce(resetLibraryPaging(applyLibraryFilter), 120));
+$('#librarySort').addEventListener('change', resetLibraryPaging(applyLibraryFilter));
+$('#libraryShow').addEventListener('change', resetLibraryPaging(applyLibraryFilter));
+$('#libraryMore').addEventListener('click', () => { libraryLimit += LIBRARY_PAGE; applyLibraryFilter(); });
 
 // List vs. cover-grid view (persisted). Grid is a pleasant cover-wall for
 // browsing by spine; list keeps the full per-book detail + send history.
-let libViewMode = localStorage.getItem('libView') === 'grid' ? 'grid' : 'list';
+// Cover wall is the default on the full-width page; "Details" is opt-in.
+let libViewMode = localStorage.getItem('libView') === 'list' ? 'list' : 'grid';
 function setLibView(mode) {
   libViewMode = mode === 'grid' ? 'grid' : 'list';
   localStorage.setItem('libView', libViewMode);
@@ -2018,18 +2076,20 @@ $('#libViewGrid').classList.toggle('active', libViewMode === 'grid');
 // Full set from the last /api/library load; the search box filters this in place
 // (no refetch).
 let allLibraryBooks = [];
+// The current filtered + sorted list (what the page shows, before paging);
+// the mega view's ‹ › step through it.
+let libraryVisible = [];
 
+// (Re)load the Library page. Search text, sort, filters and tag stay as they
+// were, so reloading after a delete or tag edit doesn't lose your place.
 async function openLibrary() {
-  libraryPanel.hidden = false;
-  $('#overlay').hidden = false;
-  renderLibrarySkeleton();
+  if (!allLibraryBooks.length) renderLibrarySkeleton();
   try {
     const data = await fetch('/api/library').then((r) => r.json());
     allLibraryBooks = data.books || [];
     libraryAllTags = data.allTags || [];
-    libraryTagFilter = '';
-    librarySelection.clear();
-    librarySearch.value = '';
+    if (libraryTagFilter && !libraryAllTags.includes(libraryTagFilter)) libraryTagFilter = '';
+    for (const id of [...librarySelection]) if (!allLibraryBooks.some((b) => b.id === id)) librarySelection.delete(id);
     renderLibTagBar();
     updateLibActionBar();
     applyLibraryFilter();
@@ -2046,8 +2106,6 @@ async function openLibrary() {
   }
 }
 function closeLibrary() {
-  libraryPanel.hidden = true;
-  $('#overlay').hidden = true;
   librarySelection.clear();
   updateLibActionBar();
 }
@@ -2063,10 +2121,34 @@ function applyLibraryFilter() {
         return q.split(/\s+/).every((term) => hay.includes(term));
       });
   if (libraryTagFilter) matches = matches.filter((b) => (b.tags || []).includes(libraryTagFilter));
+  const show = $('#libraryShow').value;
+  const sentCount = (b) => (b.sends && b.sends.length) || 0;
+  if (show === 'unsent') matches = matches.filter((b) => !sentCount(b));
+  else if (show === 'sent') matches = matches.filter((b) => sentCount(b) > 0);
+  else if (show === 'missing') matches = matches.filter((b) => !b.filePresent);
+  matches = sortLibrary(matches, $('#librarySort').value);
   libraryCount.textContent = allLibraryBooks.length
-    ? `${matches.length} of ${allLibraryBooks.length}`
+    ? (matches.length === allLibraryBooks.length ? `${allLibraryBooks.length} books` : `${matches.length} of ${allLibraryBooks.length} books`)
     : '';
-  renderLibrary(matches, q);
+  libraryVisible = matches;
+  renderLibrary(matches.slice(0, libraryLimit), q);
+  const more = $('#libraryMore');
+  const left = matches.length - libraryLimit;
+  more.hidden = left <= 0;
+  if (left > 0) more.textContent = `Show ${Math.min(left, LIBRARY_PAGE)} more (${left} left)`;
+}
+
+/** PURE-ish: a sorted copy of the books for the Library's Sort menu. */
+function sortLibrary(books, how) {
+  const by = (f) => (a, b) => String(f(a) || '').localeCompare(String(f(b) || ''), undefined, { sensitivity: 'base' });
+  const time = (b) => Date.parse(b.acquiredAt || '') || 0;
+  const out = books.slice();
+  if (how === 'oldest') out.sort((a, b) => time(a) - time(b));
+  else if (how === 'title') out.sort(by((b) => (b.title || '').replace(/^(the|a|an)\s+/i, '')));
+  else if (how === 'author') out.sort(by((b) => (b.author || '').split(/\s+/).pop()));
+  else if (how === 'sent') out.sort((a, b) => ((b.sends || []).length - (a.sends || []).length) || time(b) - time(a));
+  else out.sort((a, b) => time(b) - time(a));
+  return out;
 }
 
 // --- Library management: tag filter, multi-select, delete, re-download ------
@@ -2084,12 +2166,13 @@ function renderLibTagBar() {
     const c = el('button', { className: 'lib-tag-chip' + (libraryTagFilter === val ? ' active' : ''), type: 'button' }, label);
     c.addEventListener('click', () => {
       libraryTagFilter = libraryTagFilter === val ? '' : val;
+      libraryLimit = LIBRARY_PAGE;
       renderLibTagBar();
       applyLibraryFilter();
     });
     return c;
   };
-  bar.append(chip('All', ''));
+  bar.append(el('span', { className: 'chip-label' }, 'Tags'), chip('All', ''));
   for (const t of libraryAllTags) bar.append(chip(t, t));
 }
 
@@ -2313,7 +2396,7 @@ function renderLibraryGridCard(book) {
   const tile = el('div', { className: 'lib-tile' + (select.checked ? ' selected' : '') }, [
     el('div', { className: 'lib-tile-art' }, [buildEditableCover(book), pip, select, send, del]),
     el('div', { className: 'lib-tile-info' }, [
-      el('div', { className: 'lib-tile-title', title: book.title || book.filename || '' }, book.title || book.filename || 'Untitled'),
+      megaLink(book, 'lib-tile-title'),
       book.author ? el('div', { className: 'lib-tile-author', title: book.author }, book.author) : null,
     ]),
   ]);
@@ -2422,7 +2505,7 @@ function renderLibraryBook(book) {
   const row = el('div', { className: 'lib-book' + (select.checked ? ' selected' : '') }, [
     el('div', { className: 'lib-cover-cell' }, [buildEditableCover(book), select]),
     el('div', { className: 'lib-main' }, [
-      el('h3', { className: 'lib-title' }, book.title || book.filename || 'Untitled'),
+      el('h3', { className: 'lib-title' }, megaLink(book, 'lib-title-link')),
       book.author ? el('div', { className: 'lib-author' }, book.author) : null,
       metaline,
       makeBlurbSlot(book.title || '', book.author || ''),
@@ -2448,8 +2531,12 @@ function buildEditableCover(book) {
   const mount = el('div', { className: 'lib-cover-mount' });
   function paint() {
     mount.innerHTML = '';
-    mount.append(coverImg({ className: 'lib-cover', src: libraryCoverSrc(book), placeholder: makeCoverPlaceholder, zoomTitle: book.title || '' }));
+    const img = coverImg({ className: 'lib-cover lib-cover-open', src: libraryCoverSrc(book), placeholder: makeCoverPlaceholder });
+    img.title = 'Open';
+    mount.append(img);
   }
+  // Clicking the cover (or its placeholder) opens the book's mega view.
+  mount.addEventListener('click', () => openMega(book));
   paint();
 
   const editBtn = el('button', { className: 'lib-cover-edit', type: 'button', title: 'Fix this cover' }, '✎');
@@ -2528,53 +2615,112 @@ function renderSend(s) {
 }
 
 // ---------------------------------------------------------------------------
-// History
+// Activity (was the History drawer): the log, grouped by day, filterable by
+// type, a page at a time. Re-upload requests live in a second tab.
 // ---------------------------------------------------------------------------
-const historyPanel = $('#historyPanel');
-const overlay = $('#overlay');
-$('#historyToggle').addEventListener('click', openHistory);
-$('#historyClose').addEventListener('click', closeHistory);
-overlay.addEventListener('click', () => { closeHistory(); closeLibrary(); });
+const ACTIVITY_TYPES = [
+  ['all', 'Everything'],
+  ['download', 'Downloads'],
+  ['notify', 'Sends'],
+  ['watch-hit', 'Watch matches'],
+  ['search', 'Searches'],
+  ['reupload', 'Re-upload requests'],
+];
+const ACTIVITY_PAGE = 150;
+let activityEntries = [];
+let activityFilter = 'all';
+let activityLimit = ACTIVITY_PAGE;
+
+$('#activityMore').addEventListener('click', () => { activityLimit += ACTIVITY_PAGE; renderActivity(); });
+$('#actTabLog').addEventListener('click', () => setActivityTab('log'));
+$('#actTabReq').addEventListener('click', () => setActivityTab('req'));
+
+function setActivityTab(tab) {
+  const req = tab === 'req';
+  $('#actTabLog').setAttribute('aria-selected', String(!req));
+  $('#actTabReq').setAttribute('aria-selected', String(req));
+  $('#activityLogView').hidden = req;
+  $('#activityReqView').hidden = !req;
+  if (req) loadReupRequests();
+}
 
 async function openHistory() {
-  const data = await fetch('/api/history').then((r) => r.json());
+  const list = $('#historyList');
+  if (!activityEntries.length) list.innerHTML = '<p class="hint">Loading…</p>';
+  try {
+    const data = await fetch('/api/history').then((r) => r.json());
+    activityEntries = data.entries || [];
+  } catch {
+    list.innerHTML = '';
+    list.append(el('p', { className: 'reup-msg error' }, 'Could not load activity. Try again.'));
+    return;
+  }
+  renderActivityFilters();
+  renderActivity();
+}
+
+function renderActivityFilters() {
+  const bar = $('#activityFilters');
+  bar.innerHTML = '';
+  const counts = {};
+  for (const e of activityEntries) counts[e.type] = (counts[e.type] || 0) + 1;
+  for (const [type, label] of ACTIVITY_TYPES) {
+    const n = type === 'all' ? activityEntries.length : (counts[type] || 0);
+    if (type !== 'all' && !n) continue;
+    const chip = el('button', { className: 'lib-tag-chip' + (activityFilter === type ? ' active' : ''), type: 'button', 'aria-pressed': String(activityFilter === type) },
+      [label, el('span', { className: 'chip-count' }, String(n))]);
+    chip.addEventListener('click', () => { activityFilter = type; activityLimit = ACTIVITY_PAGE; renderActivityFilters(); renderActivity(); });
+    bar.append(chip);
+  }
+}
+
+function dayLabel(d) {
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  const day = new Date(d); day.setHours(0, 0, 0, 0);
+  const diff = Math.round((today - day) / 86400000);
+  if (diff === 0) return 'Today';
+  if (diff === 1) return 'Yesterday';
+  return day.toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric', year: day.getFullYear() === today.getFullYear() ? undefined : 'numeric' });
+}
+
+function renderActivity() {
   const list = $('#historyList');
   list.innerHTML = '';
-  if (!data.entries.length) {
+  const entries = activityFilter === 'all' ? activityEntries : activityEntries.filter((e) => e.type === activityFilter);
+  $('#activityCount').textContent = activityEntries.length ? `${entries.length} entr${entries.length === 1 ? 'y' : 'ies'}` : '';
+  if (!entries.length) {
     list.append(
       el('div', { className: 'lib-empty' }, [
         el('div', { className: 'lib-empty-icon' }, '🕓'),
-        el('p', {}, 'No history yet.'),
-        el('p', { className: 'hint' }, 'Searches, downloads, and re-upload requests will show up here.'),
+        el('p', {}, 'Nothing here yet.'),
+        el('p', { className: 'hint' }, 'Searches, downloads, sends and watch matches will show up here.'),
       ])
     );
+    $('#activityMore').hidden = true;
+    return;
   }
-  for (const entry of data.entries) {
-    list.append(renderHistoryItem(entry));
+  let lastDay = '';
+  let group = null;
+  for (const entry of entries.slice(0, activityLimit)) {
+    const day = dayLabel(entry.timestamp);
+    if (day !== lastDay) {
+      lastDay = day;
+      group = el('ol', { className: 'activity-day-list' });
+      list.append(el('section', { className: 'activity-day' }, [el('h3', { className: 'activity-day-head' }, day), group]));
+    }
+    group.append(renderHistoryItem(entry));
   }
-  historyPanel.hidden = false;
-  overlay.hidden = false;
-}
-
-function closeHistory() {
-  historyPanel.hidden = true;
-  overlay.hidden = true;
+  const left = entries.length - activityLimit;
+  $('#activityMore').hidden = left <= 0;
+  if (left > 0) $('#activityMore').textContent = `Show older (${left} more)`;
 }
 
 // --- Re-upload request management (issue #27) -------------------------------
 // Lists the user's authoritative Mobilism requests and lets them cancel some.
-const reupReqModal = $('#reupReqModal');
-$('#reupReqOpen').addEventListener('click', openReupRequests);
-$('#reupReqClose').addEventListener('click', () => { reupReqModal.hidden = true; });
 $('#reupReqRefresh').addEventListener('click', loadReupRequests);
 
 // Normalize a release name the same way the server does, for history matching.
 const normReup = (s) => String(s || '').replace(/\s+/g, ' ').trim().toLowerCase();
-
-async function openReupRequests() {
-  reupReqModal.hidden = false;
-  await loadReupRequests();
-}
 
 async function loadReupRequests() {
   const body = $('#reupReqBody');
@@ -2665,10 +2811,10 @@ function renderReupRequests(data) {
 }
 
 // --- Watchlist (issue #7) ---------------------------------------------------
-const watchlistModal = $('#watchlistModal');
 let watchRecipientsList = []; // [{id, name, hasKindle}] for relating to a watch
-$('#watchlistToggle').addEventListener('click', openWatchlist);
-$('#watchlistClose').addEventListener('click', () => { watchlistModal.hidden = true; });
+// Which status tab the Watchlist page shows. Expired watches (most of the
+// list after a few months) get their own tab instead of burying active ones.
+let watchTab = 'active';
 $('#watchForm').addEventListener('submit', async (e) => {
   e.preventDefault();
   const title = $('#watchTitle').value.trim();
@@ -2695,19 +2841,18 @@ $('#watchForm').addEventListener('submit', async (e) => {
 // editor. `selected` is a Set of pre-checked ids.
 function recipientCheckboxes(selected) {
   if (!watchRecipientsList.length) {
-    return [el('span', { className: 'hint' }, 'No recipients yet — add them from a download’s “Send” dialog.')];
+    return [el('span', { className: 'hint' }, 'No readers yet. Add them on the Readers page.')];
   }
   return watchRecipientsList.map((r) => {
     const cb = el('input', { type: 'checkbox', value: r.id });
     cb.checked = selected.has(r.id);
-    return el('label', { className: 'watch-recip' }, [
-      cb, `${r.name}${r.hasKindle ? ' 📖' : ''}`,
+    return el('label', { className: 'check-chip' }, [
+      cb, ' ', r.name,
     ]);
   });
 }
 
 async function openWatchlist() {
-  watchlistModal.hidden = false;
   await loadWatchlist();
 }
 
@@ -2734,23 +2879,10 @@ async function loadWatchlist() {
     // (Re)render the add-form recipient chooser.
     const addBox = $('#watchAddRecipients');
     addBox.innerHTML = '';
-    if (watchRecipientsList.length && watchRecipientsList.length <= 3) {
-      addBox.append(el('span', { className: 'watch-recip-label' }, 'Send to:'));
+    // Full-width page: room for every reader as a tick box, no toggle needed.
+    if (watchRecipientsList.length) {
+      addBox.append(el('span', { className: 'watch-recip-label' }, 'When found, also send to:'));
       for (const node of recipientCheckboxes(new Set())) addBox.append(node);
-    } else if (watchRecipientsList.length) {
-      // >3 recipients: tuck the checkbox strip behind a live-counting toggle so
-      // the add form stays compact.
-      const strip = el('div', { className: 'watch-recipients-strip', hidden: true });
-      strip.append(el('span', { className: 'watch-recip-label' }, 'Send to:'));
-      for (const node of recipientCheckboxes(new Set())) strip.append(node);
-      const toggle = el('button', { className: 'watch-recip-edit', type: 'button', 'aria-expanded': 'false' }, 'Send to: 0 selected ⌄');
-      const updateLabel = () => {
-        const n = strip.querySelectorAll('input:checked').length;
-        toggle.textContent = `Send to: ${n} selected ${strip.hidden ? '⌄' : '⌃'}`;
-      };
-      strip.addEventListener('change', updateLabel);
-      toggle.addEventListener('click', () => { strip.hidden = !strip.hidden; toggle.setAttribute('aria-expanded', String(!strip.hidden)); updateLabel(); });
-      addBox.append(toggle, strip);
     }
     renderWatchlist(data.watches || []);
   } catch (err) {
@@ -2777,9 +2909,35 @@ function watchStatusBadge(w) {
   return el('span', { className: 'watch-badges' }, [badge, el('span', { className: 'badge', title: w.listLabel || 'From a bestseller list' }, '📈 List')]);
 }
 
-function renderWatchlist(watches) {
+const WATCH_TABS = [
+  ['active', 'Active', (w) => w.status === 'active' || w.status === 'paused'],
+  ['fulfilled', 'Found', (w) => w.status === 'fulfilled'],
+  ['expired', 'Expired', (w) => w.status === 'expired'],
+  ['all', 'All', () => true],
+];
+
+function renderWatchTabs(all) {
+  const bar = $('#watchTabs');
+  bar.innerHTML = '';
+  for (const [key, label, test] of WATCH_TABS) {
+    const n = all.filter(test).length;
+    const tab = el('button', { className: 'tab', role: 'tab', type: 'button', 'aria-selected': String(watchTab === key) },
+      [label, el('span', { className: 'chip-count' }, String(n))]);
+    tab.addEventListener('click', () => { watchTab = key; renderWatchlist(all); });
+    bar.append(tab);
+  }
+}
+
+function renderWatchlist(allWatches) {
+  renderWatchTabs(allWatches);
+  const test = (WATCH_TABS.find(([k]) => k === watchTab) || WATCH_TABS[0])[2];
+  const watches = allWatches.filter(test);
   const body = $('#watchlistBody');
   body.innerHTML = '';
+  if (allWatches.length && !watches.length) {
+    body.append(el('p', { className: 'hint table-empty' }, 'Nothing in this tab.'));
+    return;
+  }
   if (!watches.length) {
     body.append(
       el('div', { className: 'lib-empty' }, [
@@ -2827,8 +2985,8 @@ function renderWatchlist(watches) {
       .map((id) => (watchRecipientsList.find((r) => r.id === id) || {}).name)
       .filter(Boolean);
     const recipLine = el('div', { className: 'watch-recip-line hint' },
-      names.length ? `→ ${names.join(', ')}` : '→ no recipients (operator notified only)');
-    const editLink = el('button', { className: 'watch-recip-edit', type: 'button' }, 'Recipients');
+      names.length ? `Sends to ${names.join(', ')}` : 'Notifies only you');
+    const editLink = el('button', { className: 'watch-recip-edit', type: 'button' }, 'Change');
     const editor = el('div', { className: 'watch-recip-editor', hidden: true });
     editLink.addEventListener('click', () => {
       if (editor.children.length === 0) {
@@ -2865,7 +3023,7 @@ function renderWatchlist(watches) {
       });
       actions.append(checkBtn);
 
-      const toggle = el('button', { className: 'ghost-btn watch-icon-btn', type: 'button', title: w.status === 'paused' ? 'Resume' : 'Pause', 'aria-label': w.status === 'paused' ? 'Resume watch' : 'Pause watch' }, w.status === 'paused' ? '▶' : '⏸');
+      const toggle = el('button', { className: 'ghost-btn', type: 'button' }, w.status === 'paused' ? 'Resume' : 'Pause');
       toggle.addEventListener('click', async () => {
         toggle.disabled = true;
         await fetch(`/api/watchlist/${w.id}/status`, {
@@ -2889,9 +3047,9 @@ function renderWatchlist(watches) {
       });
       actions.append(again);
     }
-    const del = el('button', { className: 'ghost-btn watch-del watch-icon-btn', type: 'button', title: 'Remove', 'aria-label': 'Remove watch' }, '🗑');
+    const del = el('button', { className: 'ghost-btn watch-del btn-danger', type: 'button' }, 'Remove');
     del.addEventListener('click', async () => {
-      del.disabled = true; del.textContent = '…';
+      del.disabled = true; del.textContent = 'Removing…';
       try {
         const res = await fetch(`/api/watchlist/${w.id}`, { method: 'DELETE' });
         if (!res.ok) throw new Error(`Remove failed (HTTP ${res.status}) — try again.`);
@@ -2901,7 +3059,7 @@ function renderWatchlist(watches) {
         n.hidden = false;
         n.className = 'reup-msg warn';
         n.textContent = err.message || 'Could not remove the watch.';
-        del.disabled = false; del.textContent = '🗑';
+        del.disabled = false; del.textContent = 'Remove';
       }
     });
     actions.append(del);
@@ -2929,46 +3087,57 @@ function buildWatchCover(w) {
   return slot;
 }
 
+// One Activity entry, written as a sentence. Times only — the day is the
+// group heading. No internal file paths.
 function renderHistoryItem(entry) {
-  const when = el('div', { className: 'when' }, new Date(entry.timestamp).toLocaleString());
-  const item = el('div', { className: 'history-item' });
+  const time = el('time', { className: 'activity-time', dateTime: entry.timestamp },
+    new Date(entry.timestamp).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' }));
+  const q = (t, a) => [t && `“${t}”`, a && `by ${a}`].filter(Boolean).join(' ');
+  let icon = '•';
+  const text = el('div', { className: 'activity-text' });
+  const extra = [];
 
   if (entry.type === 'search') {
-    const label = [entry.title && `“${entry.title}”`, entry.author && `by ${entry.author}`]
-      .filter(Boolean)
-      .join(' ');
-    item.append(el('div', {}, `🔍 ${label || '(empty)'} — ${entry.resultCount} result(s)`));
-    const rerun = el('button', { className: 'ghost-btn rerun', type: 'button' }, 'Re-run');
+    icon = '🔍';
+    text.append(`Searched for ${q(entry.title, entry.author) || '(nothing)'}: ${entry.resultCount} result${entry.resultCount === 1 ? '' : 's'}`);
+    const rerun = el('a', { className: 'activity-link', href: '#/' }, 'Search again');
     rerun.addEventListener('click', () => {
       $('#title').value = entry.title || '';
       $('#author').value = entry.author || '';
       $('#sort').value = entry.sort || 'newest';
-      closeHistory();
-      runSearch({ title: entry.title || '', author: entry.author || '', sort: entry.sort || 'newest' });
+      setTimeout(() => runSearch({ title: entry.title || '', author: entry.author || '', sort: entry.sort || 'newest' }), 0);
     });
-    item.append(rerun);
+    extra.push(rerun);
   } else if (entry.type === 'reupload') {
-    const label = { success: 'requested', 'already-requested': 'already pending' }[entry.status] || entry.status;
-    item.append(el('div', {}, `↻ Re-upload ${label}${entry.title ? ` — “${entry.title}”` : ''}`));
+    icon = '↻';
+    const label = { success: 'Requested a re-upload of', 'already-requested': 'Re-upload already pending for' }[entry.status] || `Re-upload ${entry.status}:`;
+    text.append(`${label} ${entry.title ? `“${entry.title}”` : 'a book'}`);
   } else if (entry.type === 'watch-hit') {
-    const label = [entry.title && `“${entry.title}”`, entry.author && `by ${entry.author}`].filter(Boolean).join(' ');
-    if (entry.status === 'expired') {
-      item.append(el('div', {}, `🔕 Watch expired — ${label || 'a book'} never turned up after repeated checks`));
-    } else if (entry.status === 'retrying') {
-      item.append(el('div', {}, `🔁 Watch matched — ${label || 'a book'}, but the download failed; will retry`));
-      if (entry.reason) item.append(el('div', { className: 'hint' }, entry.reason));
-      if (entry.url) item.append(el('a', { className: 'hint', href: entry.url, target: '_blank', rel: 'noopener' }, 'Open the match ↗'));
-    } else {
-      item.append(el('div', {}, `🔔 Watch matched — ${label || 'a book'} is available`));
-      if (entry.url) item.append(el('a', { className: 'hint', href: entry.url, target: '_blank', rel: 'noopener' }, 'Open the match ↗'));
-    }
+    const label = q(entry.title, entry.author) || 'a book';
+    if (entry.status === 'expired') { icon = '🔕'; text.append(`Stopped watching for ${label}: it never turned up`); }
+    else if (entry.status === 'retrying') { icon = '🔁'; text.append(`Found ${label}, but the download failed. Will retry.`); if (entry.reason) extra.push(el('span', { className: 'hint' }, entry.reason)); }
+    else { icon = '🔔'; text.append(`Watch found ${label}`); }
+    if (entry.url) extra.push(el('a', { className: 'activity-link', href: entry.url, target: '_blank', rel: 'noopener' }, 'Open on Mobilism ↗'));
+  } else if (entry.type === 'notify') {
+    icon = '📤';
+    const who = (Array.isArray(entry.to) ? entry.to : [entry.to]).filter(Boolean).join(', ') || 'someone';
+    const byReader = (entry.channels || []).some((c) => c.channel === 'reader');
+    const title = entry.title ? `“${entry.title}”` : 'a book';
+    text.append(byReader
+      ? `${who} sent ${title} to their Kindle from their Library`
+      : `Sent ${title} to ${who}${entry.kindlePushed ? ' (Kindle)' : ''}`);
+  } else if (entry.type === 'download') {
+    icon = '⬇';
+    text.append(`Downloaded ${q(entry.title, entry.author) || entry.filename || 'a book'}`);
+    if (entry.verified === false) extra.push(el('span', { className: 'pill pill-warn' }, 'not verified'));
   } else {
-    const where = entry.savePath ? ` → ${entry.savePath}` : '';
-    item.append(el('div', {}, `⬇ ${entry.filename || 'download'}${where}`));
-    if (entry.title) item.append(el('div', { className: 'hint' }, entry.title));
+    text.append(entry.title || entry.type || 'Activity');
   }
-  item.append(when);
-  return item;
+  return el('li', { className: 'activity-item activity-' + (entry.type || 'other') }, [
+    el('span', { className: 'activity-icon', 'aria-hidden': 'true' }, icon),
+    el('div', { className: 'activity-main' }, [text, extra.length ? el('div', { className: 'activity-extra' }, extra) : null]),
+    time,
+  ]);
 }
 
 // ---------------------------------------------------------------------------
@@ -3378,12 +3547,204 @@ function showStatusHTML(html) {
 }
 function hideStatus() { statusEl.hidden = true; }
 
+
+// ---------------------------------------------------------------------------
+// Book mega view — a large cover + details over a blurred, see-through
+// backdrop. Opened by clicking a book in the Library; ‹ › (and ← →) step
+// through the Library's current filtered order. Closes on ✕, Esc, or a click
+// on the backdrop.
+// ---------------------------------------------------------------------------
+const mega = $('#mega');
+let megaBook = null;
+const megaBlurbs = new Map(); // book id → description (or '' when none)
+
+function megaLink(book, className) {
+  const b = el('button', { className: 'link-btn ' + className, type: 'button', title: book.title || book.filename || '' },
+    book.title || book.filename || 'Untitled');
+  b.addEventListener('click', () => openMega(book));
+  return b;
+}
+
+function megaIsOpen() { return !mega.hidden; }
+
+function closeMega() {
+  if (mega.hidden) return;
+  mega.hidden = true;
+  document.body.classList.remove('mega-open');
+  if (megaBook && megaReturnFocus && megaReturnFocus.isConnected) megaReturnFocus.focus();
+  megaBook = null;
+}
+let megaReturnFocus = null;
+
+function megaStep(dir) {
+  if (!megaBook) return;
+  const list = libraryVisible.length ? libraryVisible : allLibraryBooks;
+  const i = list.findIndex((b) => b.id === megaBook.id);
+  if (i < 0) return;
+  const next = list[(i + dir + list.length) % list.length];
+  if (next) openMega(next);
+}
+
+async function openMega(book) {
+  if (mega.hidden) megaReturnFocus = document.activeElement;
+  megaBook = book;
+  const list = libraryVisible.length ? libraryVisible : allLibraryBooks;
+  const idx = list.findIndex((b) => b.id === book.id);
+  $('#megaPrev').hidden = $('#megaNext').hidden = list.length < 2 || idx < 0;
+
+  const art = $('#megaArt');
+  art.innerHTML = '';
+  art.append(coverImg({ className: 'mega-cover', src: libraryCoverSrc(book), placeholder: () => el('div', { className: 'mega-cover placeholder' }, '📖') }));
+
+  $('#megaEyebrow').textContent = idx >= 0 ? `Book ${idx + 1} of ${list.length}` : '';
+  $('#megaTitle').textContent = book.title || book.filename || 'Untitled';
+  $('#megaAuthor').textContent = book.author ? `by ${book.author}` : '';
+
+  const meta = $('#megaMeta');
+  meta.innerHTML = '';
+  for (const bit of [
+    book.acquiredAt ? `Added ${formatDate(book.acquiredAt)}` : null,
+    book.size ? formatBytes(book.size) : null,
+    book.verified ? 'Verified' : null,
+    !book.filePresent ? '⚠ File missing' : null,
+    ...(book.tags || []),
+  ].filter(Boolean)) meta.append(el('span', { className: 'pill pill-glass' }, bit));
+
+  const sends = $('#megaSends');
+  sends.innerHTML = '';
+  const n = (book.sends && book.sends.length) || 0;
+  sends.append(el('h3', {}, n ? `Sent ${n} time${n === 1 ? '' : 's'}` : 'Not sent yet'));
+  if (n) {
+    const ul = el('ul', {});
+    for (const snd of book.sends.slice(-6).reverse()) ul.append(el('li', {}, renderSend(snd)));
+    sends.append(ul);
+  }
+
+  const actions = $('#megaActions');
+  actions.innerHTML = '';
+  const send = el('button', { className: 'primary-btn', type: 'button' }, n ? 'Send again' : 'Send to readers');
+  send.disabled = !book.filePresent;
+  send.addEventListener('click', () => {
+    openSendModal({
+      downloadId: book.id,
+      book: { title: book.title, author: book.author || '', cover: book.cover || null, filename: book.filename },
+      onSent: async () => { await openLibrary(); const fresh = allLibraryBooks.find((b) => b.id === book.id); if (fresh && megaIsOpen()) openMega(fresh); },
+    });
+  });
+  actions.append(send);
+  if (book.url) {
+    const rd = el('button', { className: 'ghost-btn', type: 'button' }, 'Download again');
+    rd.addEventListener('click', () => { closeMega(); redownloadBook(book); });
+    actions.append(rd);
+  }
+  const del = el('button', { className: 'ghost-btn btn-danger', type: 'button' }, 'Delete');
+  del.addEventListener('click', async () => { closeMega(); await deleteLibraryBook(book); });
+  actions.append(del);
+
+  const desc = $('#megaDesc');
+  const cached = megaBlurbs.get(book.id);
+  desc.textContent = cached === undefined ? 'Loading description…' : (cached || 'No description available.');
+  desc.classList.toggle('muted', !cached);
+
+  if (mega.hidden) {
+    mega.hidden = false;
+    document.body.classList.add('mega-open');
+    $('#megaClose').focus();
+  }
+
+  if (cached === undefined) {
+    const p = new URLSearchParams();
+    if (book.title) p.set('title', book.title);
+    if (book.author) p.set('author', book.author);
+    let text = '';
+    try { text = ((await fetch('/api/meta?' + p).then((r) => r.json())) || {}).description || ''; } catch { /* none */ }
+    megaBlurbs.set(book.id, text);
+    if (megaBook && megaBook.id === book.id) {
+      desc.textContent = text || 'No description available.';
+      desc.classList.toggle('muted', !text);
+    }
+  }
+}
+
+$('#megaClose').addEventListener('click', closeMega);
+$('#megaPrev').addEventListener('click', () => megaStep(-1));
+$('#megaNext').addEventListener('click', () => megaStep(1));
+// The stage fills the screen; a click that lands on it (or the dialog itself)
+// rather than on the cover / details is a click on the backdrop.
+mega.addEventListener('click', (e) => { if (e.target === mega || e.target === $('#megaStage')) closeMega(); });
+document.addEventListener('keydown', (e) => {
+  if (mega.hidden || e.target.closest('input, textarea, select')) return;
+  if (topOpenSurface() && e.key !== 'Tab') return; // arrows belong to the dialog on top
+  if (e.key === 'ArrowLeft') { e.preventDefault(); megaStep(-1); }
+  else if (e.key === 'ArrowRight') { e.preventDefault(); megaStep(1); }
+  else if (e.key === 'Tab') {
+    if (topOpenSurface()) return; // a dialog opened over the mega view owns Tab
+    // Keep focus inside the dialog.
+    const f = focusablesIn(mega);
+    if (!f.length) return;
+    if (e.shiftKey && document.activeElement === f[0]) { e.preventDefault(); f[f.length - 1].focus(); }
+    else if (!e.shiftKey && document.activeElement === f[f.length - 1]) { e.preventDefault(); f[0].focus(); }
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Pages & routing. The admin app is a set of full-width pages, each with its
+// own URL (#/library, #/watchlist, …), so Back/Forward, reload and bookmarks
+// work. Transient dialogs (send, download, batch, credentials) stay modals.
+// ---------------------------------------------------------------------------
+const ROUTES = {
+  search: { title: 'Search', enter: () => {} },
+  library: { title: 'Library', enter: openLibrary, leave: closeLibrary },
+  watchlist: { title: 'Watchlist', enter: openWatchlist },
+  readers: { title: 'Readers', enter: enterReadersPage, leave: leaveReadersPage },
+  activity: { title: 'Activity', enter: openHistory },
+  settings: { title: 'Settings', enter: enterSettingsPage },
+};
+
+function routeFromHash() {
+  const m = /^#\/([a-z]+)/.exec(location.hash || '');
+  return m && ROUTES[m[1]] ? m[1] : 'search';
+}
+
+function showRoute() {
+  const next = routeFromHash();
+  const prev = currentRoute;
+  if (prev !== next && ROUTES[prev] && ROUTES[prev].leave) ROUTES[prev].leave();
+  currentRoute = next;
+  for (const page of document.querySelectorAll('.page')) page.hidden = page.dataset.page !== next;
+  for (const a of document.querySelectorAll('.topnav a')) {
+    if (a.dataset.route === next) a.setAttribute('aria-current', 'page');
+    else a.removeAttribute('aria-current');
+  }
+  document.title = next === 'search' ? 'BookHunt — find your book.' : `${ROUTES[next].title} · BookHunt`;
+  if (prev !== next) {
+    window.scrollTo(0, 0);
+    const heading = document.querySelector(`.page[data-page="${next}"] h2`);
+    if (heading && next !== 'search') { heading.tabIndex = -1; heading.focus({ preventScroll: true }); }
+  }
+  // A dialog left open from another page shouldn't follow you.
+  if (prev !== next) { closeSendModal(); if (!$('#dlClose').hidden) closeDownloadModal(); closeMega(); }
+  Promise.resolve(ROUTES[next].enter()).catch(() => { /* each page renders its own error */ });
+}
+
+// In-page section links (Settings menu) use plain #ids; keep them from being
+// read as a route change by scrolling instead of navigating.
+document.addEventListener('click', (e) => {
+  const a = e.target.closest('a[href^="#set-"]');
+  if (!a) return;
+  e.preventDefault();
+  const target = document.getElementById(a.getAttribute('href').slice(1));
+  if (target) target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+});
+
+window.addEventListener('hashchange', showRoute);
+
 // ---------------------------------------------------------------------------
 // Focus management for modals/drawers (a11y): trap Tab within the top-most open
 // surface, focus the first control when one opens, and restore focus to whatever
 // opened it on close. Surfaces are listed in dismissal priority (top-most first).
 // ---------------------------------------------------------------------------
-const FOCUS_SURFACES = ['#settingsModal', '#statusModal', '#recipientsModal', '#sendModal', '#credModal', '#batchModal', '#downloadModal', '#libraryPanel', '#historyPanel'];
+const FOCUS_SURFACES = ['#sendModal', '#credModal', '#batchModal', '#downloadModal'];
 let focusReturnEl = null;
 
 function focusablesIn(container) {
@@ -3464,10 +3825,9 @@ function toggleNav() {
 
 navToggle.addEventListener('click', (e) => { e.stopPropagation(); toggleNav(); });
 
-// Selecting any action closes the panel (its own handler still runs and opens
-// the modal). Delegated so it never needs to know the six ids.
+// Following any nav link closes the panel (the router handles the page).
 topbarActions.addEventListener('click', (e) => {
-  if (e.target.closest('.ghost-btn')) closeNav();
+  if (e.target.closest('a')) closeNav();
 });
 
 // Click anywhere outside the header closes the panel.
@@ -3486,17 +3846,14 @@ document.addEventListener('keydown', (e) => {
   if (topbar.classList.contains('nav-open')) return closeNav();
   const lb = $('#lightbox');
   if (lb && !lb.hidden) return closeLightbox();
-  if (!$('#settingsModal').hidden) return closeSettings();
-  if (!$('#statusModal').hidden) return closeStatus();
-  if (!recipientsModal.hidden) return closeRecipientsModal();
   if (!sendModal.hidden) return closeSendModal();
   if (!credModal.hidden) return closeCredModal();
   if (!batchModal.hidden) { batchModal.hidden = true; return; }
   if (!downloadModal.hidden && !$('#dlClose').hidden) return closeDownloadModal();
-  if (!libraryPanel.hidden) return closeLibrary();
-  if (!historyPanel.hidden) return closeHistory();
+  if (megaIsOpen()) return closeMega();
 });
 
 // Run the deep-link prefill last, so every module-level binding runSearch reads
 // (lastSearchParams, etc.) is already initialized — avoids a TDZ ReferenceError.
+showRoute();
 prefillFromQuery();
