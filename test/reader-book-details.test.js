@@ -190,8 +190,8 @@ test('reader.html: has the details <dialog> with close button, title, descriptio
 });
 
 test('reader.js: tiles open the modal; backdrop click + ✕ close it; Send does not open it', () => {
-  assert.ok(js.includes('details.open(b, kindleSet, markSent)'), 'tile click opens details');
-  assert.ok(js.includes("e.target === dlg) close()"), 'backdrop click closes');
+  assert.ok(js.includes('details.open(b, kindleSet, markSent, tile)'), 'tile click opens details');
+  assert.ok(js.includes("if (e.target === dlg || e.target.classList.contains('card') || e.target.classList.contains('body')) close();"), 'click on empty space closes');
   assert.ok(js.includes("$('#bookClose').onclick = close"), '✕ closes');
   assert.ok(js.includes('e.stopPropagation()'), 'send button click does not bubble to the tile');
   assert.ok(js.includes("'/reader/api/book?t='"), 'fetches details from the reader API');
@@ -225,7 +225,7 @@ test('buildBookDetailsAnnouncement: featured book, try-it link, steps, unsubscri
   assert.match(msg.subject, /tap a book/i);
   assert.ok(msg.html.includes('Hi Darla,'), 'first name greeting');
   assert.ok(msg.html.includes(`/reader?t=${TOKEN}`), 'has the reader’s own shelf link');
-  assert.ok(msg.html.includes('Try it on my shelf'), 'clear CTA');
+  assert.ok(msg.html.includes('Try it in my Library'), 'clear CTA');
   assert.ok(msg.html.includes('The &lt;Women&gt;'), 'title escaped');
   assert.ok(!msg.html.includes('The <Women>'));
   assert.ok(msg.html.includes('A sweeping tale.'));
@@ -324,4 +324,31 @@ test('GET /reader: script URL carries a content hash of reader.js', async () => 
     assert.equal(js.status, 200);
     assert.ok(js.body.includes('setupBookDetails'), 'versioned URL serves the script');
   });
+});
+
+// --- Reader Library: mega view + "shelf" → "Library" rename (2026-10) ---------
+
+test('reader mega view: full-screen see-through dialog with blurred backdrop and ‹ › stepping', () => {
+  assert.match(html, /dialog\.book::backdrop \{[^}]*backdrop-filter: blur\(/);
+  assert.match(html, /dialog\.book \{[^}]*background: transparent/);
+  assert.ok(html.includes('id="bookPrev"') && html.includes('id="bookNext"'));
+  assert.ok(js.includes("e.key === 'ArrowLeft'") && js.includes("e.key === 'ArrowRight'"));
+  assert.ok(js.includes('if (!dlg.open) { dlg.showModal();'), 'stepping never re-calls showModal on an open dialog');
+});
+
+test('reader page says "Library", not "shelf", and uses the ribbon logo', () => {
+  assert.ok(html.includes('<title>Your BookHunt Library</title>'));
+  assert.ok(!/📚<\/div>/.test(html), 'emoji logo replaced');
+  assert.ok(html.includes('M136 28H176V236L156 216L136 236Z'), 'ribbon mark');
+  const code = js.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '').replace(/\s\/\/ .*$/gm, '');
+  const visible = (code.match(/'[^'\n]*'|`[^`]*`/g) || []).filter((str) => /shelf/i.test(str) && !/shelf-search-2026-07|shelfSentinel/.test(str));
+  assert.deepEqual(visible, [], 'no user-facing "shelf" strings left');
+});
+
+test('reader emails say Library', () => {
+  const r = { name: 'Darla', readerToken: TOKEN };
+  for (const msg of [require('../src/reader').buildInviteEmail(r), require('../src/reader').buildNewBooksEmail(r, [{ title: 'X' }]), reader.buildBookDetailsAnnouncement(r, null)]) {
+    assert.ok(!/shelf/i.test(msg.subject + msg.text + msg.html.replace(/reader\?t=[^"&]*/g, '')), msg.subject);
+    assert.match(msg.subject + msg.html, /Library/);
+  }
 });

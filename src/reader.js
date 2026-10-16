@@ -69,7 +69,7 @@ function buildManifest(token) {
   return {
     name: 'BookHunt',
     short_name: 'BookHunt',
-    description: 'Your BookHunt shelf — send books to your Kindle.',
+    description: 'Your BookHunt Library — send books to your Kindle.',
     start_url: `/reader${q}`,
     scope: '/reader',
     display: 'standalone',
@@ -545,11 +545,11 @@ function buildInviteEmail(recipient) {
     <tr><td style="padding:14px 28px 0">
       <p style="margin:0 0 10px;font-size:16px;color:${INK};line-height:1.6">Hi ${escapeHtml(name)},</p>
       <p style="margin:0;font-size:15px;color:${MUTED};line-height:1.65">
-        Eric set up a personal book shelf just for you. Tap the button to see the newest books —
+        Eric set up a personal BookHunt Library just for you. Tap the button to see the newest books —
         and send any of them straight to your Kindle. No password, nothing to sign up for.
       </p>
     </td></tr>
-    ${ctaRow(link, 'Open my shelf →', '22px 28px 6px')}
+    ${ctaRow(link, 'Open my Library →', '22px 28px 6px')}
     <tr><td style="padding:8px 28px 22px">
       <div style="background:${PAPER};border-left:3px solid ${ACCENT};border-radius:8px;
                   padding:12px 15px;color:#3a3f47;font-size:13px;line-height:1.6">
@@ -558,14 +558,14 @@ function buildInviteEmail(recipient) {
       </div>
     </td></tr>`;
   return {
-    subject: `📖 Your BookHunt shelf is ready, ${name}`,
+    subject: `📖 Your BookHunt Library is ready, ${name}`,
     text:
       `Hi ${name},\n\n` +
-      `Eric set up a personal book shelf just for you. Open it to see the newest books and ` +
+      `Eric set up a personal BookHunt Library just for you. Open it to see the newest books and ` +
       `send any of them straight to your Kindle — no password, nothing to sign up for:\n\n${link}\n\n` +
       `This link is just for you — keep it handy and you can come back anytime.\n\n` +
       `Sent with love by Eric via BookHunt`,
-    html: emailShell('Your shelf is ready', body),
+    html: emailShell('Your Library is ready', body),
     attachments: [],
   };
 }
@@ -604,7 +604,7 @@ function buildNewBooksEmail(recipient, books) {
     <tr><td style="padding:14px 28px 0">
       <p style="margin:0 0 4px;font-size:16px;color:${INK};line-height:1.6">Hi ${escapeHtml(name)},</p>
       <p style="margin:0;font-size:15px;color:${MUTED};line-height:1.6">
-        ${n === 1 ? 'A new book just landed on your shelf:' : `${n} new books just landed on your shelf:`}
+        ${n === 1 ? 'A new book just arrived in your Library:' : `${n} new books just arrived in your Library:`}
       </p>
     </td></tr>
     <tr><td style="padding:18px 28px 0">
@@ -614,13 +614,13 @@ function buildNewBooksEmail(recipient, books) {
 
   const footerNote =
     `Getting too many of these? <a href="${escapeHtml(link + '&unsub=1')}" style="color:#9a93a1">Stop these emails</a> ` +
-    `— your shelf still works anytime.`;
+    `— your Library still works anytime.`;
 
   return {
-    subject: n === 1 ? `📚 A new book is on your shelf` : `📚 ${n} new books are on your shelf`,
+    subject: n === 1 ? `📚 A new book is in your Library` : `📚 ${n} new books are in your Library`,
     text:
       `Hi ${name},\n\n` +
-      `${n === 1 ? 'A new book just landed on your shelf:' : `${n} new books just landed on your shelf:`}\n` +
+      `${n === 1 ? 'A new book just arrived in your Library:' : `${n} new books just arrived in your Library:`}\n` +
       `${books.map((b) => `  • ${b.title}${b.author ? ' — ' + b.author : ''}`).join('\n')}\n\n` +
       `Pick what you'd like sent to your Kindle:\n${link}\n\n` +
       `Sent with love by Eric via BookHunt`,
@@ -701,7 +701,7 @@ function buildBookDetailsAnnouncement(recipient, sample = null) {
     </td></tr>`;
 
   const steps = [
-    ['👆', 'Tap or click any book on your shelf.'],
+    ['👆', 'Tap or click any book in your Library.'],
     ['📖', 'See a bigger cover and what the story is about.'],
     ['📤', 'Like it? Send it to your Kindle right from there.'],
   ].map(([icon, txt]) => `<tr>
@@ -713,7 +713,7 @@ function buildBookDetailsAnnouncement(recipient, sample = null) {
     <tr><td style="padding:14px 28px 0">
       <p style="margin:0 0 10px;font-size:16px;color:${INK};line-height:1.6">Hi ${escapeHtml(name)},</p>
       <p style="margin:0;font-size:15px;color:${MUTED};line-height:1.65">
-        Your BookHunt shelf just got a little better. Not sure what a book is about?
+        Your BookHunt Library just got a little better. Not sure what a book is about?
         Now you can <b style="color:${INK}">tap it to take a closer look</b> before you send it.
       </p>
     </td></tr>
@@ -721,31 +721,31 @@ function buildBookDetailsAnnouncement(recipient, sample = null) {
     <tr><td style="padding:20px 28px 0">
       <table role="presentation" cellpadding="0" cellspacing="0" width="100%">${steps}</table>
     </td></tr>
-    ${ctaRow(link, 'Try it on my shelf →', '10px 28px 6px')}
+    ${ctaRow(link, 'Try it in my Library →', '10px 28px 6px')}
     <tr><td style="padding:8px 28px 22px">
       <div style="background:${PAPER};border-left:3px solid ${ACCENT};border-radius:8px;
                   padding:12px 15px;color:#3a3f47;font-size:13px;line-height:1.6">
-        💡 To close it, tap the ✕ or anywhere outside the card — you’re right back on your shelf.
+        💡 To close it, tap the ✕ or anywhere outside the book — you’re right back in your Library.
       </div>
     </td></tr>`;
 
   const footerNote =
     `Rather not get BookHunt emails? <a href="${escapeHtml(link + '&unsub=1')}" style="color:#9a93a1">Stop these emails</a> ` +
-    `— your shelf still works anytime.`;
+    `— your Library still works anytime.`;
 
   return {
-    subject: `✨ New on your shelf: tap a book to peek inside`,
+    subject: `✨ New in your Library: tap a book to peek inside`,
     text:
       `Hi ${name},\n\n` +
-      `Your BookHunt shelf just got a little better. Not sure what a book is about? ` +
+      `Your BookHunt Library just got a little better. Not sure what a book is about? ` +
       `Now you can tap it to take a closer look before you send it:\n\n` +
-      `  1. Tap or click any book on your shelf.\n` +
+      `  1. Tap or click any book in your Library.\n` +
       `  2. See a bigger cover and what the story is about.\n` +
       `  3. Like it? Send it to your Kindle right from there.\n\n` +
       `Try it out:\n${link}\n\n` +
       `To close it, tap the X or anywhere outside the card.\n\n` +
       `Sent with love by Eric via BookHunt`,
-    html: emailShell('New on your shelf', body, footerNote),
+    html: emailShell('New in your Library', body, footerNote),
     attachments,
   };
 }

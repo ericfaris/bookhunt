@@ -49,3 +49,12 @@
 - `/reader/cover` is registered BEFORE the `/reader` 40/min limiter (a shelf page loads ~24 images), with its own 600/min limit.
 - Email covers skip the EPUB step (`epub:false`): it would read the book a second time on top of the Kindle attachment, and r2 send tests pin exactly one GetObject.
 - 2026-10-16: removed the one-time Goodreads Most Read backfill (finished Aug 2026: 88 watched). Route, Settings button, radar drain step, and digest section are gone; `lists.readState()` drops the legacy `backfill` key. The Most Read list stays a live-radar source, and the 18 watches it created keep their 'Backfill' tag as plain data.
+
+## 2026-10-16 — Admin app → routed pages; reader "shelf" → Library
+- Product direction (from the user): the operator app is an admin only they use (desktop-first, room to breathe); the magic-link `/reader` page is the only reader interface (mobile-first). The people are "Readers", the place is their "Library".
+- A live usability pass found Back left the app from every overlay, Recipients overflowed its card (desktop and phone), and the Watchlist was a 360px column on a 1440px screen. The root cause was everything being a phone-sized modal or drawer over the search page. The fix was a hash router + `.page` sections; transient dialogs (send/download/batch/creds) stay modals.
+- Keep each screen's render functions and change only their container. Most of the rework was swapping `panel.hidden` toggles for router enter/leave hooks.
+- Gotcha: the old History renderer showed `notify` (send) entries as downloads (fell through to the else branch). Activity now renders each type explicitly; `channels:[{channel:'reader'}]` means the reader sent it themselves.
+- Gotcha: a full-screen transparent `<dialog>` can't use `e.target === dlg` alone for click-outside; also treat its stage/layout wrappers as empty space. Never call `showModal()` on an already-open dialog (prev/next re-opens): guard with `if (!dlg.open)`.
+- Kept internal ids that persist user state (`shelf-search-2026-07` spotlight key, `setupLazyShelf`) unchanged while renaming visible copy. Renaming the key would re-show a dismissed tip.
+- Verify UI changes with a harness that requires `src/server` (no schedulers start on require) against temp copies of history/watchlist/recipients, SMTP blanked, `DOWNLOAD_PATH=/downloads`, and a temp `COVER_IMAGE_DIR`.

@@ -297,11 +297,12 @@ card, tile-in staggers by `calc(var(--i,0) * 28ms)` per index so a shelf of
 40 books cascades in rather than popping at once.
 
 ### Modals
-`.modal` (scrim + centered `.modal-card`) is one recipe reused for every
-dialog in the app (batch input, credentials, download progress, send,
-settings, status, recipients, re-upload requests, watchlist). Entrance is
-`overlay-in` (scrim fade) + `modal-in` (card fade-up-scale,
-`cubic-bezier(0.2,0.7,0.2,1)` = `--ease-out`).
+`.modal` (scrim + centered `.modal-card`) is reserved for **transient
+dialogs** that interrupt a task and then go away: batch input, credentials,
+download progress, send. Entrance is `overlay-in` (scrim fade) + `modal-in`
+(card fade-up-scale, `cubic-bezier(0.2,0.7,0.2,1)` = `--ease-out`).
+Places you *go to* (Library, Watchlist, Readers, Activity, Settings) are
+pages, not modals. See §6b.
 
 ### The warm-banner (signature moment)
 `.warm-banner` is the one component that breaks from flat/quiet: a
@@ -315,6 +316,75 @@ animation in the system — see §1's key-moments list for why it earns that.
 `.results-empty` / `.lib-empty` pair an outlined dashed box with the brand
 line-art icon and a friendly title. `.lib-book.skeleton` / `.sk-line` render
 a shimmering placeholder (`sk-shimmer`) while library rows load.
+
+### 6b. Admin pages & navigation (2026-10)
+
+**Two surfaces, two postures.** The operator app is a *desktop-first admin*
+used by one person; the reader Library (`/reader`, magic link) is the only
+interface readers see and stays *mobile-first*. Design admin screens for a
+wide monitor first (the admin still works on a phone, it just isn't the
+target), and reader screens for a phone first.
+
+**Pages, not overlays.** Each admin area is a full-width page with its own
+hash URL so Back/Forward, reload and bookmarks work:
+`#/` Search · `#/library` · `#/watchlist` · `#/readers` · `#/activity` ·
+`#/settings`. The top bar (`.topnav`) is real links; the current page gets
+`aria-current="page"` and a 3px ribbon-orange underline. Pages are
+`<section class="page" data-page="…">`; wide pages add `.page-wide`
+(main widens to 1320px). The router (`showRoute` in `app.js`) shows one
+page, sets the document title (`Library · BookHunt`), moves focus to the
+page heading, and closes any dialog left open from the previous page.
+
+**Page anatomy.**
+- `.page-head`: h2 at `--text-2xl` plus a one-sentence `.hint` saying what
+  the page is for, and an optional `.page-count` on the right.
+- `.page-toolbar`: search input that grows, plus `.toolbar-field` selects (Sort, Show)
+  and view toggles.
+- `.tabs` / `.tab[aria-selected]`: status or view tabs with a `.chip-count`;
+  the selected tab carries the ribbon-orange underline (same language as the nav).
+- `.page-more`: "Show more" paging for long collections (Library: 60 per
+  page; Activity: 150 per page).
+- `.panel`: the standard raised surface for forms and side panels.
+
+**Components added in this pass:**
+- `.data-table` (in `.table-wrap`): uppercase `--text-xs` headers on
+  `--surface-2`, `.cell-title` / `.cell-sub` two-line cells, right-aligned
+  `.row-actions`. Below 600px rows restack as cards.
+- `.pill` with `.pill-good` / `.pill-warn` / `.pill-soft` / `.pill-muted`
+  (dashed, for "not yet") and `.pill-glass` (translucent, used on the mega view).
+- `.check-chip`: a checkbox styled as a pill that turns orange-tinted when
+  checked. Used for "who gets notified" and group membership.
+- `.menu` (`<details>` + `.menu-list`): a "More ▾" disclosure for
+  secondary or destructive row actions, so rows stay one line.
+- `.btn-sm`, `.btn-danger` (red text, red border on hover),
+  `.link-btn` (a button that reads as text).
+- `.form-error` / `.row-error`: inline error text. The admin uses no
+  `alert()`; destructive actions use a plain `confirm()` that names
+  what will happen.
+
+**Copy rules.** Actions are labeled with words ("Pause", "Remove", "Copy
+link"), not bare icons. The people books are shared with are **Readers**
+everywhere (never "recipients" or "shelf readers"), and the place they
+browse is their **Library** (never "shelf").
+
+### 6c. Book mega view (both Libraries)
+
+Clicking a book opens a large view of it: a big cover (up to 78vh) with
+title, author, detail pills, description, send history and actions. It
+floats over a see-through backdrop: the page colour at ~60% opacity with
+`backdrop-filter: blur(20–22px) saturate(1.3)`, so the Library stays
+visible but soft behind it. No card or scrim box: the content sits directly
+on the blur. The cover rises in (`mega-cover-in`), the text follows 60ms
+later; both are off under `prefers-reduced-motion`.
+
+- Admin (`#mega` in `index.html`): ‹ › buttons and ← → keys step through
+  the Library's *current filtered order* ("Book 12 of 292").
+- Reader (`dialog#bookDialog` in `reader.html`): the same look on a native
+  `<dialog>`; ‹ › step to neighbouring tiles; side-by-side above 760px,
+  stacked below.
+- Both close on ✕, Esc, or a click on empty space. Round, frosted ✕ and ‹ ›
+  controls sit on the corners (‹ › move to the top bar on phones so they
+  never cover text).
 
 ---
 
@@ -434,6 +504,8 @@ routes). No changes made here.
 | `public/reader-icon-{180,192,512}.png` | PWA/iOS icons | Yes — re-rendered from `reader-icon.svg` |
 | `public/manifest.webmanifest` | Main app manifest | No — pre-existing, confirmed correct |
 | `DESIGN.md` | This document | **New** |
+| `public/index.html` | Admin app: routed `.page` sections + `#mega` | Restructured (2026-10) |
+| `public/reader.html` | Reader Library + its mega-view dialog | Restyled (2026-10) |
 | Mood-board images (§2) | Direction validation, documentation only | **New** — not shipped in the repo, linked by URL |
 
 ---
@@ -447,3 +519,15 @@ routes). No changes made here.
   fixed a dark-mode-fidelity gap (hardcoded status colors), and built the
   live showcase page. No visual regressions intended or expected — full
   test suite (469 tests) passes unchanged.
+- **2026-10-16** — Navigation and layout rework after a usability review
+  (live screenshots: https://claude.ai/artifact/J27ZjRY4aqEdtLShk9cETs).
+  The operator app became a desktop-first admin: six routed full-width
+  pages replace the phone-sized modals and drawers, and Back now works
+  (§6b). Recipients was rebuilt as **Readers** (table, labeled actions,
+  groups moved here), Watchlist got status tabs and compact rows, History
+  became **Activity** (grouped by day, type filters, sentences instead of
+  file paths), and Settings absorbed Status. Added the book mega view to
+  both Libraries (§6c). On the reader page, "shelf" became "Library"
+  throughout (page and emails), and the ribbon mark replaced the 📚 emoji.
+  New components: `.page-*`, `.tabs`, `.data-table`, `.pill-*`,
+  `.check-chip`, `.menu`, `.mega*`. No new colour tokens.

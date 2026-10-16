@@ -10,8 +10,8 @@
   };
 
   if (!t) {
-    $('#greet').textContent = 'This shelf needs its key.';
-    $('#main').textContent = 'Open the personal link from your invite email — it unlocks your shelf automatically.';
+    $('#greet').textContent = 'This Library needs your personal link.';
+    $('#main').textContent = 'Open the link from your invite email. It opens your Library automatically.';
     return;
   }
 
@@ -31,11 +31,12 @@
     data = await res.json();
   } catch {
     $('#greet').textContent = 'Hmm, that link didn’t work.';
-    $('#main').textContent = 'This shelf link is no longer valid. Ask Eric for a fresh invite.';
+    $('#main').textContent = 'This Library link no longer works. Ask Eric for a fresh invite.';
     return;
   }
 
-  $('#greet').textContent = `Hi ${data.name} — here’s your book library. Tap to send any of them to your Kindle.`;
+  const firstName = String(data.name || '').split(/\s+/)[0] || 'there';
+  $('#greet').textContent = `Hi ${firstName}, here’s your Library. Tap any book for details, or send it straight to your Kindle.`;
   $('#foot').hidden = false;
 
   if (!data.kindleSet) {
@@ -107,11 +108,11 @@
     tile.setAttribute('role', 'button');
     tile.setAttribute('aria-haspopup', 'dialog');
     tile.setAttribute('aria-label', `Details for ${b.title}${b.author ? ' by ' + b.author : ''}`);
-    tile.onclick = () => details.open(b, kindleSet, markSent);
+    tile.onclick = () => details.open(b, kindleSet, markSent, tile);
     tile.onkeydown = (e) => {
       if (e.target !== tile || (e.key !== 'Enter' && e.key !== ' ')) return;
       e.preventDefault();
-      details.open(b, kindleSet, markSent);
+      details.open(b, kindleSet, markSent, tile);
     };
     return tile;
   }
@@ -121,7 +122,7 @@
   main.textContent = '';
   if (!data.books.length) {
     main.className = 'center';
-    main.textContent = 'No books on your shelf yet — check back soon. 📭';
+    main.textContent = 'No books in your Library yet. Check back soon. 📭';
   } else {
     const grid = el('div', { className: 'grid' });
     for (const b of data.books) grid.append(renderTile(b, data.kindleSet));
@@ -140,7 +141,7 @@
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ t }),
       });
-      $('#unsub').replaceWith('Emails stopped — your shelf link keeps working. 👋');
+      $('#unsub').replaceWith('Emails stopped. Your Library link keeps working. 👋');
     } catch { /* ignore */ }
   };
 
@@ -151,7 +152,7 @@
     const yes = el('button', { className: 'add', type: 'button', textContent: 'Yes, stop the emails' });
     const no = el('button', { className: 'plain', type: 'button', textContent: 'Keep them' });
     const bar = el('div', { className: 'note' }, [
-      el('div', { style: 'margin-bottom:10px' }, 'Stop the new-book emails? Your shelf link keeps working either way.'),
+      el('div', { style: 'margin-bottom:10px' }, 'Stop the new-book emails? Your Library link keeps working either way.'),
       yes, ' ', no,
     ]);
     yes.onclick = () => { bar.remove(); $('#unsub').click(); };
@@ -325,10 +326,28 @@ function setupBookDetails({ $, el, t, wireSend }) {
 
   const close = () => { if (dlg.open) dlg.close(); };
   $('#bookClose').onclick = close;
-  // A click whose target is the <dialog> itself landed on the backdrop: the
-  // visible card is an inner element that fills the dialog box, so any click
-  // on the card's content targets a descendant instead.
-  dlg.addEventListener('click', (e) => { if (e.target === dlg) close(); });
+  // The dialog is full-screen and see-through: a click that lands on the
+  // dialog, its stage (.card) or the layout row (.body) — i.e. empty space
+  // rather than the cover, text or buttons — closes it.
+  dlg.addEventListener('click', (e) => {
+    if (e.target === dlg || e.target.classList.contains('card') || e.target.classList.contains('body')) close();
+  });
+
+  // ‹ › step to the neighbouring tile in the grid the book was opened from
+  // (shelf or search results), by clicking it — so it opens exactly as a tap would.
+  let currentTile = null;
+  const neighbour = (dir) => {
+    let n = currentTile;
+    do { n = n && (dir > 0 ? n.nextElementSibling : n.previousElementSibling); } while (n && !n.classList.contains('tile'));
+    return n;
+  };
+  const step = (dir) => { const n = neighbour(dir); if (n) n.click(); };
+  $('#bookPrev').onclick = () => step(-1);
+  $('#bookNext').onclick = () => step(1);
+  dlg.addEventListener('keydown', (e) => {
+    if (e.key === 'ArrowLeft') { e.preventDefault(); step(-1); }
+    else if (e.key === 'ArrowRight') { e.preventDefault(); step(1); }
+  });
   dlg.addEventListener('close', () => {
     document.body.classList.remove('modal-open');
     seq++; // drop any in-flight details response
@@ -362,8 +381,11 @@ function setupBookDetails({ $, el, t, wireSend }) {
     wireSend($('#bookSend'), err, b, kindleSet, onSent);
   }
 
-  async function open(b, kindleSet, onSent) {
+  async function open(b, kindleSet, onSent, tile) {
     dismissTip();
+    currentTile = tile || null;
+    $('#bookPrev').hidden = !neighbour(-1);
+    $('#bookNext').hidden = !neighbour(1);
     const mySeq = ++seq;
     fill(b, kindleSet, onSent);
     const hit = cache.get(b.id);
@@ -371,8 +393,7 @@ function setupBookDetails({ $, el, t, wireSend }) {
     if (hit) setDescription(hit.description || 'No description is available for this book yet.', hit.description ? '' : 'none');
     else setDescription('Loading the description…', 'loading');
     document.body.classList.add('modal-open');
-    dlg.showModal();
-    $('#bookClose').focus();
+    if (!dlg.open) { dlg.showModal(); $('#bookClose').focus(); }
     if (hit) return;
     try {
       const res = await fetch('/reader/api/book?t=' + encodeURIComponent(t) + '&id=' + encodeURIComponent(b.id));
@@ -424,7 +445,7 @@ function setupSearch(t, $, el, renderTile) {
     id: 'shelf-search-2026-07',
     target: form,
     title: '🔍 New: search your whole library',
-    body: 'Find any book on your shelf, or ask us to watch for one we don’t have yet — right from here.',
+    body: 'Find any book in the Library, or ask us to watch for one we don’t have yet, right from here.',
     el,
   });
 
@@ -462,7 +483,7 @@ function setupSearch(t, $, el, renderTile) {
       }
     };
     return el('div', { className: 'note' }, [
-      el('div', { style: 'margin-bottom:10px' }, `Couldn’t find “${query}” on the shelf. Want us to keep looking?`),
+      el('div', { style: 'margin-bottom:10px' }, `Couldn’t find “${query}” in the Library. Want us to keep looking?`),
       wf,
     ]);
   }

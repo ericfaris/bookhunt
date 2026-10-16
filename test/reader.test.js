@@ -148,7 +148,7 @@ test('buildInviteEmail: personal, carries the link, uses the brand shell', () =>
   assert.match(msg.text, /April/);
   assert.match(msg.text, /\/reader\?t=tok223456789012345678/);
   assert.match(msg.html, /Book<span[^>]*>Hunt<\/span>/, 'has the wordmark');
-  assert.match(msg.html, /Open my shelf/, 'has the CTA button');
+  assert.match(msg.html, /Open my Library/, 'has the CTA button');
   assert.match(msg.html, /just for you/i, 'reassures the link is private, plainly');
   assert.deepEqual(msg.attachments, [], 'invite has no attachments');
 });
