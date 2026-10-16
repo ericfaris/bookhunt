@@ -45,6 +45,13 @@ const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
 const MAX_W = 900;
 const MAX_H = 1350;
 const OPTIMIZE_OVER_BYTES = 350 * 1024;
+// A cover narrower than this looks soft in the mega view (and on 2x screens
+// even as a tile). The chain treats it as a fallback and keeps looking for a
+// better source; only if none exists is the small one used.
+const MIN_GOOD_W = 400;
+// Bumped when stored images get materially better (e.g. the 2026-10 upgrade
+// from 128px catalog thumbnails), so browsers drop their week-long cached copy.
+const COVER_REV = '2';
 const GENERATED_TTL_MS = 24 * 60 * 60 * 1000;
 
 const EXT_BY_MIME = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/gif': 'gif', 'image/webp': 'webp', 'image/svg+xml': 'svg' };
@@ -211,6 +218,8 @@ function generatedCoverSvg({ title, author }) {
 // --- Resolve ------------------------------------------------------------------
 
 const inflight = new Map();
+// Small stored covers already given an upgrade attempt in this process.
+const upgradeTried = new Set();
 
 /**
  * The image to show for `book` ({ title, author, cover?, savePath?,
@@ -236,6 +245,20 @@ async function getCoverImage(book, opts = {}) {
         const small = await optimizeImage(img, opts);
         if (small !== img) { writeStored(key, dir, small.bytes, small.mime); return small; }
       }
+      // A low-res cover (e.g. a 128px catalog thumbnail stored before the
+      // chain became quality-aware) gets one upgrade attempt per process.
+      const flight = dir + '|' + key;
+      const lowRes = !img.generated && !upgradeTried.has(flight) && img.bytes.length < 120 * 1024
+        ? await widthOf(img.bytes, opts) : 0;
+      if (lowRes > 0 && lowRes < MIN_GOOD_W) {
+        upgradeTried.add(flight);
+        const better = await findRealCover(book || {}, opts);
+        if (better && (better.width || 0) > lowRes) {
+          const found = await optimizeImage(better, opts);
+          writeStored(key, dir, found.bytes, found.mime);
+          return { ...found, generated: false };
+        }
+      }
       return img;
     }
   }
@@ -257,30 +280,45 @@ async function getCoverImage(book, opts = {}) {
   return p;
 }
 
-/** Steps 1–3 of the chain; null when none produced a real image. */
+/** Pixel width of an image (0 when unknown — sharp missing or unreadable). */
+async function widthOf(bytes, opts = {}) {
+  const sharp = opts.sharp === undefined ? loadSharp() : opts.sharp;
+  if (!sharp) return 0;
+  try { return (await sharp(bytes).metadata()).width || 0; } catch { return 0; }
+}
+
+/**
+ * Steps 1–3 of the chain; null when none produced a real image. Quality-aware:
+ * the first image at least MIN_GOOD_W wide wins; a smaller one is remembered
+ * and the chain keeps looking, falling back to the widest seen. (When width
+ * can't be measured, the first hit wins, as before.)
+ */
 async function findRealCover(book, opts) {
+  let best = null;
+  const consider = async (hit, source) => {
+    if (!hit) return false;
+    const width = await widthOf(hit.bytes, opts);
+    const cand = { ...hit, source, width };
+    if (!width || width >= MIN_GOOD_W) { best = cand; return true; }
+    if (!best || width > (best.width || 0)) best = cand;
+    return false;
+  };
   try {
     // 1. The cover stored with the download.
-    if (book.cover) {
-      const hit = await fetchBest(book.cover, opts);
-      if (hit) return { ...hit, source: 'stored-url' };
-    }
+    if (book.cover && (await consider(await fetchBest(book.cover, opts), 'stored-url'))) return best;
     // 2. The cover inside the ePUB.
     if (book.savePath && book.filePresent !== false && opts.epub !== false) {
       try {
         const buf = await (opts.readBook || ((p) => storage.get().getBuffer(p)))(book.savePath);
         const hit = epub.extractCoverImage(buf);
-        if (hit && hit.bytes.length >= MIN_IMAGE_BYTES) return { ...hit, source: 'epub' };
+        if (hit && hit.bytes.length >= MIN_IMAGE_BYTES && (await consider(hit, 'epub'))) return best;
       } catch { /* unreadable book — try the catalogs */ }
     }
     // 3. The catalogs.
     const url = await (opts.resolveCover || covers.resolveCover)({ title: book.title, author: book.author });
-    if (url && url !== book.cover) {
-      const hit = await fetchBest(url, opts);
-      if (hit) return { ...hit, source: 'catalog' };
-    }
-  } catch { /* fall back to a generated cover */ }
-  return null;
+    if (url && url !== book.cover && (await consider(await fetchBest(url, opts), 'catalog'))) return best;
+  } catch { /* fall back to whatever we have, else a generated cover */ }
+  return best;
 }
 
 /**
@@ -308,7 +346,7 @@ function invalidate(book, opts = {}) {
 /** Short version token for an image URL: changes when the stored cover URL
  *  changes, so a hand-fixed cover isn't masked by the browser's cached copy. */
 function versionFor(book) {
-  return crypto.createHash('sha256').update(String((book && book.cover) || '')).digest('hex').slice(0, 8);
+  return crypto.createHash('sha256').update(COVER_REV + '|' + String((book && book.cover) || '')).digest('hex').slice(0, 8);
 }
 
 /** Express helper: send a resolved cover with cache headers. Real images
@@ -334,6 +372,7 @@ module.exports = {
   optimizeImage,
   rasterize,
   OPTIMIZE_OVER_BYTES,
+  MIN_GOOD_W,
   MAX_W,
   MAX_H,
   keyFor,

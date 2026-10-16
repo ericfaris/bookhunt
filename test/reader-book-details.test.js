@@ -76,8 +76,8 @@ test('largeCoverUrl: strips Amazon size tokens to the original upload', () => {
 });
 
 test('largeCoverUrl: unknown hosts unchanged, empty → null', () => {
-  const g = 'https://books.google.com/books/content?id=abc&printsec=frontcover&img=1&zoom=1';
-  assert.equal(reader.largeCoverUrl(g), g);
+  const u = 'https://images.example.org/covers/abc.jpg';
+  assert.equal(reader.largeCoverUrl(u), u);
   assert.equal(reader.largeCoverUrl(''), null);
   assert.equal(reader.largeCoverUrl(null), null);
 });

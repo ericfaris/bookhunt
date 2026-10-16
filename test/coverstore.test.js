@@ -285,3 +285,60 @@ test('email: a PNG cover attaches as cover.png with its real content type', () =
   assert.equal(att.filename, 'cover.png');
   assert.equal(att.contentType, 'image/png');
 });
+
+// --- Quality-aware chain: prefer covers at least MIN_GOOD_W wide -----------------
+
+const { googleLargeCover, largeCoverUrl: largeUrl } = require('../src/covers');
+
+test('googleLargeCover: drops zoom + page-curl, asks for 800×1200', () => {
+  const u = largeUrl('http://books.google.com/books/content?id=rXShEQAAQBAJ&printsec=frontcover&img=1&zoom=1&edge=curl&source=gbs_api');
+  const q = new URL(u);
+  assert.equal(q.protocol, 'https:');
+  assert.equal(q.searchParams.get('fife'), 'w800-h1200');
+  assert.equal(q.searchParams.get('zoom'), null);
+  assert.equal(q.searchParams.get('edge'), null);
+  assert.equal(q.searchParams.get('id'), 'rXShEQAAQBAJ');
+  assert.equal(googleLargeCover('not a url'), 'not a url');
+});
+
+test('getCoverImage: a 128px stored thumbnail loses to a large ePUB cover', async () => {
+  const dir = tmpDir();
+  const thumb = await realJpeg(128, 192, 90);
+  const bigEpubCover = await realJpeg(600, 900, 80);
+  const book = epubWith('<manifest><item id="c" href="c.jpg" media-type="image/jpeg" properties="cover-image"/></manifest>',
+    [{ name: 'OEBPS/c.jpg', data: bigEpubCover }]);
+  const out = await coverstore.getCoverImage({ ...BOOK, cover: 'https://x/thumb.jpg', savePath: '/downloads/b.epub' }, {
+    dir, fetchImage: async () => thumb, readBook: async () => book, resolveCover: async () => null,
+  });
+  assert.equal(out.source, 'epub');
+  assert.equal((await sharp(out.bytes).metadata()).width, 600);
+});
+
+test('getCoverImage: with nothing better, the small cover is still used (never blank)', async () => {
+  const dir = tmpDir();
+  const thumb = await realJpeg(128, 192, 90);
+  const out = await coverstore.getCoverImage({ ...BOOK, cover: 'https://x/thumb.jpg' }, {
+    dir, epub: false, fetchImage: async (u) => (u === 'https://x/thumb.jpg' ? thumb : null), resolveCover: async () => null,
+  });
+  assert.equal(out.source, 'stored-url');
+  assert.equal(out.generated, false);
+});
+
+test('getCoverImage: a low-res cover stored earlier is upgraded once when viewed', async () => {
+  const dir = tmpDir();
+  const key = coverstore.keyFor(BOOK);
+  fs.writeFileSync(path.join(dir, key + '.jpg'), await realJpeg(128, 192, 90));
+  let lookups = 0;
+  const opts = { dir, epub: false, resolveCover: async () => { lookups++; return 'https://cat/big.jpg'; }, fetchImage: async () => realJpeg(640, 960, 80) };
+  const out = await coverstore.getCoverImage(BOOK, opts);
+  assert.equal((await sharp(out.bytes).metadata()).width, 640);
+  assert.equal((await sharp(fs.readFileSync(path.join(dir, key + '.jpg'))).metadata()).width, 640, 'saved');
+  await coverstore.getCoverImage(BOOK, opts);
+  assert.equal(lookups, 1, 'no repeat lookups once upgraded');
+});
+
+test('versionFor: includes a revision so improved covers bust week-long browser caches', () => {
+  const v = coverstore.versionFor({ cover: 'https://x/c.jpg' });
+  assert.match(v, /^[0-9a-f]{8}$/);
+  assert.notEqual(v, require('node:crypto').createHash('sha256').update('https://x/c.jpg').digest('hex').slice(0, 8));
+});

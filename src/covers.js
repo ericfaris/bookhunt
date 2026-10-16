@@ -192,6 +192,22 @@ function descriptionFromITunes(query, data) {
   return best ? cleanDescription(best) : null;
 }
 
+/** PURE: a Google Books cover URL asking for an 800×1200 rendition. The API
+ *  hands out 128px `zoom=1` thumbnails, some with `edge=curl` (a fake page
+ *  curl drawn on the corner); `fife=w800-h1200` returns a proper large image. */
+function googleLargeCover(url) {
+  try {
+    const u = new URL(url);
+    u.protocol = 'https:';
+    u.searchParams.delete('zoom');
+    u.searchParams.delete('edge');
+    u.searchParams.set('fife', 'w800-h1200');
+    return u.toString();
+  } catch {
+    return url;
+  }
+}
+
 /** PURE: best-effort upgrade of a thumbnail-sized cover URL to a larger
  *  rendition. Only rewrites hosts whose size convention we know (Open Library
  *  `-S/-M` → `-L`; Amazon `._SX300_` tokens stripped → original upload; Apple
@@ -204,6 +220,7 @@ function largeCoverUrl(url) {
     return u.replace(/\._[^/]*?_(\.[a-z]+)$/i, '$1');
   }
   if (/^https?:\/\/[^/]*mzstatic\.com\//.test(u)) return itunesLargeArtwork(u);
+  if (/^https?:\/\/books\.google(usercontent)?\.com\/books\/(content|publisher)/.test(u)) return googleLargeCover(u);
   return u;
 }
 
@@ -568,6 +585,7 @@ module.exports = {
   descriptionFromITunes,
   itunesLargeArtwork,
   largeCoverUrl,
+  googleLargeCover,
   fetchJson,
   negativeIsFresh,
   CACHE_VERSION,
