@@ -7,9 +7,9 @@
 // sends nothing and stamps nothing. Run inside the container (so it sees the
 // live recipients.json + R2 library):
 //
-//   docker compose exec bookhunt node scripts/announce-book-details.js                 # dry run + preview
-//   docker compose exec bookhunt node scripts/announce-book-details.js --only <id|email> --send   # test to one
-//   docker compose exec bookhunt node scripts/announce-book-details.js --send          # everyone
+//   docker compose exec app node scripts/announce-book-details.js                 # dry run + preview
+//   docker compose exec app node scripts/announce-book-details.js --only <id|email> --send   # test to one
+//   docker compose exec app node scripts/announce-book-details.js --send          # everyone
 //
 // Idempotent: each recipient is stamped readerAnnouncements[<id>] after a
 // successful send, so re-running only reaches readers not yet emailed.

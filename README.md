@@ -181,8 +181,8 @@ to a host folder (e.g. `rclone sync r2:bookhunt-library/books ./books-backup`).
 files are back. Don't flip to `local` without the bind mount — downloads would
 land in the container's ephemeral filesystem and vanish on the next recreate.
 
-**Migration script** (`scripts/migrate-to-r2.js`, how the cutover was done; host
-only — `scripts/` isn't in the Docker image): `node scripts/migrate-to-r2.js
+**Migration script** (`scripts/migrate-to-r2.js`, how the cutover was done; `scripts/`
+ships in the image since v1.30.0, but this one was run from the host): `node scripts/migrate-to-r2.js
 --src <folder>` is a dry run that lists the bucket and prints the plan; add
 `--apply` to upload. It's idempotent (present objects are skipped), verifies each
 upload, and never deletes or modifies local files. Reuse it to re-seed the bucket
@@ -291,7 +291,7 @@ The reader portal (issue #34) lets invited readers open a passwordless magic lin
 
 Tapping a book on the reader shelf opens a details modal (`<dialog>` in `public/reader.html`) with a larger cover and the catalog description, served by `GET /reader/api/book?t=&id=`. Only sendable books resolve; anything else returns 404. Descriptions come from the disk-cached `covers.resolveMeta`. New shelf features announce themselves once per device with `spotlightFeature()` in `public/reader.js`.
 
-To email readers about a feature, run `scripts/announce-book-details.js` inside the container. It is a dry run by default: it lists recipients and writes an HTML preview. `--only <id|email> --send` sends a test to one recipient, and `--send` emails everyone. Readers who unsubscribed are skipped. Each recipient is stamped `readerAnnouncements[<id>]`, so re-running never emails anyone twice.
+To email readers about a feature, run `docker compose exec app node scripts/announce-book-details.js`. It must run **inside the container**: it writes `recipients.json`, and an atomic rename from the host would swap the file's inode out from under the single-file bind mount. It is a dry run by default: it lists recipients and writes an HTML preview. `--only <id|email> --send` sends a test to one recipient, and `--send` emails everyone. Readers who unsubscribed are skipped. Each recipient is stamped `readerAnnouncements[<id>]`, so re-running never emails anyone twice.
 
 ### Downloads
 

@@ -36,3 +36,4 @@
 - Pre-existing bug: `.install { display:flex }` beat the `[hidden]` attribute, so the install hint showed as an empty pill when no install event fired (e.g. desktop). Any class that sets `display` needs a `[hidden]{display:none}` override (same as `.search`).
 - Running a single test file with bare `node --test` loads `.env` → `STORAGE=r2` → a real (read-only) R2 index list. Always run `STORAGE=local node --test ...`.
 - One-off reader emails: dry run by default, per-recipient stamp written right after each send (fresh mutate), failures left unstamped so a re-run retries them. Preview HTML uses a placeholder token so no real magic link lands in /tmp.
+- Scripts that WRITE a bind-mounted single-file store (recipients.json etc.) must run inside the container. On the host, writeJsonAtomic's rename succeeds and swaps the inode, so the container keeps the stale file. That's why `scripts/` now ships in the image.
