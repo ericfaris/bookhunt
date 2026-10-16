@@ -19,6 +19,7 @@
 const searcher = require('./searcher');
 const watchlist = require('./watchlist');
 const notify = require('./notify');
+const coverstore = require('./coverstore');
 const recipients = require('./recipients');
 const history = require('./history');
 const settings = require('./settings');
@@ -203,6 +204,14 @@ async function autoDeliver(watch, results, opts = {}) {
   let delivered = 0;
   let kindlePushed = 0;
   const emailed = new Set();
+  // The stored cover image (coverstore), without the ePUB step (that would read
+  // the book again on top of the Kindle attachment). Generated SVG jackets are
+  // skipped (email clients won't render SVG); the email keeps its placeholder.
+  try {
+    const img = await coverstore.getCoverImage({ ...book, savePath: download && download.savePath, filePresent: !!download }, { epub: false });
+    if (!img.generated) { book.coverBuffer = img.bytes; book.coverMime = img.mime; }
+  } catch { /* URL / placeholder fallback */ }
+
   // Fetched at most once for all recipients (#47): local passes the savePath
   // as-is (unresolved, as before); r2 pulls the bytes from the bucket.
   let att = null;

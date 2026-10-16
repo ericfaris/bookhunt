@@ -92,9 +92,14 @@ function buildMessage({ recipient, book }) {
   // Attach the cover as an inline CID image so it renders even when clients
   // block remote images. nodemailer fetches the http(s) `path` itself. Only do
   // this for real http(s) URLs (skip data URIs / blanks).
+  // Prefer the stored image bytes (coverstore: may be the ePUB's own cover)
+  // over handing nodemailer a URL to fetch.
   const attachments = [];
-  const hasCover = /^https?:\/\//i.test(String(book.cover || ''));
-  if (hasCover) {
+  const hasBuffer = Buffer.isBuffer(book.coverBuffer) && book.coverBuffer.length > 0;
+  const hasCover = hasBuffer || /^https?:\/\//i.test(String(book.cover || ''));
+  if (hasBuffer) {
+    attachments.push({ filename: 'cover.jpg', content: book.coverBuffer, contentType: book.coverMime || 'image/jpeg', cid: 'cover@book' });
+  } else if (hasCover) {
     attachments.push({ filename: 'cover.jpg', path: book.cover, cid: 'cover@book' });
   }
 

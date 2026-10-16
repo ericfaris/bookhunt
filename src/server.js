@@ -20,6 +20,7 @@ const reuploads = require('./reuploads');
 const library = require('./library');
 const booktags = require('./booktags');
 const covers = require('./covers');
+const coverstore = require('./coverstore');
 const messages = require('./messages');
 const batch = require('./batch');
 const correct = require('./correct');
@@ -99,6 +100,23 @@ app.use('/api', security.rateLimiter({ windowMs: 60_000, max: 300 }));
 // origin-side). Auth = per-recipient token, resolved constant-time; invalid
 // tokens 404 so the route doesn't confirm which tokens exist. Tighter rate
 // limit than the operator API: readers browse and tap, they don't hammer.
+// Reader cover images (see coverstore). Registered BEFORE the /reader rate
+// limit: a shelf page loads one image per tile, which would blow through 40/min
+// on its own. Still token-gated, with its own (looser) limit; an image is
+// resolved once per book and then served from disk.
+app.get('/reader/cover', security.rateLimiter({ windowMs: 60_000, max: 600 }), async (req, res) => {
+  const r = reader.byToken(String(req.query.t || ''));
+  if (!r) return res.status(404).end();
+  try {
+    const img = await reader.coverImageForReader(String(req.query.id || '').slice(0, 100));
+    if (!img) return res.status(404).end();
+    coverstore.send(res, img);
+  } catch (err) {
+    console.error('Reader cover failed:', err);
+    res.status(500).end();
+  }
+});
+
 app.use('/reader', security.rateLimiter({ windowMs: 60_000, max: 40 }));
 
 // Reader API responses are personal (name, books, sent-state) and the URLs
@@ -811,7 +829,8 @@ app.get('/api/history', (_req, res) => {
 app.get('/api/library', async (_req, res) => {
   const bookStore = storage.get();
   await bookStore.ensureIndex();
-  const books = library.buildLibrary(history.readAll(), (p) => bookStore.existsSync(p));
+  const books = library.buildLibrary(history.readAll(), (p) => bookStore.existsSync(p))
+    .map((b) => ({ ...b, coverImage: libraryCoverUrl(b) }));
   const store = booktags.readStore();
   res.json({ books: booktags.attachTags(books, store), allTags: booktags.allTags(store) });
 });
@@ -895,7 +914,48 @@ app.put('/api/library/:id/cover', async (req, res) => {
       if (e.type === 'download' && e.savePath && path.resolve(e.savePath) === keyPath) e.cover = cover;
     }
   });
+  // Drop the stored image so the next load re-resolves from the new cover (the
+  // client re-requests it with a fresh cache-busting token).
+  coverstore.invalidate({ title: target.title, author: target.author || library.authorFromFilename(target.filename) || '' });
   res.json({ ok: true, cover });
+});
+
+// --- Cover images (stored; see src/coverstore.js) ------------------------------
+// Every cover the operator app shows loads from one of these, never straight
+// from a catalog: the image is found once (stored URL → the ePUB's own cover →
+// catalog chain → generated jacket), saved to disk, and served from there.
+// Outside /api so a Library full of images doesn't eat the API rate limit.
+function libraryCoverUrl(book) {
+  return `/cover-image/book/${encodeURIComponent(book.id)}?v=${coverstore.versionFor(book)}`;
+}
+
+app.get('/cover-image/book/:id', async (req, res) => {
+  try {
+    const bookStore = storage.get();
+    await bookStore.ensureIndex();
+    const book = library.buildLibrary(history.readAll(), (p) => bookStore.existsSync(p)).find((b) => b.id === req.params.id);
+    if (!book) return res.status(404).end();
+    coverstore.send(res, await coverstore.getCoverImage(book));
+  } catch (err) {
+    console.error('Cover image failed:', err);
+    res.status(500).end();
+  }
+});
+
+// Books that aren't in the Library (search results, watchlist): same chain
+// minus the ePUB step. `cover` is an optional known URL to try first.
+app.get('/cover-image/lookup', async (req, res) => {
+  const str = (v) => (typeof v === 'string' ? v.slice(0, 300) : '');
+  const title = str(req.query.title);
+  const author = str(req.query.author);
+  const cover = /^https:\/\//i.test(str(req.query.cover)) ? str(req.query.cover) : null;
+  if (!title.trim() && !author.trim() && !cover) return res.status(400).end();
+  try {
+    coverstore.send(res, await coverstore.getCoverImage({ title, author, cover }, { epub: false }));
+  } catch (err) {
+    console.error('Cover lookup image failed:', err);
+    res.status(500).end();
+  }
 });
 
 // --- Cover lookup: lazy per-book cover for Library rows lacking one ----------
@@ -1208,6 +1268,14 @@ app.post('/api/send', async (req, res) => {
       }
     } catch { /* leave blanks — never block a send on metadata */ }
   }
+  // The same stored image the Library shows (incl. the ePUB's own cover once
+  // the Library has resolved it). The ePUB step is skipped here — it would read
+  // the book a second time on top of the Kindle attachment. A generated SVG
+  // jacket is skipped too (email clients won't render SVG).
+  try {
+    const img = await coverstore.getCoverImage({ ...bookInfo, savePath: entry.savePath, filePresent: true }, { epub: false });
+    if (!img.generated) { bookInfo.coverBuffer = img.bytes; bookInfo.coverMime = img.mime; }
+  } catch { /* fall back to the URL / placeholder */ }
   const results = [];
   // The attachment is fetched at most once per send (not per recipient): local
   // passes the resolved path as before; r2 fetches the bytes from the bucket.

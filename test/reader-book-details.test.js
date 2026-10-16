@@ -25,7 +25,7 @@ const { app } = require('../src/server');
 const { request, withServer } = require('./http-helpers');
 
 const TOKEN = 'tok_' + 'x'.repeat(40);
-const RECIPIENT = { id: 'r1', name: 'Alice' };
+const RECIPIENT = { id: 'r1', name: 'Alice', readerToken: TOKEN };
 
 let origResolveMeta;
 let origResolveCover;
@@ -90,8 +90,9 @@ test('bookDetailsForReader: sendable book → tile fields + description + large 
   assert.equal(d.id, e.id);
   assert.equal(d.title, 'Real Book');
   assert.equal(d.author, 'Someone');
-  assert.equal(d.cover, 'https://covers.openlibrary.org/b/id/1-M.jpg', 'keeps the stored (exact) cover over the catalog one');
-  assert.equal(d.coverLarge, 'https://covers.openlibrary.org/b/id/1-L.jpg');
+  // Covers are served (and stored) by our own endpoint, never hot-linked.
+  assert.match(d.cover, new RegExp(`^/reader/cover\\?t=${TOKEN}&id=${encodeURIComponent(e.id)}&v=[0-9a-f]{8}$`));
+  assert.equal(d.coverLarge, d.cover, 'the stored image is already the large rendition');
   assert.equal(d.description, 'A sweeping tale.');
   assert.equal(d.sent, false);
   assert.deepEqual(metaCalls, [{ title: 'Real Book', author: 'Someone' }]);
@@ -114,17 +115,16 @@ test('bookDetailsForReader: a catalog lookup failure still returns the book, jus
   });
   assert.equal(d.title, 'Real Book');
   assert.equal(d.description, '');
-  assert.equal(d.coverLarge, 'https://covers.openlibrary.org/b/id/1-L.jpg');
+  assert.match(d.coverLarge, /^\/reader\/cover\?/);
 });
 
-test('bookDetailsForReader: no stored cover → falls back to the catalog cover', async () => {
-  const e = addBook({ cover: null });
-  const d = await reader.bookDetailsForReader(RECIPIENT, e.id, {
-    resolveMeta: async () => ({ cover: 'https://covers.openlibrary.org/b/id/9-M.jpg', description: null }),
-  });
-  assert.equal(d.cover, 'https://covers.openlibrary.org/b/id/9-M.jpg');
-  assert.equal(d.coverLarge, 'https://covers.openlibrary.org/b/id/9-L.jpg');
-  assert.equal(d.description, '');
+test('bookDetailsForReader: the cover URL version changes when the stored cover does', async () => {
+  const e1 = addBook({ title: 'One', cover: 'https://covers.openlibrary.org/b/id/1-M.jpg' });
+  const e2 = addBook({ title: 'Two', cover: null });
+  const d1 = await reader.bookDetailsForReader(RECIPIENT, e1.id);
+  const d2 = await reader.bookDetailsForReader(RECIPIENT, e2.id);
+  const v = (u) => new URL(u, 'http://x').searchParams.get('v');
+  assert.notEqual(v(d1.cover), v(d2.cover));
 });
 
 // --- GET /reader/api/book ---------------------------------------------------------
@@ -137,7 +137,7 @@ test('GET /reader/api/book: valid token + id → 200 with details', async () => 
     assert.equal(res.json.kindleSet, true);
     assert.equal(res.json.book.title, 'Real Book');
     assert.equal(res.json.book.description, 'A sweeping tale.');
-    assert.equal(res.json.book.coverLarge, 'https://covers.openlibrary.org/b/id/1-L.jpg');
+    assert.match(res.json.book.coverLarge, /^\/reader\/cover\?t=/);
   });
 });
 

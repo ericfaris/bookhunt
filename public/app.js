@@ -477,6 +477,43 @@ function debounce(fn, ms) {
   };
 }
 
+// --- Cover images ------------------------------------------------------------
+// Every cover in the app ends at our stored-cover endpoints (src/coverstore.js),
+// which walk stored URL → the ePUB's own cover → catalogs → a generated jacket,
+// save the image, and serve it from disk. So a cover is never blank: an <img>
+// whose own URL fails falls back to the endpoint, and only if THAT fails (server
+// down) do we show the 📖 placeholder.
+
+/** Stored-cover endpoint for a book that isn't (necessarily) in the Library. */
+function lookupCoverUrl(title, author, cover) {
+  const p = new URLSearchParams();
+  if (title) p.set('title', title);
+  if (author) p.set('author', author);
+  if (cover && /^https:\/\//i.test(cover)) p.set('cover', cover);
+  return `/cover-image/lookup?${p.toString()}`;
+}
+
+/** Stored-cover endpoint for a Library book (`coverImage` comes from /api/library). */
+function libraryCoverSrc(book) {
+  return book.coverImage || `/cover-image/book/${encodeURIComponent(book.id)}`;
+}
+
+/** An <img> that tries `src`, then `fallback`, then becomes `placeholder()`.
+ *  With `zoomTitle`, clicking it opens the lightbox on whatever loaded. */
+function coverImg({ className, src, fallback, placeholder, zoomTitle }) {
+  const img = el('img', { className: className + (zoomTitle !== undefined ? ' zoomable' : ''), src: src || fallback, alt: 'cover', loading: 'lazy' });
+  if (zoomTitle !== undefined) {
+    img.title = 'Click to enlarge';
+    img.addEventListener('click', () => openLightbox(img.currentSrc || img.src, zoomTitle));
+  }
+  let triedFallback = !src || src === fallback;
+  img.addEventListener('error', () => {
+    if (!triedFallback && fallback) { triedFallback = true; img.src = fallback; return; }
+    img.replaceWith(placeholder());
+  });
+  return img;
+}
+
 // Build one result card node. (renderCard appends it — kept for compatibility.)
 //
 // When a book was found INSIDE a multi-book set (`r.collection`), the forum
@@ -494,16 +531,15 @@ function buildCard(r) {
 
   // --- Cover slot (mutable so a set card can swap in the real book's art) ---
   const cover = el('div', { className: 'cover-slot' });
+  const placeholder = () => el('div', { className: 'cover placeholder', title: 'No cover available' }, '📖');
   function renderCover(src, { loading = false } = {}) {
     cover.innerHTML = '';
-    if (src) {
-      const img = el('img', { className: 'cover zoomable', src, alt: 'cover', loading: 'lazy', title: 'Click to enlarge' });
-      img.addEventListener('click', () => openLightbox(src, heroTitle));
-      cover.append(img);
-    } else {
-      const ph = el('div', { className: 'cover placeholder' + (loading ? ' loading' : ''), title: loading ? 'Looking up cover…' : 'No cover available' }, loading ? '' : '📖');
-      cover.append(ph);
+    if (loading) {
+      cover.append(el('div', { className: 'cover placeholder loading', title: 'Looking up cover…' }, ''));
+      return;
     }
+    // No/broken cover → the stored-cover lookup (catalogs → generated jacket).
+    cover.append(coverImg({ className: 'cover', src, fallback: lookupCoverUrl(heroTitle, heroAuthor), placeholder, zoomTitle: heroTitle }));
   }
   // A set card ignores the post's (set) cover and looks up the real one below;
   // a normal card uses the scraped cover immediately.
@@ -583,12 +619,14 @@ function buildCard(r) {
     fetch(`/api/meta?${params.toString()}`)
       .then((res) => res.json())
       .then((meta) => {
-        renderCover(meta && meta.cover ? meta.cover : (r.cover || null));
+        // No catalog art for THIS book → the stored-cover lookup (which ends in
+        // a generated jacket), not the set's cover, which is a different book.
+        renderCover(meta && meta.cover ? meta.cover : null);
         const blurb = (meta && meta.description) || r.description;
         if (blurb) { synopsisSlot.innerHTML = ''; synopsisSlot.append(buildSynopsis(blurb)); }
       })
       .catch(() => {
-        renderCover(r.cover || null); // network hiccup → fall back to the set cover
+        renderCover(null); // network hiccup → stored-cover lookup for this book
         if (r.description) { synopsisSlot.innerHTML = ''; synopsisSlot.append(buildSynopsis(r.description)); }
       });
   }
@@ -622,17 +660,13 @@ function renderLibraryHits(books) {
 function buildLibraryHitCard(book) {
   // Mutable cover slot — a catalog lookup fills it in when the record has none.
   const cover = el('div', { className: 'cover-slot' });
-  function renderCover(src, { loading = false } = {}) {
+  // Always the Library's stored image (the same one the Library shows).
+  function renderCover() {
     cover.innerHTML = '';
-    if (src) {
-      const img = el('img', { className: 'cover zoomable', src, alt: 'cover', loading: 'lazy', title: 'Click to enlarge' });
-      img.addEventListener('click', () => openLightbox(src, book.title));
-      cover.append(img);
-    } else {
-      cover.append(el('div', { className: 'cover placeholder' + (loading ? ' loading' : ''), title: loading ? 'Looking up cover…' : 'No cover available' }, loading ? '' : '📖'));
-    }
+    const placeholder = () => el('div', { className: 'cover placeholder', title: 'No cover available' }, '📖');
+    cover.append(coverImg({ className: 'cover', src: libraryCoverSrc(book), placeholder, zoomTitle: book.title }));
   }
-  renderCover(book.cover || null, { loading: !book.cover });
+  renderCover();
 
   const badges = el('div', { className: 'badges' }, [
     el('span', { className: 'badge own' }, '📚 In your library'),
@@ -686,7 +720,7 @@ function buildLibraryHitCard(book) {
     actions,
   ]);
 
-  // Catalog lookup: fill the cover (if missing) and always try for a blurb.
+  // Catalog lookup for the blurb (the cover comes from the stored image above).
   const params = new URLSearchParams();
   if (book.title) params.set('title', book.title);
   if (book.author) params.set('author', book.author);
@@ -694,12 +728,9 @@ function buildLibraryHitCard(book) {
     fetch(`/api/meta?${params.toString()}`)
       .then((r) => r.json())
       .then((meta) => {
-        if (!book.cover) renderCover((meta && meta.cover) || null);
         if (meta && meta.description) { synopsisSlot.innerHTML = ''; synopsisSlot.append(buildSynopsis(meta.description)); }
       })
-      .catch(() => { if (!book.cover) renderCover(null); });
-  } else if (!book.cover) {
-    renderCover(null);
+      .catch(() => { /* no blurb */ });
   }
 
   return el('div', { className: 'card library-card' }, [cover, body]);
@@ -2036,16 +2067,8 @@ $('#libViewList').classList.toggle('active', libViewMode === 'list');
 $('#libViewGrid').classList.toggle('active', libViewMode === 'grid');
 
 // Full set from the last /api/library load; the search box filters this in place
-// (no refetch). Covers resolved lazily are remembered across re-filters.
+// (no refetch).
 let allLibraryBooks = [];
-const coverCache = new Map(); // 'title|author' (lowercased) -> url | null
-
-// The cover the Library currently shows for a book (lazily resolved, same key
-// the row used), so a resend can hand the email the exact right artwork.
-function resolvedLibraryCover(book) {
-  const key = `${book.title || ''}|${book.author || ''}`.toLowerCase();
-  return coverCache.get(key) || null;
-}
 
 async function openLibrary() {
   libraryPanel.hidden = false;
@@ -2184,48 +2207,6 @@ async function editBookTags(book) {
 function redownloadBook(book) {
   closeLibrary();
   premiumDownload({ url: book.url, title: book.title, author: book.author || '', cover: book.cover || null }, null);
-}
-
-// Lazy cover loading: only fetch a cover once its row scrolls into view. One
-// observer drives every placeholder; each carries its title/author on dataset.
-const coverObserver = ('IntersectionObserver' in window)
-  ? new IntersectionObserver((entries, obs) => {
-      for (const entry of entries) {
-        if (entry.isIntersecting) {
-          obs.unobserve(entry.target);
-          loadCover(entry.target);
-        }
-      }
-    }, { root: libraryList, rootMargin: '200px' })
-  : null;
-
-async function loadCover(holder) {
-  const title = holder.dataset.title || '';
-  const author = holder.dataset.author || '';
-  const key = `${title}|${author}`.toLowerCase();
-
-  let url = coverCache.get(key);
-  if (url === undefined) {
-    try {
-      const params = new URLSearchParams();
-      if (title) params.set('title', title);
-      if (author) params.set('author', author);
-      const data = await fetch(`/api/cover?${params.toString()}`).then((r) => r.json());
-      url = data.cover || null;
-    } catch {
-      url = null;
-    }
-    coverCache.set(key, url);
-  }
-  // The holder may have been re-rendered away by a filter change; only paint if
-  // it's still in the DOM. Swap the placeholder div for a real cover <img> so it
-  // gets the same sizing as a stored cover (the div had centering styles that
-  // would otherwise let a natural-size image overflow the row).
-  if (url && holder.isConnected) {
-    const img = el('img', { className: 'lib-cover', src: url, alt: '', loading: 'lazy' });
-    img.addEventListener('error', () => img.replaceWith(makeCoverPlaceholder()));
-    holder.replaceWith(img);
-  }
 }
 
 // A book-emoji placeholder sized exactly like a real cover.
@@ -2369,7 +2350,7 @@ function renderLibraryGridCard(book) {
     if (!book.filePresent) return;
     openSendModal({
       downloadId: book.id,
-      book: { title: book.title, author: book.author || '', cover: book.cover || resolvedLibraryCover(book) || null, filename: book.filename },
+      book: { title: book.title, author: book.author || '', cover: book.cover || null, filename: book.filename },
       onSent: openLibrary,
     });
   });
@@ -2393,20 +2374,10 @@ function renderLibraryGridCard(book) {
 // Build a book's cover element. A stored cover renders immediately; otherwise a
 // placeholder is returned and registered with the IntersectionObserver so its
 // cover is fetched only once it scrolls into view (lazy loading).
+// The stored image for a Library book (src/coverstore.js) — lazy-loaded by
+// the browser as rows scroll into view; the server resolves and saves it once.
 function renderLibraryCover(book) {
-  const key = `${book.title || ''}|${book.author || ''}`.toLowerCase();
-  const cached = book.cover || coverCache.get(key);
-  if (cached) {
-    const img = el('img', { className: 'lib-cover', src: cached, alt: '', loading: 'lazy' });
-    img.addEventListener('error', () => img.replaceWith(makeCoverPlaceholder()));
-    return img;
-  }
-  const holder = makeCoverPlaceholder();
-  holder.dataset.title = book.title || '';
-  holder.dataset.author = book.author || '';
-  if (coverObserver) coverObserver.observe(holder);
-  else loadCover(holder); // no IO support → just fetch now
-  return holder;
+  return coverImg({ className: 'lib-cover', src: libraryCoverSrc(book), placeholder: makeCoverPlaceholder });
 }
 
 function renderLibraryBook(book) {
@@ -2479,7 +2450,7 @@ function renderLibraryBook(book) {
         book: {
           title: book.title,
           author: book.author || '',
-          cover: book.cover || resolvedLibraryCover(book) || null,
+          cover: book.cover || null,
           filename: book.filename,
         },
         onSent: openLibrary, // refresh inline history after a send
@@ -2526,19 +2497,11 @@ function renderLibraryBook(book) {
 // catalog, or paste an image URL. Updates in place on success.
 function buildEditableCover(book) {
   const mount = el('div', { className: 'lib-cover-mount' });
-  function paint(coverUrl) {
+  function paint() {
     mount.innerHTML = '';
-    if (coverUrl) {
-      const img = el('img', { className: 'lib-cover zoomable', src: coverUrl, alt: '', loading: 'lazy', title: 'Click to enlarge' });
-      img.addEventListener('click', () => openLightbox(coverUrl, book.title || ''));
-      img.addEventListener('error', () => paint(null));
-      mount.append(img);
-    } else {
-      // null cover → reuse the existing lazy/placeholder loader (catalog lookup).
-      mount.append(renderLibraryCover({ ...book, cover: null }));
-    }
+    mount.append(coverImg({ className: 'lib-cover', src: libraryCoverSrc(book), placeholder: makeCoverPlaceholder, zoomTitle: book.title || '' }));
   }
-  paint(book.cover || null);
+  paint();
 
   const editBtn = el('button', { className: 'lib-cover-edit', type: 'button', title: 'Fix this cover' }, '✎');
   const editor = el('div', { className: 'lib-cover-editor', hidden: true });
@@ -2553,8 +2516,9 @@ function buildEditableCover(book) {
     if (!editor.children.length) {
       buildCoverEditorBody(book, editor, (newUrl) => {
         book.cover = newUrl;
-        coverCache.set(`${book.title || ''}|${book.author || ''}`.toLowerCase(), newUrl);
-        paint(newUrl);
+        // The server dropped its stored image; a new token skips the browser's copy.
+        book.coverImage = `/cover-image/book/${encodeURIComponent(book.id)}?v=${Date.now().toString(36)}`;
+        paint();
         editor.hidden = true;
         setEditing(false);
       });
@@ -2998,52 +2962,21 @@ function renderWatchlist(watches) {
   }
 }
 
-// Book cover for a watchlist row. Looked up by { title, author } via
-// /api/cover, sharing the library's coverCache — the watchlist re-renders
-// after every action (delete, check, pause/resume, save recipients), and an
-// uncached fetch per row per render was burning through the /api rate limit
-// (see 429s on repeated deletes). Falls back to a glyph when there's no
-// confident cover or the watch has no title/author to look up.
+// Book cover for a watchlist row: the stored-cover lookup by title/author
+// (catalogs → generated jacket), cached on disk server-side and in the
+// browser, so re-rendering the watchlist costs no requests.
 function buildWatchCover(w) {
   const slot = el('div', { className: 'watch-cover' });
   if (!w.title && !w.author) {
     slot.append(el('div', { className: 'watch-cover-ph' }, '🔔'));
     return slot;
   }
-  slot.append(el('div', { className: 'watch-cover-ph' }, '📖'));
-  const key = `${w.title || ''}|${w.author || ''}`.toLowerCase();
-  const makeImg = (url) => {
-    const img = el('img', { className: 'watch-cover-img zoomable', src: url, alt: 'cover', loading: 'lazy', title: 'Click to enlarge' });
-    img.addEventListener('click', () => openLightbox(url, w.title || ''));
-    return img;
-  };
-  const cached = coverCache.get(key);
-  if (cached !== undefined) {
-    // Cache hit paints synchronously, before `slot` is attached to the DOM
-    // (buildWatchCover runs as an el() argument, ahead of the append) — so
-    // this can't gate on isConnected like the async path below does.
-    if (cached) {
-      slot.innerHTML = '';
-      slot.append(makeImg(cached));
-    }
-    return slot;
-  }
-  const paint = (url) => {
-    if (!url || !slot.isConnected) return;
-    slot.innerHTML = '';
-    slot.append(makeImg(url));
-  };
-  const params = new URLSearchParams();
-  if (w.title) params.set('title', w.title);
-  if (w.author) params.set('author', w.author);
-  fetch(`/api/cover?${params.toString()}`)
-    .then((r) => r.json())
-    .then((d) => {
-      const url = (d && d.cover) || null;
-      coverCache.set(key, url);
-      paint(url);
-    })
-    .catch(() => { /* keep the glyph; don't cache a transient failure */ });
+  slot.append(coverImg({
+    className: 'watch-cover-img',
+    src: lookupCoverUrl(w.title, w.author),
+    placeholder: () => el('div', { className: 'watch-cover-ph' }, '📖'),
+    zoomTitle: w.title || '',
+  }));
   return slot;
 }
 

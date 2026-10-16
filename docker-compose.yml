@@ -52,6 +52,12 @@ services:
       # persisted across restarts; /app is root-owned, this isn't writable
       # by the uid-1000 process otherwise)
       - ./covers-cache.json:/app/covers-cache.json
+      # Stored cover IMAGES (src/coverstore.js): each book's cover is fetched
+      # once and served from here. A re-derivable cache (wiping it only costs
+      # re-fetches), so local disk rather than R2. Directory bind — create it on
+      # the host (owned by uid 1000) before the first `up`, or Docker makes it
+      # root-owned and saves fail (covers still serve, just aren't kept).
+      - ./cover-images:/app/cover-images
       # Watchlist (saved searches the background watcher re-checks) — same
       # single-file bind so the uid-1000 process can write it under root-owned /app
       - ./watchlist.json:/app/watchlist.json

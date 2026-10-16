@@ -129,6 +129,7 @@ test('lookupCover: Open Library error falls through to Google Books (fail-soft)'
   const cover = await lookupCover(
     { title: 'Dune' },
     {
+      retryDelays: [0, 0],
       fetchImpl: stubFetch([
         ['openlibrary.org', new Error('boom')],
         ['googleapis.com', { items: [{ volumeInfo: { title: 'Dune', imageLinks: { thumbnail: 'https://g/t.jpg' } } }] }],
@@ -156,7 +157,7 @@ test('lookupCover: a wrong-author Open Library hit is rejected, Google fallback 
 test('lookupCover: returns null when both sources miss, never throws', async () => {
   const cover = await lookupCover(
     { title: 'Nothing' },
-    { fetchImpl: stubFetch([['openlibrary.org', new Error('x')], ['googleapis.com', new Error('y')]]) }
+    { retryDelays: [0, 0], fetchImpl: stubFetch([['openlibrary.org', new Error('x')], ['googleapis.com', new Error('y')]]) }
   );
   assert.equal(cover, null);
 });
@@ -216,7 +217,9 @@ test('resolveCover: a lookup that throws resolves to null and is cached negative
   const lookup = async () => { throw new Error('boom'); };
   const out = await resolveCover({ title: 'Boom' }, { cache, lookup });
   assert.equal(out, null);
-  assert.equal(cache.get(cacheKey({ title: 'Boom', author: '' })).cover, null);
+  const rec = cache.get(cacheKey({ title: 'Boom', author: '' }));
+  assert.equal(rec.cover, null);
+  assert.equal(rec.transient, true, 'a failure is cached as a short-lived miss, not a real negative');
 });
 
 test('resolveCover: empty title+author returns null without consulting cache/lookup', async () => {
@@ -348,4 +351,114 @@ test('fetchCoverImage: a network error resolves to null instead of throwing', as
 test('fetchCoverImage: a non-http(s) or empty url short-circuits to null', async () => {
   assert.equal(await fetchCoverImage(''), null);
   assert.equal(await fetchCoverImage('not-a-url'), null);
+});
+
+// --- Source chain: Apple Books, retries, transient misses (2026-10) ----------
+
+const { coverFromITunes, descriptionFromITunes, itunesLargeArtwork, largeCoverUrl, fetchJson, lookupDetailed, negativeIsFresh, CACHE_VERSION } = require('../src/covers');
+
+test('coverFromITunes: matching ebook → 600px artwork; author gate applies', () => {
+  const data = { results: [
+    { trackName: 'The Safe Room', artistName: 'Someone Else', artworkUrl100: 'https://is1.mzstatic.com/a/100x100bb.jpg' },
+    { trackName: 'The Safe Room', artistName: 'Lisa Unger', artworkUrl100: 'https://is1.mzstatic.com/b/100x100bb.jpg' },
+  ] };
+  assert.equal(coverFromITunes(Q('The Safe Room', 'Lisa Unger'), data), 'https://is1.mzstatic.com/b/600x600bb.jpg');
+  assert.equal(coverFromITunes(Q('Other Book', 'Lisa Unger'), data), null);
+});
+
+test('descriptionFromITunes: cleans HTML from the matching ebook blurb', () => {
+  const data = { results: [{ trackName: 'Dune', artistName: 'Frank Herbert', description: '<p>Desert <b>planet</b>.</p>' }] };
+  assert.equal(descriptionFromITunes(Q('Dune', 'Herbert'), data), 'Desert planet .');
+});
+
+test('largeCoverUrl / itunesLargeArtwork: known hosts upgraded, others unchanged', () => {
+  assert.equal(largeCoverUrl('https://covers.openlibrary.org/b/id/5-M.jpg'), 'https://covers.openlibrary.org/b/id/5-L.jpg');
+  assert.equal(largeCoverUrl('https://m.media-amazon.com/images/I/81x._SY300_.jpg'), 'https://m.media-amazon.com/images/I/81x.jpg');
+  assert.equal(largeCoverUrl('https://is3-ssl.mzstatic.com/x/100x100bb.png'), 'https://is3-ssl.mzstatic.com/x/600x600bb.png');
+  assert.equal(itunesLargeArtwork('https://is1.mzstatic.com/a/60x60bb.jpg'), 'https://is1.mzstatic.com/a/600x600bb.jpg');
+  assert.equal(largeCoverUrl('https://example.com/c.jpg'), 'https://example.com/c.jpg');
+});
+
+test('lookupCover: Apple Books fills the gap when Open Library has nothing (before Google)', async () => {
+  const seen = [];
+  const fetchImpl = async (url) => {
+    seen.push(new URL(url).host);
+    if (url.includes('itunes.apple.com')) {
+      return { ok: true, status: 200, json: async () => ({ results: [{ trackName: 'Untamed', artistName: 'Luna Mason', artworkUrl100: 'https://is1.mzstatic.com/u/100x100bb.jpg' }] }) };
+    }
+    return { ok: true, status: 200, json: async () => ({ docs: [], items: [] }) };
+  };
+  const cover = await lookupCover({ title: 'Untamed', author: 'Luna Mason' }, { fetchImpl });
+  assert.equal(cover, 'https://is1.mzstatic.com/u/600x600bb.jpg');
+  assert.deepEqual(seen, ['openlibrary.org', 'itunes.apple.com'], 'stops at the first hit');
+});
+
+test('lookupCover: later sources (fielded Google, Open Library general) are tried in order', async () => {
+  const urls = [];
+  const fetchImpl = async (url) => {
+    urls.push(url);
+    if (url.includes('openlibrary.org') && url.includes('q=')) {
+      return { ok: true, status: 200, json: async () => ({ docs: [{ title: 'Nightjars', author_name: ['Michael Wehunt'], cover_i: 77 }] }) };
+    }
+    return { ok: true, status: 200, json: async () => ({}) };
+  };
+  const cover = await lookupCover({ title: 'Nightjars', author: 'Michael Wehunt' }, { fetchImpl });
+  assert.equal(cover, openLibraryCoverUrl(77));
+  assert.ok(urls.some((u) => u.includes('intitle%3ANightjars')), 'fielded Google query ran');
+  assert.ok(urls[urls.length - 1].includes('openlibrary.org/search.json?q='), 'general Open Library search ran last');
+});
+
+test('fetchJson: retries 429/5xx/network errors with backoff, then succeeds', async () => {
+  let calls = 0;
+  const waits = [];
+  const fetchImpl = async () => {
+    calls++;
+    if (calls === 1) return { ok: false, status: 429, headers: { get: () => '2' } };
+    if (calls === 2) throw new Error('ECONNRESET');
+    return { ok: true, status: 200, json: async () => ({ fine: true }) };
+  };
+  const out = await fetchJson('https://x', { fetchImpl, sleepImpl: async (ms) => waits.push(ms) });
+  assert.deepEqual(out, { fine: true });
+  assert.equal(calls, 3);
+  assert.deepEqual(waits, [2000, 1500], 'Retry-After honored, then the default backoff');
+});
+
+test('fetchJson: a 404 is a real answer — not retried, error marked non-transient', async () => {
+  let calls = 0;
+  const fetchImpl = async () => { calls++; return { ok: false, status: 404 }; };
+  await assert.rejects(fetchJson('https://x', { fetchImpl, sleepImpl: async () => {} }), (e) => e.transient === false);
+  assert.equal(calls, 1);
+});
+
+test('lookupDetailed: a miss with a FAILING source is transient; a clean miss is not', async () => {
+  const down = async (url) => (url.includes('itunes') ? { ok: false, status: 503 } : { ok: true, status: 200, json: async () => ({}) });
+  const clean = async () => ({ ok: true, status: 200, json: async () => ({}) });
+  assert.equal((await lookupDetailed({ title: 'X', author: 'Y' }, { fetchImpl: down, retryDelays: [] })).transient, true);
+  assert.equal((await lookupDetailed({ title: 'X', author: 'Y' }, { fetchImpl: clean })).transient, false);
+});
+
+test('resolveCover: a transient miss is retried after an hour, not a week', async () => {
+  const cache = memCache();
+  let calls = 0;
+  const lookup = async () => { calls++; return { cover: null, transient: true }; };
+  const now = 1_000_000;
+  await resolveCover({ title: 'Flaky' }, { cache, lookup, now });
+  await resolveCover({ title: 'Flaky' }, { cache, lookup, now: now + 30 * 60 * 1000 });
+  assert.equal(calls, 1, 'still fresh at 30 min');
+  await resolveCover({ title: 'Flaky' }, { cache, lookup, now: now + 61 * 60 * 1000 });
+  assert.equal(calls, 2, 're-tried after the 1h transient TTL');
+});
+
+test('negativeIsFresh: misses cached by an older source chain are re-tried once', () => {
+  const now = 10_000;
+  assert.equal(negativeIsFresh({ cover: null, ts: now }, now), false, 'no version → older chain');
+  assert.equal(negativeIsFresh({ cover: null, ts: now, v: CACHE_VERSION }, now), true);
+});
+
+test('resolveMeta: an older partial record (cover, no blurb) is re-looked-up and keeps its cover', async () => {
+  const key = 'meta:' + cacheKey({ title: 'Dune', author: 'Herbert' });
+  const store = new Map([[key, { cover: 'https://old/c.jpg', description: null, ts: 1 }]]);
+  const cache = { get: (k) => store.get(k) || null, set: (k, v) => store.set(k, v) };
+  const out = await resolveMeta({ title: 'Dune', author: 'Herbert' }, { cache, lookup: async () => ({ cover: null, description: 'Spice.' }) });
+  assert.deepEqual(out, { cover: 'https://old/c.jpg', description: 'Spice.' });
 });

@@ -23,6 +23,7 @@ const history = require('./history');
 const library = require('./library');
 const booktags = require('./booktags');
 const covers = require('./covers');
+const coverstore = require('./coverstore');
 const kindle = require('./kindle');
 const smtp = require('./smtp');
 const watchlist = require('./watchlist');
@@ -199,39 +200,48 @@ function sentTo(book, recipient) {
   );
 }
 
+/** The reader's URL for a book's cover image — served (and stored) by
+ *  coverstore via /reader/cover, so readers' browsers never hot-link a
+ *  catalog and a book with no findable cover still gets a generated jacket.
+ *  `v` changes when the stored cover URL does, busting the browser cache. */
+function readerCoverUrl(b, recipient) {
+  return `/reader/cover?t=${encodeURIComponent(recipient.readerToken || '')}&id=${encodeURIComponent(b.id)}&v=${coverstore.versionFor(b)}`;
+}
+
 /** Map one library book to the safe reader-tile payload (id, title, author,
- *  cover, tags, sent). Covers resolve through the disk-cached catalog lookup
- *  (each book at most once, ever); a resolve failure falls back to no cover
- *  rather than failing the whole page/search. Shared by the shelf and search. */
+ *  cover, tags, sent). Shared by the shelf and search. No network here: the
+ *  cover URL points at /reader/cover, which resolves lazily as each tile's
+ *  image loads. */
 async function toReaderTile(b, recipient) {
-  let cover = b.cover || null;
-  if (!cover) {
-    try { cover = await covers.resolveCover({ title: b.title, author: b.author }); } catch { /* placeholder */ }
-  }
   return {
     id: b.id,
     title: b.title || b.filename || 'Untitled',
     author: b.author || '',
-    cover,
+    cover: readerCoverUrl(b, recipient),
     acquiredAt: b.acquiredAt,
     tags: b.tags || [],
     sent: sentTo(b, recipient),
   };
 }
 
-/** PURE: best-effort upgrade of a tile-sized cover URL to a larger rendition
- *  for the book-details modal. Only rewrites hosts whose size convention we
- *  know (Open Library `-S/-M` → `-L`; Amazon `._SX300_` style size tokens
- *  stripped → original upload); anything else is returned unchanged. The
- *  client falls back to the tile cover if the larger one fails to load. */
-function largeCoverUrl(url) {
-  const u = String(url || '');
-  if (!u) return null;
-  if (/^https?:\/\/covers\.openlibrary\.org\//.test(u)) return u.replace(/-[SM](\.jpg)$/i, '-L$1');
-  if (/^https?:\/\/[^/]*(media-amazon|images-amazon|ssl-images-amazon)\.com\//.test(u)) {
-    return u.replace(/\._[^/]*?_(\.[a-z]+)$/i, '$1');
-  }
-  return u;
+/** Re-exported for existing callers/tests; lives in covers.js now. */
+const largeCoverUrl = covers.largeCoverUrl;
+
+/** A sendable book by id (fresh library read), or null. Shared by the
+ *  details modal and the cover endpoint — so neither can reach a book the
+ *  shelf wouldn't show. */
+async function findSendableBook(id) {
+  if (!id || typeof id !== 'string') return null;
+  const pendingIndex = ensureStorageIndex();
+  if (pendingIndex) await pendingIndex;
+  return sendableBooks(buildBooks()).find((x) => x.id === id) || null;
+}
+
+/** Cover image for one shelf book (see coverstore), or null for an id the
+ *  shelf doesn't show. */
+async function coverImageForReader(id, opts = {}) {
+  const b = await findSendableBook(id);
+  return b ? coverstore.getCoverImage(b, opts) : null;
 }
 
 /**
@@ -244,10 +254,7 @@ function largeCoverUrl(url) {
  * `opts.resolveMeta` is injectable for tests (no network).
  */
 async function bookDetailsForReader(recipient, id, opts = {}) {
-  if (!id || typeof id !== 'string') return null;
-  const pendingIndex = ensureStorageIndex();
-  if (pendingIndex) await pendingIndex;
-  const b = sendableBooks(buildBooks()).find((x) => x.id === id);
+  const b = await findSendableBook(id);
   if (!b) return null;
   const tile = await toReaderTile(b, recipient);
   const resolve = opts.resolveMeta || covers.resolveMeta;
@@ -255,11 +262,10 @@ async function bookDetailsForReader(recipient, id, opts = {}) {
   try {
     meta = (await resolve({ title: b.title, author: b.author })) || meta;
   } catch { /* no blurb — the modal still shows the cover + title */ }
-  const cover = tile.cover || meta.cover || null;
   return {
     ...tile,
-    cover,
-    coverLarge: largeCoverUrl(cover),
+    // The stored image is already the largest rendition we could find.
+    coverLarge: tile.cover,
     description: meta.description || '',
   };
 }
@@ -882,6 +888,7 @@ module.exports = {
   booksForReaderPage,
   searchForReader,
   bookDetailsForReader,
+  coverImageForReader,
   sendToReader,
   invite,
   notifyNewBooks,

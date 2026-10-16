@@ -28,7 +28,16 @@ const { normalize, similarity, matchScore } = require('./correct');
 
 const OPEN_LIBRARY_URL = 'https://openlibrary.org/search.json';
 const GOOGLE_BOOKS_URL = 'https://www.googleapis.com/books/v1/volumes';
+// Apple Books (iTunes Search API): keyless, and the strongest source for recent
+// ebooks — a 2026-10 probe found covers for ~half the books Open Library +
+// Google had missed. Rate-limited to roughly 20 requests/minute per IP, so it
+// sits behind Open Library and its 429s are retried / cached briefly.
+const ITUNES_URL = 'https://itunes.apple.com/search';
 const LOOKUP_TIMEOUT_MS = 4000;
+// Backoff between retries of a TRANSIENT failure (429, 5xx, timeout, network
+// error). A 4xx other than 429 is a real answer and is never retried.
+const RETRY_DELAYS_MS = [500, 1500];
+const MAX_RETRY_AFTER_MS = 4000;
 const CACHE_FILE = path.join(__dirname, '..', 'covers-cache.json');
 
 // A candidate's title must match the query title at least this well (the same
@@ -42,6 +51,12 @@ const AUTHOR_THRESHOLD = 0.6;
 // Re-attempt a "no cover found" result after a week — books get covers added to
 // the catalogs over time, so a negative shouldn't be permanent.
 const NEGATIVE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+// A miss where some source FAILED (rate limit, timeout) isn't a real answer —
+// retry it soon instead of trusting it for a week.
+const TRANSIENT_TTL_MS = 60 * 60 * 1000;
+// Bumped when the lookup chain gains sources: negatives cached by an older
+// chain are re-tried once with the new one (positives stay valid).
+const CACHE_VERSION = 2;
 
 // `normalize` (lowercase, fold punctuation, collapse runs) is shared with the
 // spell-corrector — imported above so the cache key and the match scorer agree.
@@ -143,6 +158,55 @@ function coverFromGoogleBooks(query, data) {
   );
 }
 
+/** PURE: Apple artwork URLs carry their size in the path (…/100x100bb.jpg);
+ *  ask for a 600px rendition instead of the 100px thumbnail. */
+function itunesLargeArtwork(url) {
+  return String(url || '').replace(/\/\d+x\d+(bb)?\.(jpg|png|webp)$/i, '/600x600bb.$2') || null;
+}
+
+/** PURE: best title+author-matching cover from an iTunes Search payload, or null. */
+function coverFromITunes(query, data) {
+  const results = (data && Array.isArray(data.results)) ? data.results : [];
+  return pickMatchingCover(
+    query || {},
+    results,
+    (r) => r.trackName,
+    (r) => r.artistName,
+    (r) => (r && r.artworkUrl100 ? itunesLargeArtwork(String(r.artworkUrl100).replace(/^http:/, 'https:')) : null)
+  );
+}
+
+/** PURE: blurb of the best title+author-matching iTunes ebook, or null. */
+function descriptionFromITunes(query, data) {
+  const q = query || {};
+  const results = (data && Array.isArray(data.results)) ? data.results : [];
+  let best = null;
+  let bestScore = -1;
+  for (const r of results) {
+    if (!r || !r.description) continue;
+    const tScore = q.title ? matchScore(q.title, r.trackName || '') : 1;
+    if (tScore < TITLE_THRESHOLD) continue;
+    if (!authorMatches(q.author, r.artistName)) continue;
+    if (tScore > bestScore) { bestScore = tScore; best = r.description; }
+  }
+  return best ? cleanDescription(best) : null;
+}
+
+/** PURE: best-effort upgrade of a thumbnail-sized cover URL to a larger
+ *  rendition. Only rewrites hosts whose size convention we know (Open Library
+ *  `-S/-M` → `-L`; Amazon `._SX300_` tokens stripped → original upload; Apple
+ *  `100x100bb` → `600x600bb`); anything else is returned unchanged. */
+function largeCoverUrl(url) {
+  const u = String(url || '');
+  if (!u) return null;
+  if (/^https?:\/\/covers\.openlibrary\.org\//.test(u)) return u.replace(/-[SM](\.jpg)$/i, '-L$1');
+  if (/^https?:\/\/[^/]*(media-amazon|images-amazon|ssl-images-amazon)\.com\//.test(u)) {
+    return u.replace(/\._[^/]*?_(\.[a-z]+)$/i, '$1');
+  }
+  if (/^https?:\/\/[^/]*mzstatic\.com\//.test(u)) return itunesLargeArtwork(u);
+  return u;
+}
+
 // Longest blurb we'll put in an email — Google descriptions can run long, so
 // trim to a clean sentence/word boundary and add an ellipsis.
 const MAX_BLURB = 600;
@@ -181,18 +245,41 @@ function descriptionFromGoogleBooks(query, data) {
   return best ? cleanDescription(best) : null;
 }
 
-/** GET + parse JSON with an abort timeout. Throws on any failure. */
-async function fetchJson(url, { fetchImpl = fetch, timeoutMs = LOOKUP_TIMEOUT_MS } = {}) {
-  const ac = new AbortController();
-  const timer = setTimeout(() => ac.abort(), timeoutMs);
-  let res;
-  try {
-    res = await fetchImpl(url, { signal: ac.signal, headers: { 'User-Agent': 'bookhunt/1.0' } });
-  } finally {
-    clearTimeout(timer);
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * GET + parse JSON with an abort timeout. TRANSIENT failures (network error,
+ * timeout, 429, 5xx) are retried with backoff (`retryDelays`; a Retry-After
+ * header is honored up to MAX_RETRY_AFTER_MS). Throws once out of tries; the
+ * error carries `.transient` so callers can tell "this source is down / rate
+ * limiting us" from "this source answered".
+ */
+async function fetchJson(url, { fetchImpl = fetch, timeoutMs = LOOKUP_TIMEOUT_MS, retryDelays = RETRY_DELAYS_MS, sleepImpl = sleep } = {}) {
+  for (let attempt = 0; ; attempt++) {
+    const ac = new AbortController();
+    const timer = setTimeout(() => ac.abort(), timeoutMs);
+    let res = null;
+    let err = null;
+    try {
+      res = await fetchImpl(url, { signal: ac.signal, headers: { 'User-Agent': 'bookhunt/1.0' } });
+    } catch (e) {
+      err = e;
+    } finally {
+      clearTimeout(timer);
+    }
+    if (res && res.ok) return res.json();
+    const transient = !res || res.status === 429 || res.status >= 500;
+    if (transient && attempt < retryDelays.length) {
+      let wait = retryDelays[attempt];
+      const ra = res && res.headers && typeof res.headers.get === 'function' ? Number(res.headers.get('retry-after')) : NaN;
+      if (Number.isFinite(ra) && ra > 0) wait = Math.min(ra * 1000, MAX_RETRY_AFTER_MS);
+      await sleepImpl(wait);
+      continue;
+    }
+    const e = err || new Error('HTTP ' + (res && res.status));
+    e.transient = transient;
+    throw e;
   }
-  if (!res || !res.ok) throw new Error('HTTP ' + (res && res.status));
-  return res.json();
 }
 
 const IMAGE_FETCH_TIMEOUT_MS = 5000;
@@ -219,89 +306,115 @@ async function fetchCoverImage(url, { fetchImpl = fetch, timeoutMs = IMAGE_FETCH
   }
 }
 
+// --- Source chain -----------------------------------------------------------
+// Each source turns { title, author } into { cover, description } (either may
+// be null), throwing on failure. They run in order until we have what the
+// caller wants; every one is gated by the same title+author match rules, so a
+// later, looser source can never hand back the wrong book.
+
+function googleUrl(q, opts) {
+  const key = opts.apiKey || process.env.GOOGLE_BOOKS_API_KEY;
+  return `${GOOGLE_BOOKS_URL}?q=${encodeURIComponent(q)}&maxResults=10&country=US${key ? '&key=' + encodeURIComponent(key) : ''}`;
+}
+
+const SOURCES = [
+  {
+    // Fielded title/author query — precise, keyless, no quota.
+    name: 'openlibrary',
+    async run(query, opts) {
+      const params = new URLSearchParams({ limit: '10', fields: 'title,author_name,cover_i' });
+      if (query.title) params.set('title', query.title);
+      if (query.author) params.set('author', query.author);
+      const data = await fetchJson(`${OPEN_LIBRARY_URL}?${params.toString()}`, opts);
+      return { cover: coverFromOpenLibrary(query, data), description: null };
+    },
+  },
+  {
+    name: 'itunes',
+    async run(query, opts) {
+      const term = [query.title, query.author].filter(Boolean).join(' ');
+      const params = new URLSearchParams({ term, media: 'ebook', entity: 'ebook', limit: '10', country: 'US' });
+      const data = await fetchJson(`${ITUNES_URL}?${params.toString()}`, opts);
+      return { cover: coverFromITunes(query, data), description: descriptionFromITunes(query, data) };
+    },
+  },
+  {
+    name: 'google',
+    async run(query, opts) {
+      const data = await fetchJson(googleUrl([query.title, query.author].filter(Boolean).join(' '), opts), opts);
+      return { cover: coverFromGoogleBooks(query, data), description: descriptionFromGoogleBooks(query, data) };
+    },
+  },
+  {
+    // Fielded Google query — finds volumes the loose query ranks below 10.
+    name: 'google-fielded',
+    skip: (query) => !query.title || !query.author,
+    async run(query, opts) {
+      const data = await fetchJson(googleUrl(`intitle:${query.title} inauthor:${query.author}`, opts), opts);
+      return { cover: coverFromGoogleBooks(query, data), description: descriptionFromGoogleBooks(query, data) };
+    },
+  },
+  {
+    // Open Library free-text search — catches records whose title/author
+    // fields don't match a fielded query (subtitles, "Last, First" authors).
+    name: 'openlibrary-general',
+    async run(query, opts) {
+      const params = new URLSearchParams({ q: [query.title, query.author].filter(Boolean).join(' '), limit: '10', fields: 'title,author_name,cover_i' });
+      const data = await fetchJson(`${OPEN_LIBRARY_URL}?${params.toString()}`, opts);
+      return { cover: coverFromOpenLibrary(query, data), description: null };
+    },
+  },
+];
+
 /**
- * Look a cover up by { title, author }. Open Library first (keyless, no quota),
- * Google Books as a fallback. Returns a cover URL string, or null when nothing
- * confident is found / every source fails. NEVER throws.
- *
- * `opts.fetchImpl`/`opts.timeoutMs`/`opts.apiKey` are injectable for tests.
+ * Run the source chain for { title, author }. Stops as soon as it has a cover
+ * (and, with `wantDescription`, a description too). Returns
+ * `{ cover, description, transient }` — `transient` is true when nothing was
+ * found but at least one source FAILED (rather than answered), so the miss
+ * shouldn't be trusted for long. NEVER throws.
  */
-async function lookupCover({ title, author }, opts = {}) {
+async function lookupDetailed({ title, author }, opts = {}, { wantDescription = false } = {}) {
   const t = cleanTitle(title);
   const a = String(author || '').trim();
-  if (!t && !a) return null;
-
+  const out = { cover: null, description: null, transient: false };
+  if (!t && !a) return out;
   const query = { title: t, author: a };
-
-  // 1. Open Library: fielded title/author query; ask for the fields we verify on.
-  try {
-    const params = new URLSearchParams({ limit: '5', fields: 'title,author_name,cover_i' });
-    if (t) params.set('title', t);
-    if (a) params.set('author', a);
-    const data = await fetchJson(`${OPEN_LIBRARY_URL}?${params.toString()}`, opts);
-    const cover = coverFromOpenLibrary(query, data);
-    if (cover) return cover;
-  } catch {
-    // fall through to Google Books
+  let failed = false;
+  for (const src of opts.sources || SOURCES) {
+    if (src.skip && src.skip(query)) continue;
+    try {
+      const r = (await src.run(query, opts)) || {};
+      if (!out.cover && r.cover) out.cover = r.cover;
+      if (!out.description && r.description) out.description = r.description;
+    } catch (err) {
+      if (!err || err.transient !== false) failed = true;
+    }
+    if (out.cover && (!wantDescription || out.description)) break;
   }
-
-  // 2. Google Books: plain combined query; pick the best title+author match.
-  try {
-    const terms = [t, a].filter(Boolean).join(' ').trim();
-    const key = opts.apiKey || process.env.GOOGLE_BOOKS_API_KEY;
-    const url = `${GOOGLE_BOOKS_URL}?q=${encodeURIComponent(terms)}&maxResults=5&country=US${key ? '&key=' + encodeURIComponent(key) : ''}`;
-    const data = await fetchJson(url, opts);
-    const cover = coverFromGoogleBooks(query, data);
-    if (cover) return cover;
-  } catch {
-    // fall through to null
-  }
-
-  return null;
+  out.transient = failed && (!out.cover || (wantDescription && !out.description));
+  return out;
 }
 
 /**
- * Look up BOTH a cover and a blurb for { title, author }. Open Library supplies
- * a cover; Google Books supplies a cover (fallback) AND the description. Returns
- * `{ cover, description }` (either may be null). NEVER throws. Used to enrich a
- * Send so the notification email always has artwork + a blurb, even when the
- * download record stored neither.
+ * Look a cover up by { title, author } through the whole source chain.
+ * Returns a cover URL string, or null when nothing confident is found / every
+ * source fails. NEVER throws.
  *
- * `opts.fetchImpl`/`opts.timeoutMs`/`opts.apiKey` are injectable for tests.
+ * `opts.fetchImpl`/`opts.timeoutMs`/`opts.apiKey`/`opts.retryDelays` are
+ * injectable for tests.
  */
-async function lookupMeta({ title, author }, opts = {}) {
-  const t = cleanTitle(title);
-  const a = String(author || '').trim();
-  if (!t && !a) return { cover: null, description: null };
+async function lookupCover(q, opts = {}) {
+  return (await lookupDetailed(q, opts)).cover;
+}
 
-  const query = { title: t, author: a };
-  let cover = null;
-  let description = null;
-
-  // 1. Open Library — cover only (search.json has no reliable description).
-  try {
-    const params = new URLSearchParams({ limit: '5', fields: 'title,author_name,cover_i' });
-    if (t) params.set('title', t);
-    if (a) params.set('author', a);
-    const data = await fetchJson(`${OPEN_LIBRARY_URL}?${params.toString()}`, opts);
-    cover = coverFromOpenLibrary(query, data);
-  } catch {
-    // fall through to Google Books
-  }
-
-  // 2. Google Books — cover (if still missing) + description.
-  try {
-    const terms = [t, a].filter(Boolean).join(' ').trim();
-    const key = opts.apiKey || process.env.GOOGLE_BOOKS_API_KEY;
-    const url = `${GOOGLE_BOOKS_URL}?q=${encodeURIComponent(terms)}&maxResults=5&country=US${key ? '&key=' + encodeURIComponent(key) : ''}`;
-    const data = await fetchJson(url, opts);
-    if (!cover) cover = coverFromGoogleBooks(query, data);
-    description = descriptionFromGoogleBooks(query, data);
-  } catch {
-    // fall through with whatever we have
-  }
-
-  return { cover: cover || null, description: description || null };
+/**
+ * Look up BOTH a cover and a blurb for { title, author } through the source
+ * chain (Apple Books and Google Books supply blurbs). Returns
+ * `{ cover, description, transient }` (cover/description may be null). NEVER
+ * throws. Used to enrich a Send and the reader's book-details modal.
+ */
+async function lookupMeta(q, opts = {}) {
+  return lookupDetailed(q, opts, { wantDescription: true });
 }
 
 // --- Persistent cache -------------------------------------------------------
@@ -342,9 +455,20 @@ const fileCache = {
   },
 };
 
-/** Is a cached negative still fresh enough to trust (skip re-lookup)? */
+/** Is a cached negative still fresh enough to trust (skip re-lookup)? A miss
+ *  from an older (smaller) source chain is never fresh; a miss caused by a
+ *  failing source expires after TRANSIENT_TTL_MS instead of a week. */
 function negativeIsFresh(record, now) {
-  return record && !record.cover && (now - (record.ts || 0)) < NEGATIVE_TTL_MS;
+  if (!record || record.cover) return false;
+  if (record.v !== CACHE_VERSION) return false;
+  const ttl = record.transient ? TRANSIENT_TTL_MS : NEGATIVE_TTL_MS;
+  return (now - (record.ts || 0)) < ttl;
+}
+
+/** Lookups may return a URL string (simple stubs) or `{ cover, transient }`. */
+function asResult(r) {
+  if (r && typeof r === 'object') return { cover: r.cover || null, description: r.description || null, transient: !!r.transient };
+  return { cover: r || null, description: null, transient: false };
 }
 
 /**
@@ -372,18 +496,20 @@ async function resolveCover({ title, author }, opts = {}) {
     // stale negative falls through to a fresh lookup
   }
 
-  let cover = null;
+  let result;
   try {
-    cover = await lookup({ title: t, author: a }, opts);
+    result = asResult(await lookup({ title: t, author: a }, opts));
   } catch {
-    cover = null;
+    result = { cover: null, transient: true }; // a throwing lookup is a failure, not an answer
   }
   try {
-    cache.set(key, { cover: cover || null, ts: now });
+    const rec = { cover: result.cover, ts: now, v: CACHE_VERSION };
+    if (!result.cover && result.transient) rec.transient = true;
+    cache.set(key, rec);
   } catch {
     // a cache write failure must not break the resolve
   }
-  return cover || null;
+  return result.cover;
 }
 
 /**
@@ -406,29 +532,46 @@ async function resolveMeta({ title, author }, opts = {}) {
 
   const cached = cache.get(key);
   if (cached) {
-    if (cached.cover || cached.description) {
-      return { cover: cached.cover || null, description: cached.description || null };
+    // Complete, or partial but recent enough under the current chain → trust it.
+    if (cached.cover && cached.description) return { cover: cached.cover, description: cached.description };
+    if (cached.v === CACHE_VERSION) {
+      const ttl = cached.transient ? TRANSIENT_TTL_MS : NEGATIVE_TTL_MS;
+      if ((now - (cached.ts || 0)) < ttl) return { cover: cached.cover || null, description: cached.description || null };
     }
-    if (negativeIsFresh(cached, now)) return { cover: null, description: null };
-    // stale empty record falls through to a fresh lookup
+    // stale / older-chain partial record falls through to a fresh lookup
   }
 
-  let meta = { cover: null, description: null };
+  let meta;
   try {
-    meta = (await lookup({ title: t, author: a }, opts)) || meta;
+    meta = asResult(await lookup({ title: t, author: a }, opts));
   } catch {
-    meta = { cover: null, description: null };
+    meta = { cover: null, description: null, transient: true };
   }
+  // Never lose what an earlier lookup found (e.g. a cover) just because this
+  // run's source happened to be down.
+  const cover = meta.cover || (cached && cached.cover) || null;
+  const description = meta.description || (cached && cached.description) || null;
   try {
-    cache.set(key, { cover: meta.cover || null, description: meta.description || null, ts: now });
+    const rec = { cover, description, ts: now, v: CACHE_VERSION };
+    if (meta.transient && !(cover && description)) rec.transient = true;
+    cache.set(key, rec);
   } catch {
     // a cache write failure must not break the resolve
   }
-  return { cover: meta.cover || null, description: meta.description || null };
+  return { cover, description };
 }
 
 module.exports = {
   lookupCover,
+  lookupDetailed,
+  coverFromITunes,
+  descriptionFromITunes,
+  itunesLargeArtwork,
+  largeCoverUrl,
+  fetchJson,
+  negativeIsFresh,
+  CACHE_VERSION,
+  SOURCES,
   resolveCover,
   lookupMeta,
   resolveMeta,

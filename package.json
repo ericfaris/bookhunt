@@ -1,6 +1,6 @@
 {
   "name": "bookhunt",
-  "version": "1.30.2",
+  "version": "1.31.0",
   "private": true,
   "description": "Local web app to search the Mobilism ebook forum and download ePUBs",
   "main": "src/server.js",
@@ -10,7 +10,7 @@
     "dev": "node --watch src/server.js",
     "warm": "node src/warm.js",
     "install-browser": "playwright install chromium",
-    "test": "STORAGE=local node --test test/*.test.js",
+    "test": "STORAGE=local COVER_IMAGE_DIR=$(mktemp -d) node --test test/*.test.js",
     "docker:up": "GIT_SHA=$(git rev-parse --short HEAD) BUILD_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ) docker compose up -d --build"
   },
   "dependencies": {

@@ -16,7 +16,7 @@ const watchlist = require('./watchlist');
 const library = require('./library');
 const settings = require('./settings');
 const smtp = require('./smtp');
-const covers = require('./covers');
+const coverstore = require('./coverstore');
 
 const TICK_MS = Number(process.env.LISTS_TICK_MS) || 3600000; // hourly wake; runs when the pull is due
 
@@ -429,8 +429,12 @@ async function sendDigest() {
   // handing nodemailer a live URL that can sink the whole send).
   for (const e of events) {
     if (COVER_SECTIONS.has(e.type)) {
-      if (!e.cover) e.cover = await covers.resolveCover({ title: e.title, author: e.author });
-      if (e.cover) e.coverBuffer = await covers.fetchCoverImage(e.cover);
+      // Same stored-image chain as the rest of the app (catalog lookup +
+      // on-disk image cache). Generated SVG jackets don't render in email.
+      try {
+        const img = await coverstore.getCoverImage({ title: e.title, author: e.author, cover: e.cover || null }, { epub: false });
+        if (!img.generated) e.coverBuffer = img.bytes;
+      } catch { /* placeholder */ }
     }
   }
   const msg = buildDigest(events);

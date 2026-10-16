@@ -287,6 +287,17 @@ The reader portal (issue #34) lets invited readers open a passwordless magic lin
 
 > Title and author tokens are matched at **word starts**, not bare substrings — short tokens like `it`/`us` in *It Ends with Us* no longer match inside `with`/`trust`, while stems like `demon` → `demons` still do.
 
+### Book covers
+
+Every cover in the app (Library, search results, watchlist, the reader shelf, and the cover in emails) comes from one stored-image pipeline, `src/coverstore.js`. A book's cover is resolved once, saved to `cover-images/` (bind-mounted), and served from disk after that. Browsers never load covers directly from the catalogs. The chain:
+
+1. The cover stored with the download (the search hit's own image).
+2. The cover embedded in the EPUB itself (read from storage once).
+3. Catalogs (`src/covers.js`): Open Library, then Apple Books (iTunes Search), then Google Books (loose query, then a field-specific one), then Open Library general search. Transient failures (429, 5xx, timeouts) are retried with backoff. A miss caused by a failure is cached for 1 hour; a clean miss for 7 days.
+4. A generated SVG jacket with the title and author, so a cover is never blank. It's re-tried against real sources after 24 hours.
+
+Endpoints: `/cover-image/book/:id` (Library), `/cover-image/lookup?title=&author=` (books not in the Library), and `/reader/cover?t=&id=` (shelf; token-gated, with its own rate limit). `cover-images/` is a re-derivable cache, so deleting it only costs re-fetches. Emails use stored real images but skip generated jackets, because email clients don't render SVG.
+
 ### Reader shelf: book details + feature announcements
 
 Tapping a book on the reader shelf opens a details modal (`<dialog>` in `public/reader.html`) with a larger cover and the catalog description, served by `GET /reader/api/book?t=&id=`. Only sendable books resolve; anything else returns 404. Descriptions come from the disk-cached `covers.resolveMeta`. New shelf features announce themselves once per device with `spotlightFeature()` in `public/reader.js`.
