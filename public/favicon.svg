@@ -1,8 +1,0 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-label="BookHunt">
-  <rect width="256" height="256" rx="56" fill="#f6f1e7"/>
-  <g transform="translate(128 128) scale(0.8) translate(-128 -132)">
-    <path fill="#1c2a56" d="M68 28H128V212H68A16 16 0 0 1 52 196V44A16 16 0 0 1 68 28Z"/>
-    <path fill="#1c2a56" d="M184 28H188A16 16 0 0 1 204 44V196A16 16 0 0 1 188 212H184Z"/>
-    <path fill="#f1592a" d="M136 28H176V236L156 216L136 236Z"/>
-  </g>
-</svg>

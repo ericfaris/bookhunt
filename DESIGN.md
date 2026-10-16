@@ -425,23 +425,26 @@ reintroduce thin strokes.
 
 ## 8. Icon / favicon
 
-Already in place and confirmed to fit the direction — **not regenerated**:
+**House icon standard (2026-10-16)**, shared with every mooseflip app (modelled
+on redline and jambo): one bold mark on a rich, full-bleed tile. Here that's the
+cream Ribbon book on an ink-navy radial (`#2f4280` → `#131a30`) with a soft drop
+shadow.
+
+The master is `scripts/icons/icon.svg` (512 grid, `#bg` + `#mark` layers).
+`python3 scripts/icons/build.py` (Playwright) re-renders the set into `public/`:
 
 | File | Role |
 |---|---|
-| `public/favicon.svg` | 256-unit tab icon — cream rounded square, solid navy closed book, orange bookmark ribbon |
-| `public/reader-icon.svg` | 512×512 source, full-bleed cream so OS icon masks (squircle/circle) crop cleanly |
-| `public/reader-icon-180.png` | iOS home-screen icon (apple-touch-icon), served at `/reader/icon-180.png` |
-| `public/reader-icon-192.png` | PWA manifest icon (192), served at `/reader/icon-192.png` |
-| `public/reader-icon-512.png` | PWA manifest icon (512, incl. maskable), served at `/reader/icon-512.png` |
-| `public/manifest.webmanifest` | Main app manifest — `theme_color`/`background_color` both `--bg` (`#f6f1e7`), icon = `favicon.svg` |
+| `favicon.ico` | 16/32/48 tab icon (rounded tile) |
+| `apple-touch-icon.png` | 180, square: iOS rounds it. Also `/reader/icon-180.png` |
+| `icon-192.png`, `icon-512.png` | Manifest icons, rounded tile, transparent corners. Also `/reader/icon-{192,512}.png` |
+| `icon-maskable-512.png` | Mark scaled into the 80% safe zone. Also `/reader/icon-maskable-512.png` |
 
-Wiring confirmed correct in both `public/index.html` (`<link rel="icon">`,
-`<link rel="manifest">`, `<link rel="apple-touch-icon">`, `theme-color` meta
-for both color schemes) and `public/reader.html` (its own apple-touch-icon +
-icon links, plus a dynamically-injected per-reader manifest served by
-`src/server.js`'s `/reader/manifest.webmanifest` and `/reader/icon-:size.png`
-routes). No changes made here.
+Wired in `index.html` (`rel="icon"` → `/favicon.ico`, `apple-touch-icon`),
+`manifest.webmanifest`, `reader.html` (`/reader/favicon.ico`, served under
+`/reader/*` so readers outside Access get it) and the per-reader manifest
+(`src/reader.js`). The old `favicon.svg` / `reader-icon*` files are retired;
+`test/brand.test.js` guards against them coming back.
 
 ---
 
@@ -512,9 +515,8 @@ routes). No changes made here.
 |---|---|---|
 | `public/style.css` | Design system implementation (tokens + components) | Refined (additive tokens + literal→token color fixes) |
 | `public/design-showcase.html` | Live showcase — renders every token/component from the real CSS | **New** |
-| `public/favicon.svg` | Tab icon | Yes — replaced with the Ribbon mark (2026-09-30) |
-| `public/reader-icon.svg` | 512px icon source | Yes — Ribbon mark |
-| `public/reader-icon-{180,192,512}.png` | PWA/iOS icons | Yes — re-rendered from `reader-icon.svg` |
+| `scripts/icons/icon.svg` + `build.py` | Icon master + renderer | Yes — house icon standard (2026-10-16), replaces `favicon.svg` / `reader-icon*` |
+| `public/favicon.ico`, `apple-touch-icon.png`, `icon-{192,512}.png`, `icon-maskable-512.png` | Tab / iOS / PWA icons | Yes — rendered from the master |
 | `public/manifest.webmanifest` | Main app manifest | No — pre-existing, confirmed correct |
 | `DESIGN.md` | This document | **New** |
 | `public/index.html` | Admin app: routed `.page` sections + `#mega` | Restructured (2026-10) |

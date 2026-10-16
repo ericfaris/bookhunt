@@ -11,18 +11,11 @@ const pub = (f) => path.join(__dirname, '..', 'public', f);
 const read = (f) => fs.readFileSync(pub(f), 'utf8');
 const RIBBON = 'M136 28H176V236L156 216L136 236Z';
 
-test('favicon and app icon use the ribbon mark with brand colours', () => {
-  for (const f of ['favicon.svg', 'reader-icon.svg']) {
-    const s = read(f);
-    assert.ok(s.includes(RIBBON), `${f} missing ribbon path`);
-    assert.ok(s.includes('#f1592a') && s.includes('#1c2a56'), `${f} brand colours`);
-    assert.ok(!s.includes('<circle'), `${f} still has the old magnifier lens`);
-  }
-});
-
-test('reader-icon.svg is full-bleed (no rounded corners) so OS masks crop cleanly', () => {
-  assert.ok(!/<rect[^>]*\brx=/.test(read('reader-icon.svg')));
-  assert.ok(/<rect[^>]*\brx=/.test(read('favicon.svg')));
+test('icon master (scripts/icons/icon.svg) is the ribbon mark in brand colours', () => {
+  const s = fs.readFileSync(path.join(__dirname, '..', 'scripts', 'icons', 'icon.svg'), 'utf8');
+  assert.ok(s.includes(RIBBON), 'master missing ribbon path');
+  assert.ok(s.includes('id="bg"') && s.includes('id="mark"'), 'master has bg + mark layers');
+  assert.ok(!s.includes('<circle'), 'master still has the old magnifier lens');
 });
 
 test('inline marks in index.html and the showcase use the ribbon, themed via currentColor', () => {
@@ -34,16 +27,36 @@ test('inline marks in index.html and the showcase use the ribbon, themed via cur
   }
 });
 
+// The house icon set (same as redline/jambo): favicon.ico + apple-touch + 192/512 + maskable.
+const ICONS = { 'apple-touch-icon.png': 180, 'icon-192.png': 192, 'icon-512.png': 512, 'icon-maskable-512.png': 512 };
+
 test('PNG app icons are real PNGs at the declared sizes', () => {
-  for (const size of [180, 192, 512]) {
-    const b = fs.readFileSync(pub(`reader-icon-${size}.png`));
-    assert.strictEqual(b.subarray(1, 4).toString(), 'PNG');
-    assert.strictEqual(b.readUInt32BE(16), size);
-    assert.strictEqual(b.readUInt32BE(20), size);
+  for (const [f, size] of Object.entries(ICONS)) {
+    const b = fs.readFileSync(pub(f));
+    assert.strictEqual(b.subarray(1, 4).toString(), 'PNG', f);
+    assert.strictEqual(b.readUInt32BE(16), size, `${f} width`);
+    assert.strictEqual(b.readUInt32BE(20), size, `${f} height`);
   }
+  const ico = fs.readFileSync(pub('favicon.ico'));
+  assert.deepStrictEqual([...ico.subarray(0, 6)], [0, 0, 1, 0, 3, 0], 'favicon.ico holds 3 images');
+  assert.deepStrictEqual([ico[6], ico[22], ico[38]], [16, 32, 48], 'favicon.ico sizes 16/32/48');
 });
 
-test('service worker cache version was bumped past v3 so the old logo is evicted', () => {
+test('pages and manifest point at the icon set, not the retired SVG icons', () => {
+  const html = read('index.html');
+  assert.ok(html.includes('<link rel="icon" href="/favicon.ico" sizes="any" />'));
+  assert.ok(html.includes('<link rel="apple-touch-icon" href="/apple-touch-icon.png" />'));
+  assert.ok(read('reader.html').includes('href="/reader/favicon.ico"'));
+  const m = JSON.parse(read('manifest.webmanifest'));
+  assert.deepStrictEqual(m.icons.map((i) => i.src), ['/icon-192.png', '/icon-512.png', '/icon-maskable-512.png']);
+  assert.strictEqual(m.icons[2].purpose, 'maskable');
+  for (const f of ['index.html', 'design-showcase.html', 'reader.html', 'sw.js']) {
+    assert.ok(!read(f).includes('favicon.svg') && !read(f).includes('reader-icon'), `${f} references a retired icon`);
+  }
+  for (const f of ['favicon.svg', 'reader-icon.svg', 'reader-icon-192.png']) assert.ok(!fs.existsSync(pub(f)), `${f} removed`);
+});
+
+test('service worker cache version was bumped past v5 so the old icons are evicted', () => {
   const m = /bookhunt-shell-v(\d+)/.exec(read('sw.js'));
-  assert.ok(m && Number(m[1]) >= 4);
+  assert.ok(m && Number(m[1]) >= 6);
 });

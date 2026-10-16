@@ -14,13 +14,13 @@
 // the cache updates behind it; the cache is only used as an OFFLINE fallback.
 // Bump CACHE on changes that must evict the previous shell.
 
-const CACHE = 'bookhunt-shell-v5'; // bumped: admin app became routed full-width pages (2026-10)
+const CACHE = 'bookhunt-shell-v6'; // bumped: new app icon set (favicon.ico + PNG icons, 2026-10)
 const SHELL = [
   '/',
   '/index.html',
   '/style.css',
   '/app.js',
-  '/favicon.svg',
+  '/favicon.ico',
   '/manifest.webmanifest',
 ];
 

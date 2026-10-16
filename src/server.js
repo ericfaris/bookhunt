@@ -174,10 +174,18 @@ app.get('/reader/manifest.webmanifest', (req, res) => {
 });
 
 // App icons for the home-screen install — also under /reader/* for CF Access.
+// Same files as the admin app's icon set (built by scripts/icons/build.py).
+const READER_ICONS = {
+  '180': 'apple-touch-icon.png', '192': 'icon-192.png', '512': 'icon-512.png', 'maskable-512': 'icon-maskable-512.png',
+};
 app.get('/reader/icon-:size.png', (req, res) => {
-  const size = ['180', '192', '512'].includes(req.params.size) ? req.params.size : '192';
+  const file = READER_ICONS[req.params.size] || READER_ICONS['192'];
   res.setHeader('Cache-Control', 'public, max-age=86400');
-  res.sendFile(path.join(__dirname, '..', 'public', `reader-icon-${size}.png`));
+  res.sendFile(path.join(__dirname, '..', 'public', file));
+});
+app.get('/reader/favicon.ico', (req, res) => {
+  res.setHeader('Cache-Control', 'public, max-age=86400');
+  res.sendFile(path.join(__dirname, '..', 'public', 'favicon.ico'));
 });
 
 app.get('/reader/api/books', async (req, res) => {

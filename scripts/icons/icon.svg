@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+<defs><filter id="sh" x="-30%" y="-30%" width="160%" height="160%">
+  <feDropShadow dx="0" dy="12" stdDeviation="12" flood-color="#000" flood-opacity=".45"/></filter>
+<radialGradient id="bgg" cx="50%" cy="35%" r="75%"><stop offset="0" stop-color="#2f4280"/><stop offset="1" stop-color="#131a30"/></radialGradient><linearGradient id="cream" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fffdf8"/><stop offset="1" stop-color="#e2d6bd"/></linearGradient><linearGradient id="rib" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#ff8052"/><stop offset="1" stop-color="#d23f12"/></linearGradient></defs>
+<g id="bg"><rect width="512" height="512" fill="url(#bgg)"/></g>
+<g id="mark"><g filter="url(#sh)"><g transform="translate(32 25) scale(1.75)">
+  <path fill="url(#cream)" d="M68 28H128V212H68A16 16 0 0 1 52 196V44A16 16 0 0 1 68 28Z"/>
+  <path fill="url(#cream)" d="M184 28H188A16 16 0 0 1 204 44V196A16 16 0 0 1 188 212H184Z"/>
+  <path fill="#c9b994" opacity=".55" d="M60 30h8v180h-8a12 12 0 0 1-6-8V40a12 12 0 0 1 6-10Z"/>
+  <path fill="url(#rib)" d="M136 28H176V236L156 216L136 236Z"/>
+  <path fill="#fff" opacity=".22" d="M136 28H146V226L136 236Z"/>
+</g></g></g>
+</svg>
