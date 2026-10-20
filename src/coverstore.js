@@ -51,7 +51,7 @@ const OPTIMIZE_OVER_BYTES = 350 * 1024;
 const MIN_GOOD_W = 400;
 // Bumped when stored images get materially better (e.g. the 2026-10 upgrade
 // from 128px catalog thumbnails), so browsers drop their week-long cached copy.
-const COVER_REV = '2';
+const COVER_REV = '3';
 // Distinct catalog cover URLs tried per book before falling back.
 const CATALOG_ATTEMPTS = 4;
 const GENERATED_TTL_MS = 24 * 60 * 60 * 1000;
