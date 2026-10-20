@@ -52,6 +52,8 @@ const MIN_GOOD_W = 400;
 // Bumped when stored images get materially better (e.g. the 2026-10 upgrade
 // from 128px catalog thumbnails), so browsers drop their week-long cached copy.
 const COVER_REV = '2';
+// Distinct catalog cover URLs tried per book before falling back.
+const CATALOG_ATTEMPTS = 4;
 const GENERATED_TTL_MS = 24 * 60 * 60 * 1000;
 
 const EXT_BY_MIME = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/gif': 'gif', 'image/webp': 'webp', 'image/svg+xml': 'svg' };
@@ -92,13 +94,37 @@ function writeStored(key, dir, bytes, mime) {
   }
 }
 
+/**
+ * True for Google Books' "image not available" stand-in: it's served as a
+ * normal 200 image, so it must be recognized by content — a light, perfectly
+ * gray picture (gray text on white). Fails soft (false) without sharp.
+ */
+async function isPlaceholderImage(bytes, opts = {}) {
+  const sharp = opts.sharp === undefined ? loadSharp() : opts.sharp;
+  if (!sharp) return false;
+  try {
+    const { channels } = await sharp(bytes).removeAlpha().stats();
+    if (channels.length < 3) return false;
+    const [r, g, b] = channels;
+    const close = (x, y) => Math.abs(x - y) < 1.5;
+    return r.mean > 200 && close(r.mean, g.mean) && close(g.mean, b.mean)
+      && close(r.stdev, g.stdev) && close(g.stdev, b.stdev);
+  } catch {
+    return false;
+  }
+}
+
+const GOOGLE_IMG_HOST = /^https?:\/\/books\.google(usercontent)?\.com\//i;
+
 /** Fetch a remote cover and accept it only if it's a real image. */
 async function fetchImage(url, opts) {
   if (!url) return null;
   const bytes = await (opts.fetchImage || covers.fetchCoverImage)(url);
   if (!bytes || bytes.length < MIN_IMAGE_BYTES || bytes.length > MAX_IMAGE_BYTES) return null;
   const mime = epub.sniffImageMime(bytes);
-  return mime ? { bytes, mime } : null;
+  if (!mime) return null;
+  if (GOOGLE_IMG_HOST.test(url) && (await isPlaceholderImage(bytes, opts))) return null;
+  return { bytes, mime };
 }
 
 /** Try the large rendition of a URL first, then the URL as given. */
@@ -245,6 +271,13 @@ async function getCoverImage(book, opts = {}) {
         const small = await optimizeImage(img, opts);
         if (small !== img) { writeStored(key, dir, small.bytes, small.mime); return small; }
       }
+      // A stored "image not available" placeholder (saved before those were
+      // rejected) is dropped once per process so the chain can find the real one.
+      const checkKey = 'ph|' + dir + '|' + key;
+      if (!img.generated && img.bytes.length < 120 * 1024 && !upgradeTried.has(checkKey)) {
+        upgradeTried.add(checkKey);
+        if (await isPlaceholderImage(img.bytes, opts)) return rebuildCover(book || {}, key, dir, opts);
+      }
       // A low-res cover (e.g. a 128px catalog thumbnail stored before the
       // chain became quality-aware) gets one upgrade attempt per process.
       const flight = dir + '|' + key;
@@ -263,6 +296,11 @@ async function getCoverImage(book, opts = {}) {
     }
   }
 
+  return rebuildCover(book || {}, key, dir, opts);
+}
+
+/** Run the chain for a book and store the result (real cover, else generated). */
+function rebuildCover(book, key, dir, opts) {
   const flightKey = dir + '|' + key;
   if (inflight.has(flightKey)) return inflight.get(flightKey);
   const p = (async () => {
@@ -315,8 +353,22 @@ async function findRealCover(book, opts) {
       } catch { /* unreadable book — try the catalogs */ }
     }
     // 3. The catalogs.
-    const url = await (opts.resolveCover || covers.resolveCover)({ title: book.title, author: book.author });
-    if (url && url !== book.cover && (await consider(await fetchBest(url, opts), 'catalog'))) return best;
+    // A source can answer with a dead or placeholder image; keep asking the
+    // chain for a different URL (bypassing the cache) before giving up.
+    const q = { title: book.title, author: book.author };
+    const skipUrls = new Set(book.cover ? [book.cover] : []);
+    let url = await (opts.resolveCover || covers.resolveCover)(q);
+    for (let i = 0; url && i < CATALOG_ATTEMPTS; i++) {
+      if (!skipUrls.has(url)) {
+        skipUrls.add(url);
+        const hit = await fetchBest(url, opts);
+        if (await consider(hit, 'catalog')) {
+          if (i > 0) (opts.rememberCover || covers.rememberCover)(q, url);
+          return best;
+        }
+      }
+      url = await (opts.lookupCover || covers.lookupCover)(q, { skipUrls });
+    }
   } catch { /* fall back to whatever we have, else a generated cover */ }
   return best;
 }
@@ -371,6 +423,7 @@ module.exports = {
   wrapWords,
   optimizeImage,
   rasterize,
+  isPlaceholderImage,
   OPTIMIZE_OVER_BYTES,
   MIN_GOOD_W,
   MAX_W,

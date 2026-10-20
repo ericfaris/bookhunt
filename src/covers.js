@@ -401,7 +401,7 @@ async function lookupDetailed({ title, author }, opts = {}, { wantDescription = 
     if (src.skip && src.skip(query)) continue;
     try {
       const r = (await src.run(query, opts)) || {};
-      if (!out.cover && r.cover) out.cover = r.cover;
+      if (!out.cover && r.cover && !(opts.skipUrls && opts.skipUrls.has(r.cover))) out.cover = r.cover;
       if (!out.description && r.description) out.description = r.description;
     } catch (err) {
       if (!err || err.transient !== false) failed = true;
@@ -422,6 +422,19 @@ async function lookupDetailed({ title, author }, opts = {}, { wantDescription = 
  */
 async function lookupCover(q, opts = {}) {
   return (await lookupDetailed(q, opts)).cover;
+}
+
+/**
+ * Overwrite the cached cover URL for { title, author } — used when the cached
+ * one turned out to be a placeholder/dead image and a later source found a
+ * real one. NEVER throws.
+ */
+function rememberCover({ title, author }, url, opts = {}) {
+  try {
+    (opts.cache || fileCache).set(
+      cacheKey({ title: String(title || '').trim(), author: String(author || '').trim() }),
+      { cover: url, ts: opts.now || Date.now(), v: CACHE_VERSION });
+  } catch { /* best effort */ }
 }
 
 /**
@@ -591,6 +604,8 @@ module.exports = {
   CACHE_VERSION,
   SOURCES,
   resolveCover,
+  lookupCover,
+  rememberCover,
   lookupMeta,
   resolveMeta,
   fetchCoverImage,

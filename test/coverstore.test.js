@@ -342,3 +342,69 @@ test('versionFor: includes a revision so improved covers bust week-long browser 
   assert.match(v, /^[0-9a-f]{8}$/);
   assert.notEqual(v, require('node:crypto').createHash('sha256').update('https://x/c.jpg').digest('hex').slice(0, 8));
 });
+
+// --- "image not available" placeholders ---------------------------------------
+
+const sharpLib = sharp;
+// Light gray text-ish blotch on white, like Google's stand-in image.
+async function placeholderPng() {
+  const blot = await sharpLib({ create: { width: 300, height: 200, channels: 3, background: { r: 190, g: 190, b: 190 } } }).png().toBuffer();
+  return sharpLib({ create: { width: 800, height: 1043, channels: 3, background: '#ffffff' } })
+    .composite([{ input: blot, top: 300, left: 200 }]).png().toBuffer();
+}
+async function coloredJpeg() {
+  const art = await sharpLib({ create: { width: 500, height: 750, channels: 3, background: { r: 30, g: 60, b: 160 } } }).jpeg().toBuffer();
+  return sharpLib({ create: { width: 500, height: 750, channels: 3, background: { r: 200, g: 200, b: 200 } } })
+    .composite([{ input: art, top: 0, left: 0 }]).jpeg().toBuffer();
+}
+
+test('isPlaceholderImage: gray-on-white placeholder yes; colored cover no', async () => {
+  assert.equal(await coverstore.isPlaceholderImage(await placeholderPng()), true);
+  assert.equal(await coverstore.isPlaceholderImage(await coloredJpeg()), false);
+  assert.equal(await coverstore.isPlaceholderImage(PNG), false); // undecodable → fail soft
+});
+
+test('getCoverImage: a Google placeholder is rejected and the next catalog URL is used', async () => {
+  const dir = tmpDir();
+  const ph = await placeholderPng();
+  const good = await coloredJpeg();
+  const GOOGLE = 'https://books.google.com/books/content?id=x&zoom=1';
+  const OL = 'https://covers.openlibrary.org/b/id/1-M.jpg';
+  let remembered = null;
+  const img = await coverstore.getCoverImage({ title: 'T', author: 'A' }, {
+    dir,
+    resolveCover: async () => GOOGLE,
+    lookupCover: async (_q, { skipUrls }) => (skipUrls.has(GOOGLE) ? OL : null),
+    rememberCover: (_q, url) => { remembered = url; },
+    fetchImage: async (url) => (/books\.google/.test(url) ? ph : good),
+  });
+  assert.equal(img.generated, false);
+  assert.equal(img.source, 'catalog');
+  assert.equal(remembered, OL);
+  assert.deepEqual(img.bytes, good);
+});
+
+test('getCoverImage: a stored placeholder is replaced by a real cover', async () => {
+  const dir = tmpDir();
+  const key = coverstore.keyFor({ title: 'Stored Ph', author: 'A' });
+  fs.writeFileSync(path.join(dir, `${key}.png`), await placeholderPng());
+  const good = await coloredJpeg();
+  const img = await coverstore.getCoverImage({ title: 'Stored Ph', author: 'A' }, {
+    dir, resolveCover: async () => 'https://covers.openlibrary.org/b/id/2-M.jpg', fetchImage: async () => good,
+  });
+  assert.equal(img.generated, false);
+  assert.deepEqual(img.bytes, good);
+});
+
+test('getCoverImage: all sources placeholders → generated jacket, never the placeholder', async () => {
+  const dir = tmpDir();
+  const ph = await placeholderPng();
+  const img = await coverstore.getCoverImage({ title: 'Nothing', author: 'A' }, {
+    dir,
+    resolveCover: async () => 'https://books.google.com/books/content?id=y',
+    lookupCover: async () => null,
+    rememberCover: () => {},
+    fetchImage: async () => ph,
+  });
+  assert.equal(img.generated, true);
+});
