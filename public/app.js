@@ -576,7 +576,7 @@ function coverImg({ className, src, fallback, placeholder, zoomTitle }) {
   return img;
 }
 
-// Build one result card node. (renderCard appends it — kept for compatibility.)
+// Build one result card node.
 //
 // When a book was found INSIDE a multi-book set (`r.collection`), the forum
 // post's title, cover and blurb all describe the whole SET, not the book the
@@ -694,10 +694,6 @@ function buildCard(r) {
   }
 
   return el('div', { className: 'card' }, [cover, body]);
-}
-
-function renderCard(r) {
-  (document.getElementById('resultsList') || resultsEl).append(buildCard(r));
 }
 
 // --- Library-first stage ----------------------------------------------------
@@ -2504,15 +2500,6 @@ function renderLibraryGridCard(book) {
     ]),
   ]);
   return tile;
-}
-
-// Build a book's cover element. A stored cover renders immediately; otherwise a
-// placeholder is returned and registered with the IntersectionObserver so its
-// cover is fetched only once it scrolls into view (lazy loading).
-// The stored image for a Library book (src/coverstore.js) — lazy-loaded by
-// the browser as rows scroll into view; the server resolves and saves it once.
-function renderLibraryCover(book) {
-  return coverImg({ className: 'lib-cover', src: libraryCoverSrc(book), placeholder: makeCoverPlaceholder });
 }
 
 function renderLibraryBook(book) {

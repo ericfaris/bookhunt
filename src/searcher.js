@@ -122,6 +122,26 @@ function friendlyLaunchError(err) {
 // alive whether or not the Mobilism session is authenticated, so the live
 // window can be warmed via /warm (noVNC). Mobilism operations call
 // ensureReady() to require a login; Amazon lookups need no login at all.
+// --disable-gpu* fixes the green/black screen Chromium shows under a
+// virtual/WSLg display (GPU compositing bug). --disable-dev-shm-usage
+// avoids /dev/shm crashes.
+const CHROMIUM_ARGS = [
+  '--disable-blink-features=AutomationControlled',
+  '--disable-gpu',
+  '--disable-gpu-compositing',
+  '--disable-software-rasterizer',
+  '--disable-dev-shm-usage',
+  // Required in Docker — containers lack the kernel capabilities the
+  // Chromium sandbox needs, causing it to hang silently without these.
+  '--no-sandbox',
+  '--disable-setuid-sandbox',
+  // Open maximized so the noVNC view shows the full page.
+  '--start-maximized',
+  // The persistent profile's HTTP cache otherwise grows without bound (it
+  // reached 1.2 GB); 256 MB is plenty for the forum pages we revisit.
+  '--disk-cache-size=268435456',
+];
+
 async function getSession() {
   if (_page && !_page.isClosed()) return { context: _context, page: _page };
   if (_loginPromise) return _loginPromise;
@@ -133,22 +153,7 @@ async function getSession() {
         headless: HEADLESS,
         acceptDownloads: true,
         viewport: { width: 1280, height: 900 },
-        // --disable-gpu* fixes the green/black screen Chromium shows under a
-        // virtual/WSLg display (GPU compositing bug). --disable-dev-shm-usage
-        // avoids /dev/shm crashes.
-        args: [
-          '--disable-blink-features=AutomationControlled',
-          '--disable-gpu',
-          '--disable-gpu-compositing',
-          '--disable-software-rasterizer',
-          '--disable-dev-shm-usage',
-          // Required in Docker — containers lack the kernel capabilities the
-          // Chromium sandbox needs, causing it to hang silently without these.
-          '--no-sandbox',
-          '--disable-setuid-sandbox',
-          // Open maximized so the noVNC view shows the full page.
-          '--start-maximized',
-        ],
+        args: CHROMIUM_ARGS,
         userAgent:
           'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 ' +
           '(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
@@ -913,6 +918,7 @@ module.exports = {
   createCancelSignal,
   CancelledError,
   // exported for unit tests
+  CHROMIUM_ARGS,
   normalize,
   fuzzyMatch,
   fuzzyMatchLine,

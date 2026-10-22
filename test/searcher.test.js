@@ -160,3 +160,11 @@ test('resultForRow: a plain book row stays a plain result, cover intact', () => 
   assert.equal(r.source, 'Author fallback');
   assert.equal(r.cover, 'https://images.mobilism.org/voice.jpg', "a real book post's image IS its cover");
 });
+
+test('CHROMIUM_ARGS caps the persistent profile disk cache', () => {
+  const { CHROMIUM_ARGS } = require('../src/searcher');
+  const cap = CHROMIUM_ARGS.find((a) => a.startsWith('--disk-cache-size='));
+  assert.ok(cap, 'expected a --disk-cache-size flag');
+  const bytes = Number(cap.split('=')[1]);
+  assert.ok(bytes > 0 && bytes <= 512 * 1024 * 1024, `cache cap ${bytes} should be (0, 512 MB]`);
+});

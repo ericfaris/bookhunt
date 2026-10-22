@@ -138,6 +138,6 @@ test('app.js: no cover <img> hot-links a catalog — every one goes through cove
   const imgs = [...js.matchAll(/el\('img', \{ className: '([^']*)'/g)].map((m) => m[1]).filter((c) => /cover/.test(c));
   assert.deepEqual(imgs, [], `direct cover <img>s left: ${imgs.join(', ')}`);
   assert.ok(!js.includes('/api/cover?'), 'no client lookups of cover URLs');
-  assert.ok(js.includes("className: 'lib-cover', src: libraryCoverSrc(book)"), 'Library uses the stored image');
+  assert.ok(js.includes("className: 'lib-cover lib-cover-open', src: libraryCoverSrc(book)"), 'Library uses the stored image');
   assert.ok(js.includes('src: lookupCoverUrl(w.title, w.author)'), 'watchlist uses the stored lookup');
 });
