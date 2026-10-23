@@ -116,4 +116,4 @@
   Regency Life series by Maria Grace" matched Pride and Prejudice. `bylineMismatch` now skips sets bylined to others.
 - `test/fake-forum.js` drives a whole `searcher.search()` offline (pass order, real miss cases, dead session) — use it
   for future search changes instead of live probing.
-- The Atlas user was created with `readWriteAnyDatabase`; should be narrowed to `readWrite@bookhunt`.
+- The Atlas user was created with `readWriteAnyDatabase`; replaced 2026-10-23 by `bookhunt-rw` (`readWrite@bookhunt`, scoped to Cluster0) per the lab DB-user standard in `~/.claude/ATLAS.md`.
