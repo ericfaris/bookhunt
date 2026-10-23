@@ -3,7 +3,7 @@
 const { test } = require('node:test');
 const assert = require('node:assert');
 
-const { normalize, fuzzyMatch, fuzzyMatchLine, isCollection, titleDeclaresNonEpub, titleLooksLikeAudiobook, collectionResult } = require('../src/searcher');
+const { normalize, fuzzyMatch, fuzzyMatchLine, isCollection, authorKeywords, titleDeclaresNonEpub, titleLooksLikeAudiobook, collectionResult } = require('../src/searcher');
 
 test('normalize: lowercases, strips punctuation, collapses space', () => {
   assert.equal(normalize('1984: Illustrated!'), '1984 illustrated');
@@ -87,6 +87,7 @@ test('fuzzyMatchLine: all tokens must share one line', () => {
 test('isCollection: detects bundle/series keywords (incl. "&")', () => {
   assert.equal(isCollection('The Complete Works of Shakespeare'), true);
   assert.equal(isCollection('Animal Farm & 1984'), true);
+  assert.equal(isCollection('Animal Farm & 1984 by George Orwell', 'Animal Farm'), true);
   assert.equal(isCollection('Dune Omnibus'), true);
   assert.equal(isCollection('1984'), false);
 });
@@ -256,4 +257,52 @@ test('CHROMIUM_ARGS caps the persistent profile disk cache', () => {
   assert.ok(cap, 'expected a --disk-cache-size flag');
   const bytes = Number(cap.split('=')[1]);
   assert.ok(bytes > 0 && bytes <= 512 * 1024 * 1024, `cache cap ${bytes} should be (0, 512 MB]`);
+});
+
+test('normalize: folds number words and honorifics', () => {
+  assert.equal(normalize('Eleven Numbers'), '11 numbers');
+  assert.equal(normalize('Mr. Mercedes'), 'mister mercedes');
+  assert.equal(normalize('Dr Sleep'), 'doctor sleep');
+  assert.equal(normalize('St. Elsewhere'), 'saint elsewhere');
+  // whole words only
+  assert.equal(normalize('Someone Like You'), 'someone like you');
+  assert.equal(normalize('Mrs Dalloway'), 'mrs dalloway');
+});
+
+test('fuzzyMatch: number words ⇄ digits, abbreviations ⇄ full words', () => {
+  assert.equal(fuzzyMatch('Eleven Numbers', '11 Numbers by Lee Child'), true);
+  assert.equal(fuzzyMatch('Twelve Days', '12 Days by Jane Doe'), true);
+  assert.equal(fuzzyMatch('Ready Player 1', 'Ready Player One by Ernest Cline'), true);
+  assert.equal(fuzzyMatch('Mister Mercedes', 'Mr. Mercedes by Stephen King'), true);
+  assert.equal(fuzzyMatch('Doctor Sleep', 'Dr Sleep by Stephen King'), true);
+  // number tokens match whole: "One Day" must not hit "100 Days"
+  assert.equal(fuzzyMatch('One Day', '100 Days by Jane Doe'), false);
+  assert.equal(fuzzyMatch('1984', '1984: Illustrated'), true);
+});
+
+test('isCollection: "&" only signals a set in the title part, and not when the searched title has it', () => {
+  // co-author "&" is not a set
+  assert.equal(isCollection('The Thoroughbreds by Elin Hilderbrand & Shelby Cunningham (.ePUB)', 'The Thoroughbreds'), false);
+  assert.equal(isCollection('The Thoroughbreds by Elin Hilderbrand & Shelby Cunningham (.ePUB)'), false);
+  // the searched title owns the "&"
+  assert.equal(isCollection('Pride & Prejudice by Jane Austen (.ePUB)', 'Pride and Prejudice'), false);
+  assert.equal(isCollection('Pride & Prejudice by Jane Austen (.ePUB)', 'Pride & Prejudice'), false);
+  // but a different title joined by "&" is a set
+  assert.equal(isCollection('Pride & Prejudice by Jane Austen (.ePUB)', 'Emma'), true);
+  assert.equal(isCollection('Pride & Prejudice by Jane Austen (.ePUB)'), true);
+});
+
+test('isCollection: "Complete", short fiction and the updated-set "(.ePUB)+" marker', () => {
+  assert.equal(isCollection('Short Fiction Complete by Lee Child (ePUB)'), true);
+  assert.equal(isCollection('The Complete Jack Reacher Short Fiction by Lee Child (ePUB)'), true);
+  assert.equal(isCollection('Jack Reacher by Lee Child (.ePUB)+'), true);
+  assert.equal(isCollection('Jack Reacher by Lee Child (.ePUB)'), false);
+});
+
+test('authorKeywords: drops the co-author connector for the forum query', () => {
+  assert.equal(authorKeywords('Elin Hilderbrand and Shelby Cunningham'), 'Elin Hilderbrand Shelby Cunningham');
+  assert.equal(authorKeywords('Elin Hilderbrand & Shelby Cunningham'), 'Elin Hilderbrand Shelby Cunningham');
+  assert.equal(authorKeywords('Jennifer Hillier'), 'Jennifer Hillier');
+  assert.equal(authorKeywords('Alexandra Andrews'), 'Alexandra Andrews'); // "and" inside a word stays
+  assert.equal(authorKeywords(''), '');
 });

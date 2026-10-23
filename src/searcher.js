@@ -20,13 +20,14 @@ const MAX_COLLECTIONS = 3;    // collection posts crawled per search
 // Internal safety cap on how many topic pages we open for detail scraping per
 // pass. Keeps a broad title search from turning into hundreds of slow requests.
 const DETAIL_CAP = 15;
-// "books by {author}" collection pass: it's a narrow query, so a couple of
-// result pages is plenty, and we open at most this many of those set/collection
-// posts to scan their contents for the requested title.
-const COLLECTION_SEARCH_PAGES = 2;
-const MAX_AUTHOR_COLLECTION_SCAN = 6;
+// Author-sets pass: a title-only "{author} epub" search (the "epub" keyword
+// drops the author's MP3/M4B/[AB] posts, so even a prolific author's old set
+// threads land within these pages); we open at most this many of the set posts
+// it turns up to scan their contents for the requested title.
+const COLLECTION_SEARCH_PAGES = 3;
+const MAX_AUTHOR_COLLECTION_SCAN = 8;
 
-const COLLECTION_KEYWORDS = ['collection', 'complete works', '&', 'series', 'omnibus'];
+const COLLECTION_KEYWORDS = ['collection', 'complete', 'series', 'omnibus', 'short fiction'];
 // Set posts that carry none of the keywords above: "4 Novels by Jennifer
 // Hillier", "Books by Sally Hepworth", "Creep, Books 1-2", "… Box Set",
 // "… Bundle". Missing these meant the author fallback skipped the set unopened
@@ -43,6 +44,7 @@ const COLLECTION_RE = new RegExp([
   String.raw`\b\d+\s*-?\s*in\s*-?\s*1\b`, // "3-in-1"
   String.raw`\b(?:box(?:ed)?\s?set|complete\s+set|book\s+set)\b`,
   String.raw`\b(?:mega|book|ebook|novel)s?\s?pack\b`,
+  String.raw`\(\.?epub\)\s*\+`, // "(.ePUB)+" — Mobilism's marker for a set thread that gets updated
 ].join('|'), 'i');
 
 // ---------------------------------------------------------------------------
@@ -408,7 +410,17 @@ function extractBlurb(text, maxLen = 350) {
  *   ampersand    "Pride & …"  → "pride and …"
  *   apostrophes  "Hell's"     → "hells" (joined, not split into "hell s")
  *   initials     "J.D." / "J. D." / "JD" → "jd" (runs of single letters merge)
+ *   numbers      "Eleven" → "11"
+ *   honorifics   "Mr" → "mister", "Dr" → "doctor", "St" → "saint"
  */
+const NUMBER_WORDS = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten',
+  'eleven', 'twelve', 'thirteen', 'fourteen', 'fifteen', 'sixteen', 'seventeen', 'eighteen', 'nineteen', 'twenty'];
+const WORD_FOLDS = new Map([
+  ...NUMBER_WORDS.map((w, i) => [w, String(i)]),
+  ['mr', 'mister'], ['dr', 'doctor'], ['st', 'saint'],
+]);
+const WORD_FOLD_RE = new RegExp(`\\b(?:${[...WORD_FOLDS.keys()].join('|')})\\b`, 'g');
+
 function normalize(s) {
   return (s || '')
     .normalize('NFKD')
@@ -419,7 +431,8 @@ function normalize(s) {
     .replace(/[^a-z0-9\s]/g, ' ')
     .replace(/\s+/g, ' ')
     .trim()
-    .replace(/\b[a-z](?: [a-z]\b)+/g, (run) => run.replace(/ /g, ''));
+    .replace(/\b[a-z](?: [a-z]\b)+/g, (run) => run.replace(/ /g, ''))
+    .replace(WORD_FOLD_RE, (w) => WORD_FOLDS.get(w));
 }
 
 /**
@@ -439,7 +452,8 @@ function fuzzyMatch(query, target) {
   // lists but as "A & B" / "A, B" on the forum, so requiring it rejected
   // genuine posts ("Elin Hilderbrand and Shelby Cunningham").
   const toks = q.split(' ').filter((tok) => tok !== 'and');
-  return toks.every((tok) => new RegExp('\\b' + tok).test(t));
+  // Number tokens must match whole ("One Day" → "1 day" must not hit "100 Days").
+  return toks.every((tok) => new RegExp('\\b' + tok + (/^\d+$/.test(tok) ? '\\b' : '')).test(t));
 }
 
 /**
@@ -451,9 +465,20 @@ function fuzzyMatchLine(query, text) {
   return (text || '').split(/\n+/).some((line) => fuzzyMatch(query, line));
 }
 
-function isCollection(title) {
+/**
+ * True when a topic title names a multi-book set. "&" only counts in the title
+ * part (not "… by A & B" co-authors), and not when the searched title itself
+ * contains it ("Pride & Prejudice") — otherwise single books were treated as
+ * sets and lost their own cover.
+ */
+function isCollection(title, searchedTitle = '') {
   const t = (title || '').toLowerCase();
-  return COLLECTION_KEYWORDS.some((kw) => t.includes(kw)) || COLLECTION_RE.test(t);
+  if (COLLECTION_KEYWORDS.some((kw) => t.includes(kw)) || COLLECTION_RE.test(t)) return true;
+  const by = t.lastIndexOf(' by ');
+  const head = by > 0 ? t.slice(0, by) : t;
+  if (!head.includes('&')) return false;
+  const searchedHasAnd = /(^|\s)and(\s|$)/.test(normalize(searchedTitle));
+  return !(searchedHasAnd && fuzzyMatch(searchedTitle, head));
 }
 
 // Mobilism book topics declare the file format right in the title, e.g.
@@ -500,6 +525,15 @@ function titleDeclaresNonEpub(title) {
     else sawOther = true;
   }
   return sawOther && !sawEpub;
+}
+
+/**
+ * PURE: author string → forum keywords. Drops the "and"/"&" connector between
+ * co-authors: posts write "A & B" or "A, B", and phpBB's all-terms search would
+ * otherwise demand the literal word.
+ */
+function authorKeywords(author) {
+  return (author || '').replace(/&/g, ' ').replace(/\band\b/gi, ' ').replace(/\s+/g, ' ').trim();
 }
 
 function buildSearchUrl(keywords, { sd = 'd', titleOnly = false } = {}) {
@@ -757,7 +791,7 @@ function collectionResult(detail, row, matchedTitle, matchedAuthor) {
  * name, with the set's cover art.
  */
 function resultForRow(detail, row, { title, author, source }) {
-  if (isCollection((row && row.title) || '')) return collectionResult(detail, row, title, author);
+  if (isCollection((row && row.title) || '', title)) return collectionResult(detail, row, title, author);
   return publicResult(detail, source, row);
 }
 
@@ -799,7 +833,7 @@ async function runSearch({ title, author, sort = 'newest' }, onProgress, signal)
   // Put title AND author in the first query when both are given — this mirrors
   // a manual titleonly search and lands directly on the match, instead of
   // searching the title alone and hoping the right post falls inside the caps.
-  const pass1Keywords = [title, author].filter(Boolean).join(' ');
+  const pass1Keywords = [title, authorKeywords(author)].filter(Boolean).join(' ');
   const pass1Url = buildSearchUrl(pass1Keywords, { sd, titleOnly: !!title });
   const authorSearchUrl = author ? buildSearchUrl(author, { sd, titleOnly: false }) : null;
 
@@ -814,7 +848,7 @@ async function runSearch({ title, author, sort = 'newest' }, onProgress, signal)
     if (title && !fuzzyMatch(title, row.title)) continue;
     // Skip MP3/M4B/PDF/etc. topics by their title alone — don't open them.
     if (titleDeclaresNonEpub(row.title)) continue;
-    if (isCollection(row.title)) {
+    if (isCollection(row.title, title)) {
       collections.push(row);
       continue;
     }
@@ -849,19 +883,22 @@ async function runSearch({ title, author, sort = 'newest' }, onProgress, signal)
     results.push(collectionResult(detail, col, title, author));
   }
 
-  // ---- "Books by {author}" collection pass ----
-  // A second search that targets multi-book set/collection posts (titled like
-  // "Books by Sally Hepworth"), then scans each post's contents for the
-  // requested title. Always runs when both title and author are given; its
-  // results are merged with everything above and deduped via `seen`.
+  // ---- Author-sets pass ----
+  // Searches the author's ePUB posts (title-only "{author} epub") and opens the
+  // ones that are sets — "4 Novels by …", "… Series (.ePUB)+", "Books by …" —
+  // scanning each for the requested title. Always runs when both title and
+  // author are given: a book often only exists inside an old set thread that was
+  // updated with it, whose name never contains the title. Results merge with
+  // everything above and dedupe via `seen`.
   if (title && author) {
     emit({ phase: 'author-collections' });
-    const byAuthorUrl = buildSearchUrl(`books by ${author}`, { sd, titleOnly: true });
+    const byAuthorUrl = buildSearchUrl(`${authorKeywords(author)} epub`, { sd, titleOnly: true });
     const byAuthorRows = await collectRows(page, byAuthorUrl, COLLECTION_SEARCH_PAGES, signal);
     let scanned = 0;
     for (const row of byAuthorRows) {
       throwIfCancelled(signal);
       if (seen.has(row.url)) continue;
+      if (!isCollection(row.title, title)) continue; // single books were judged by pass 1
       if (titleDeclaresNonEpub(row.title)) continue; // skip audiobook/PDF sets
       if (scanned >= MAX_AUTHOR_COLLECTION_SCAN) break;
       seen.add(row.url);
@@ -883,7 +920,7 @@ async function runSearch({ title, author, sort = 'newest' }, onProgress, signal)
     // search instead returns every post that merely *mentions* the author in its
     // blurb — comp-title marketing like "for fans of Colleen Hoover" — which is
     // exactly how unrelated books leaked into this pass.
-    const fallbackUrl = buildSearchUrl(author, { sd, titleOnly: true });
+    const fallbackUrl = buildSearchUrl(authorKeywords(author), { sd, titleOnly: true });
     const arows = await collectRows(page, fallbackUrl, MAX_PAGES, signal);
     let colCount = 0;
     for (const row of arows) {
@@ -896,8 +933,8 @@ async function runSearch({ title, author, sort = 'newest' }, onProgress, signal)
       // this is a DIFFERENT book by the author and we skip it WITHOUT opening the
       // thread (the VNC no longer walks every author post). Collections carry no
       // title in their name, so they're still opened (capped) and scanned inside.
-      if (title && !isCollection(row.title) && !fuzzyMatch(title, row.title)) continue;
-      if (isCollection(row.title)) {
+      if (title && !isCollection(row.title, title) && !fuzzyMatch(title, row.title)) continue;
+      if (isCollection(row.title, title)) {
         if (colCount >= MAX_COLLECTIONS) continue;
         colCount++;
       }
@@ -957,6 +994,7 @@ module.exports = {
   fuzzyMatch,
   fuzzyMatchLine,
   isCollection,
+  authorKeywords,
   titleDeclaresNonEpub,
   titleLooksLikeAudiobook,
   collectionResult,

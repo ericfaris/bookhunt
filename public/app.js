@@ -409,7 +409,7 @@ function showSearchProgress(ev) {
     'title-search': 'Searching Mobilism titles…',
     'scanning': `Scanning results…${ev.found ? ` (${ev.found} found so far)` : ''}`,
     'collections': 'Checking collection posts…',
-    'author-collections': 'Looking for “books by author” sets…',
+    'author-collections': 'Checking the author’s sets…',
     'author-fallback': 'Broadening to an author search…',
   };
   lastPhaseText = msgs[ev.phase] || 'Searching Mobilism…';
@@ -3375,7 +3375,7 @@ function batchPhaseLabel(ev) {
     'title-search': 'Searching titles…',
     'scanning': `Scanning…${ev.found ? ` (${ev.found})` : ''}`,
     'collections': 'Checking sets…',
-    'author-collections': 'Books-by-author…',
+    'author-collections': 'Author’s sets…',
     'author-fallback': 'Author search…',
   };
   return msgs[ev.phase] || 'Searching…';
