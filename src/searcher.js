@@ -32,7 +32,18 @@ const COLLECTION_KEYWORDS = ['collection', 'complete works', '&', 'series', 'omn
 // "… Bundle". Missing these meant the author fallback skipped the set unopened
 // (its name doesn't contain the searched title), so a book only available
 // inside it was never found.
-const COLLECTION_RE = /\b\d+\s+(?:novels|novellas|books)\b|\b(?:novels|books)\s+(?:by\b|\d)|\bbox\s?set\b|\bbundle\b/i;
+const COUNT = String.raw`(?:\d+|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)`;
+const COLLECTION_RE = new RegExp([
+  String.raw`\b${COUNT}\s+(?:novels|novellas|books|stories|short stories)\b`, // "4 Novels", "Three Books"
+  String.raw`\b(?:novels|books)\s+(?:by\b|\d)`, // "Books by X", "Books 1-2"
+  String.raw`\bnovels\b|\bnovellas\b|\bshort stories\b`, // "The Hillier Novels"
+  String.raw`\b(?:trilogy|duology|quartet|quintet|anthology|treasury|compendium|bundle)\b`,
+  String.raw`#\s*\d+\s*-\s*\d+`, // "#1-3"
+  String.raw`\b(?:vol(?:ume)?s?\.?|parts?)\s*\d+\s*-\s*\d+`, // "Vol. 1-3", "Volumes 1-4"
+  String.raw`\b\d+\s*-?\s*in\s*-?\s*1\b`, // "3-in-1"
+  String.raw`\b(?:box(?:ed)?\s?set|complete\s+set|book\s+set)\b`,
+  String.raw`\b(?:mega|book|ebook|novel)s?\s?pack\b`,
+].join('|'), 'i');
 
 // ---------------------------------------------------------------------------
 // Shared, authenticated browser session (one persistent session reused
@@ -390,12 +401,25 @@ function extractBlurb(text, maxLen = 350) {
   return blurb.length > maxLen ? blurb.slice(0, maxLen).trimEnd() + '…' : blurb;
 }
 
+/**
+ * Lowercase, fold spelling variants to one form, strip punctuation. Folding
+ * keeps list/catalog titles and forum post titles comparable:
+ *   accents      "Zoë"        → "zoe"   (stripped, not dropped to "zo")
+ *   ampersand    "Pride & …"  → "pride and …"
+ *   apostrophes  "Hell's"     → "hells" (joined, not split into "hell s")
+ *   initials     "J.D." / "J. D." / "JD" → "jd" (runs of single letters merge)
+ */
 function normalize(s) {
   return (s || '')
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
     .toLowerCase()
+    .replace(/&/g, ' and ')
+    .replace(/['\u2018\u2019`\u00b4]/g, '')
     .replace(/[^a-z0-9\s]/g, ' ')
     .replace(/\s+/g, ' ')
-    .trim();
+    .trim()
+    .replace(/\b[a-z](?: [a-z]\b)+/g, (run) => run.replace(/ /g, ''));
 }
 
 /**
@@ -411,7 +435,11 @@ function fuzzyMatch(query, target) {
   const q = normalize(query);
   if (!q) return true;
   const t = normalize(target);
-  return q.split(' ').every((tok) => new RegExp('\\b' + tok).test(t));
+  // "and" is a connector, not content: co-authors arrive as "A and B" from the
+  // lists but as "A & B" / "A, B" on the forum, so requiring it rejected
+  // genuine posts ("Elin Hilderbrand and Shelby Cunningham").
+  const toks = q.split(' ').filter((tok) => tok !== 'and');
+  return toks.every((tok) => new RegExp('\\b' + tok).test(t));
 }
 
 /**

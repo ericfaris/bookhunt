@@ -12,6 +12,43 @@ test('normalize: lowercases, strips punctuation, collapses space', () => {
   assert.equal(normalize(null), '');
 });
 
+test('normalize: folds accents, &, apostrophes and initials', () => {
+  assert.equal(normalize('Zoë Bäckman'), 'zoe backman');
+  assert.equal(normalize('Pride & Prejudice'), 'pride and prejudice');
+  assert.equal(normalize('Hell\u2019s Kitchen'), 'hells kitchen');
+  assert.equal(normalize("Hell's Kitchen"), 'hells kitchen');
+  assert.equal(normalize('J.D. Robb'), 'jd robb');
+  assert.equal(normalize('J. D. Robb'), 'jd robb');
+  assert.equal(normalize('J.R.R. Tolkien'), 'jrr tolkien');
+  // a lone single letter is NOT merged into its neighbours
+  assert.equal(normalize('A Map to Murder'), 'a map to murder');
+  assert.equal(normalize('I, Robot'), 'i robot');
+  assert.equal(normalize('Heart of Glass (.ePUB)'), 'heart of glass epub');
+});
+
+test('fuzzyMatch: spelling variants between catalog and forum titles match', () => {
+  const pairs = [
+    ['J.D. Robb', 'Payback in Death by JD Robb (.ePUB)'],
+    ['JD Robb', 'Payback in Death by J. D. Robb (.ePUB)'],
+    ['Zoe Sugg', 'Girl Online by Zoë Sugg'],
+    ['Zoë Sugg', 'Girl Online by Zoe Sugg'],
+    ['Pride and Prejudice', 'Pride & Prejudice by Jane Austen'],
+    ['Pride & Prejudice', 'Pride and Prejudice by Jane Austen'],
+    ["Hell's Kitchen", 'Hells Kitchen by Someone'],
+    ['Hells Kitchen', 'Hell\u2019s Kitchen by Someone'],
+    // co-authors: list says "and", forum says "&" or ","
+    ['Elin Hilderbrand and Shelby Cunningham', 'The Academy series by Elin Hilderbrand & Shelby Cunningham (.ePUB)'],
+    ['Elin Hilderbrand and Shelby Cunningham', 'Elin Hilderbrand, Shelby Cunningham'],
+    ['Elin Hilderbrand & Shelby Cunningham', 'Elin Hilderbrand, Shelby Cunningham'],
+  ];
+  for (const [q, t] of pairs) assert.equal(fuzzyMatch(q, t), true, `${q} ⇢ ${t}`);
+  // ignoring "and" must not drop the real name tokens
+  assert.equal(fuzzyMatch('Elin Hilderbrand and Shelby Cunningham', 'Elin Hilderbrand'), false);
+  // folding must not loosen the word-start rule
+  assert.equal(fuzzyMatch('it ends with us', 'Loving with Demons by Hana Mahmood'), false);
+  assert.equal(fuzzyMatch('J.D. Robb', 'Jane Doe Robbins'), false);
+});
+
 test('fuzzyMatch: every query token must appear in target', () => {
   assert.equal(fuzzyMatch('1984', '1984: Illustrated Edition'), true);
   assert.equal(fuzzyMatch('george orwell', 'Orwell, George'), true); // order-independent
@@ -70,6 +107,40 @@ test('isCollection: detects counted/"books by"/box-set posts without a keyword',
   assert.equal(isCollection('Novel Ideas by Jane Doe'), false);
   assert.equal(isCollection('The Bookshop by Penelope Fitzgerald'), false);
   assert.equal(isCollection('Catch-22 by Joseph Heller'), false);
+});
+
+test('isCollection: series/volume ranges, packs and anthologies', () => {
+  for (const t of [
+    'The Hunger Games Trilogy by Suzanne Collins',
+    'Shadow and Bone Duology',
+    'The Raj Quartet',
+    'Three Novels by Jennifer Hillier',
+    'Five Books by Lee Child',
+    'The Hillier Novels (.ePUB)',
+    '12 Short Stories by Stephen King',
+    'Dresden Files #1-5',
+    'Dresden Files # 1 - 5',
+    'Discworld Vol. 1-3',
+    'Wheel of Time Volumes 1-4',
+    'Mystery 3-in-1 (.ePUB)',
+    'Romance Mega Pack',
+    'Thriller eBook Pack',
+    'Best American Anthology 2025',
+    'A Christmas Treasury',
+    'Lovecraft Compendium',
+    'Harry Potter Boxed Set',
+  ]) assert.equal(isCollection(t), true, t);
+  for (const t of [
+    'Wolf Pack by C.J. Box (.ePUB)',
+    'Set in Stone by Jane Doe',
+    'The Set-Up by Jane Doe',
+    'Ghost Story by Jim Butcher',
+    'Book 4 of Something',
+    'Volume Control by Jane Doe',
+    'The Novelist by Jane Doe',
+    'Catch-22 by Joseph Heller',
+    'Heart of Glass by Jennifer Hillier (.ePUB)',
+  ]) assert.equal(isCollection(t), false, t);
 });
 
 test('titleDeclaresNonEpub: skips audiobook/PDF-only titles without opening them', () => {
