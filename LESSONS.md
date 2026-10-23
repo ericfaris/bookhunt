@@ -78,3 +78,15 @@
 - Before redrawing a project's icon, check it for an existing brand mark (meal-mate's Two Cloches, tools' drafting compass) and render that mark dimensionally instead of inventing a new one.
 - Check what else uses the old icon files. vandal-preachers uses `/icon-192.png` as an in-app emblem. That project was skipped at the user's request.
 - A service worker that caches icons needs its cache name bumped, or installed copies keep showing the old icons. bookhunt sw v6, study sw v6 and meal-mate's version bump all handle this.
+
+## 2026-10-23 — Watches missing books that sit inside set posts / co-author posts
+- Two misses traced to `src/searcher.js` matching, not to the forum search (which found both posts):
+  "4 Novels by Jennifer Hillier" wasn't treated as a collection, so the author fallback skipped it without opening it;
+  the "Elin Hilderbrand **and** Shelby Cunningham" watch (list-sourced) required the token "and", but the post said "&" / ",".
+- Fix: `normalize()` folds accents, `&`→and, apostrophes, initials; `fuzzyMatch` ignores "and"; `COLLECTION_RE` covers
+  counted/"books by"/trilogy/#1-3/Vol 1-3/N-in-1/packs/box sets.
+- Debug recipe: copy the browser profile inside the container (`cp -r .browser-profile /tmp/prof2; rm /tmp/prof2/Singleton*`)
+  and run a throwaway Playwright script to read real topic titles/search rows without disturbing the app's session.
+  Hit `/api/search` with `cloudflared access token` to reproduce end-to-end.
+- Still open: old threads updated with new books sort by creation date and can fall past page caps; author fallback runs
+  only when nothing else matched; number words/abbreviations (Eleven/11, Mr/Mister) don't fold.
