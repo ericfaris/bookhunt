@@ -384,7 +384,7 @@ Notification channels live in `src/notify/` and share one contract (`isConfigure
 | `MOBILISM_PASS` | Yes | — | Mobilism forum password |
 | `MOBILISM_PREMIUM_USER` | No | — | Premium downloader username |
 | `MOBILISM_PREMIUM_PASS` | No | — | Premium downloader password |
-| `DOWNLOAD_PATH` | No | `C:\epubs` | `STORAGE=local` only: folder where ePUBs are saved (unused in r2 mode) |
+| `DOWNLOAD_PATH` | No | `./downloads` (`/downloads` under docker-compose) | `STORAGE=local` only: folder where ePUBs are saved (unused in r2 mode) |
 | `PORT` | No | `3000` | HTTP port |
 | `HEADLESS` | No | `false` | Set `true` to run Chromium headless (only safe when the browser profile is warm and Cloudflare clearance is cached) |
 | `PROFILE_DIR` | No | `.browser-profile/` | Path to the Playwright persistent browser profile |

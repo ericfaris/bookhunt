@@ -8,7 +8,9 @@ const { sniffArchive, extractEpubs } = require('./archive');
 const { giveThanks } = require('./thanks');
 const storage = require('./storage');
 
-const DOWNLOAD_PATH = process.env.DOWNLOAD_PATH || 'C:\\temp';
+// STORAGE=local: where books are saved. Under docker-compose it is /downloads,
+// which is also the LOGICAL prefix of every persisted savePath in r2 mode.
+const DOWNLOAD_PATH = process.env.DOWNLOAD_PATH || path.join(__dirname, '..', 'downloads');
 const PREMIUM_BASE =
   'https://dl.mobilism.org/amember/downloader/downloader/app/bindex3.php';
 
