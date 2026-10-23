@@ -190,9 +190,11 @@ function setStatus(id, status) {
   // Re-activating a fulfilled/paused/expired watch clears the previous
   // "found" state and no-match count so it gets a fresh run (otherwise a
   // watch reactivated from 'expired' would hit the 20-check cap again on its
-  // very next check).
+  // very next check). resumedAt restarts the radar's 8-week age clock
+  // (lists.expiredListWatches), which otherwise re-expires an old resumed
+  // list watch on the next daily run, before it is ever re-checked.
   const patch = status === 'active'
-    ? { status, foundUrl: null, foundAt: null, lastError: null, checkCount: 0, downloadMisses: 0, retryAfter: null }
+    ? { status, foundUrl: null, foundAt: null, lastError: null, checkCount: 0, downloadMisses: 0, retryAfter: null, resumedAt: new Date().toISOString() }
     : { status };
   return update(id, patch);
 }

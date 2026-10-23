@@ -131,6 +131,8 @@ test('setStatus active: clears found state AND the download-retry backoff (isola
   assert.equal(w.foundUrl, null);
   assert.equal(w.lastError, null);
   assert.equal(w.checkCount, 0);
+  // Resume restarts the radar's age clock.
+  assert.ok(Math.abs(Date.parse(w.resumedAt) - Date.now()) < 5000, 'resumedAt stamped');
   assert.equal(JSON.parse(fs.readFileSync(file, 'utf8'))[0].retryAfter, null, 'persisted');
 });
 

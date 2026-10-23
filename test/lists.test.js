@@ -242,6 +242,18 @@ test('expiredListWatches: only ACTIVE list-origin watches past max age', () => {
   assert.deepEqual(expiredListWatches(watches, now).map((w) => w.id), ['a']);
 });
 
+test('expiredListWatches: a resumed watch ages from resumedAt, not createdAt', () => {
+  const now = Date.parse('2026-10-23T12:00:00Z');
+  const day = 24 * 3600 * 1000;
+  const old = new Date(now - 90 * day).toISOString();
+  const watches = [
+    { id: 'resumed', status: 'active', source: 'list', createdAt: old, resumedAt: new Date(now - day).toISOString() },
+    { id: 'resumedLongAgo', status: 'active', source: 'list', createdAt: old, resumedAt: new Date(now - 60 * day).toISOString() },
+    { id: 'junkResume', status: 'active', source: 'list', createdAt: old, resumedAt: 'garbage' },
+  ];
+  assert.deepEqual(expiredListWatches(watches, now).map((w) => w.id), ['resumedLongAgo', 'junkResume']);
+});
+
 // --- digest ---------------------------------------------------------------------
 
 test('buildDigest: null when there is nothing to say (quiet week = no email)', () => {

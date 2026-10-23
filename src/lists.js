@@ -58,12 +58,13 @@ function newEntrants(prevKeys, next) {
   return (next || []).filter((e) => e && !seen.has(entryKey(e)));
 }
 
-/** PURE: active list-origin watches older than maxAge — due to expire. */
+/** PURE: active list-origin watches older than maxAge — due to expire. Age
+ *  counts from the later of createdAt and resumedAt (a manual Resume). */
 function expiredListWatches(watches, now, maxAgeMs = LIST_WATCH_MAX_AGE_MS) {
   return (watches || []).filter((w) => {
     if (!w || w.status !== 'active' || w.source !== 'list') return false;
-    const created = Date.parse(w.createdAt || '');
-    return !Number.isNaN(created) && now - created >= maxAgeMs;
+    const stamps = [w.createdAt, w.resumedAt].map((t) => Date.parse(t || '')).filter((t) => !Number.isNaN(t));
+    return stamps.length > 0 && now - Math.max(...stamps) >= maxAgeMs;
   });
 }
 
