@@ -387,10 +387,7 @@ app.post('/api/search', async (req, res) => {
     // it — and to whom it's gone — before the slower Mobilism scrape even starts.
     // Local + instant; runs even if the Mobilism session is stale. Fail-soft.
     try {
-      const store = storage.get();
-      await store.ensureIndex();
-      const libBooks = library.buildLibrary(history.readAll(), (p) => store.existsSync(p));
-      const hits = library.findInLibrary(libBooks, { title, author }).slice(0, 3);
+      const hits = library.findInLibrary(await library.loadBooks(), { title, author }).slice(0, 3);
       if (hits.length) send({ step: 'library', books: hits });
     } catch (err) {
       console.error('Library pre-search failed:', err.message);
@@ -806,10 +803,7 @@ app.get('/api/history', (_req, res) => {
 // the storage layer (local disk, or the R2 key index — one list, never a HEAD
 // per book).
 app.get('/api/library', async (_req, res) => {
-  const bookStore = storage.get();
-  await bookStore.ensureIndex();
-  const books = library.buildLibrary(history.readAll(), (p) => bookStore.existsSync(p))
-    .map((b) => ({ ...b, coverImage: libraryCoverUrl(b) }));
+  const books = (await library.loadBooks()).map((b) => ({ ...b, coverImage: libraryCoverUrl(b) }));
   const store = booktags.readStore();
   res.json({ books: booktags.attachTags(books, store), allTags: booktags.allTags(store) });
 });
@@ -910,9 +904,7 @@ function libraryCoverUrl(book) {
 
 app.get('/cover-image/book/:id', async (req, res) => {
   try {
-    const bookStore = storage.get();
-    await bookStore.ensureIndex();
-    const book = library.buildLibrary(history.readAll(), (p) => bookStore.existsSync(p)).find((b) => b.id === req.params.id);
+    const book = (await library.loadBooks()).find((b) => b.id === req.params.id);
     if (!book) return res.status(404).end();
     coverstore.send(res, await coverstore.getCoverImage(book));
   } catch (err) {

@@ -200,21 +200,30 @@ function findInLibrary(books, { title, author } = {}, opts = {}) {
  */
 function ownsBook(entry) {
   try {
-    const history = require('./history');
-    const storage = require('./storage');
-    // Same copy-paste bug as reader.js's buildBooks: this needs a fileExists
-    // PREDICATE, not a tag lookup (an always-truthy `[]`). ownsBook only does
-    // title/author matching, not tags, so no attachTags needed here — just a
-    // correct existsSync check. The whole function is already wrapped in this
-    // try/catch and fails open, so a stat error just falls through below.
-    // Existence goes through the storage layer (#47); findInLibrary ignores
-    // filePresent anyway, so an unloaded R2 index is harmless here.
-    const store = storage.get();
-    const books = buildLibrary(history.readAll(), (p) => store.existsSync(p));
-    return findInLibrary(books, entry).length > 0;
+    // Title/author matching only: findInLibrary ignores filePresent, so an
+    // unloaded R2 index is harmless here. Fails open on any error.
+    return findInLibrary(currentBooks(), entry).length > 0;
   } catch {
     return false;
   }
 }
 
-module.exports = { buildLibrary, removeBook, authorFromFilename, findInLibrary, ownsBook, LIBRARY_TITLE_THRESHOLD };
+/**
+ * The Library as of now: history → books, with file presence from the storage
+ * layer (#47). Sync: in r2 mode presence comes from the key index, so callers
+ * that need it current use loadBooks() (or await ensureIndex() first).
+ * Lazy requires — history/storage would otherwise form a require cycle.
+ */
+function currentBooks() {
+  const history = require('./history');
+  const store = require('./storage').get();
+  return buildLibrary(history.readAll(), (p) => store.existsSync(p));
+}
+
+/** currentBooks() after making sure the storage key index is loaded. */
+async function loadBooks() {
+  await require('./storage').get().ensureIndex();
+  return currentBooks();
+}
+
+module.exports = { buildLibrary, currentBooks, loadBooks, removeBook, authorFromFilename, findInLibrary, ownsBook, LIBRARY_TITLE_THRESHOLD };

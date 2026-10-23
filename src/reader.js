@@ -151,9 +151,7 @@ function buildBooks() {
   // store once, not once per book.
   // Existence goes through the storage layer (#47): local disk, or the R2 key
   // index (callers load it first via ensureStorageIndex).
-  const store = storage.get();
-  const books = library.buildLibrary(history.readAll(), (p) => store.existsSync(p));
-  return booktags.attachTags(books, booktags.readStore());
+  return booktags.attachTags(library.currentBooks(), booktags.readStore());
 }
 
 // Load the R2 key index before a sync buildBooks(). Local mode has no index,
