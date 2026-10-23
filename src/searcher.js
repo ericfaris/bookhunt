@@ -516,6 +516,7 @@ function titleLooksLikeAudiobook(title) {
 function titleDeclaresNonEpub(title) {
   const t = title || '';
   if (titleLooksLikeAudiobook(t)) return true; // audiobook tag → always skip
+  if (/^\s*(?:e-?book\s+)?review\s*:/i.test(t)) return true; // "eBook Review: …" article, not a book
   let m;
   let sawEpub = false;
   let sawOther = false;

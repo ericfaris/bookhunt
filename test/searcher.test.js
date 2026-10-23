@@ -321,3 +321,10 @@ test('titleKeywords: leaves variant-prone words out of the forum query', () => {
   assert.equal(titleKeywords('Eleven'), 'Eleven');
   assert.equal(titleKeywords(''), '');
 });
+
+test('titleDeclaresNonEpub: review articles are not books', () => {
+  assert.equal(titleDeclaresNonEpub('eBook Review: Mr. Mercedes by Stephen King - Good E-Reader'), true);
+  assert.equal(titleDeclaresNonEpub('Review: Some Book'), true);
+  assert.equal(titleDeclaresNonEpub('The Review by Jane Doe (.ePUB)'), false);
+  assert.equal(titleDeclaresNonEpub('Book Review Club by Jane Doe (.ePUB)'), false);
+});
