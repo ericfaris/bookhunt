@@ -3,7 +3,7 @@
 const { test } = require('node:test');
 const assert = require('node:assert');
 
-const { normalize, fuzzyMatch, fuzzyMatchLine, isCollection, authorKeywords, titleDeclaresNonEpub, titleLooksLikeAudiobook, collectionResult } = require('../src/searcher');
+const { normalize, fuzzyMatch, fuzzyMatchLine, isCollection, authorKeywords, titleKeywords, titleDeclaresNonEpub, titleLooksLikeAudiobook, collectionResult } = require('../src/searcher');
 
 test('normalize: lowercases, strips punctuation, collapses space', () => {
   assert.equal(normalize('1984: Illustrated!'), '1984 illustrated');
@@ -305,4 +305,19 @@ test('authorKeywords: drops the co-author connector for the forum query', () => 
   assert.equal(authorKeywords('Jennifer Hillier'), 'Jennifer Hillier');
   assert.equal(authorKeywords('Alexandra Andrews'), 'Alexandra Andrews'); // "and" inside a word stays
   assert.equal(authorKeywords(''), '');
+});
+
+test('titleKeywords: leaves variant-prone words out of the forum query', () => {
+  assert.equal(titleKeywords('Mister Mercedes'), 'Mercedes');
+  assert.equal(titleKeywords('Mr. Mercedes'), 'Mercedes');
+  assert.equal(titleKeywords('Eleven Numbers'), 'Numbers');
+  assert.equal(titleKeywords('Pride & Prejudice'), 'Pride Prejudice');
+  assert.equal(titleKeywords('Doctor Sleep'), 'Sleep');
+  // real content stays, incl. big numbers that are the title itself
+  assert.equal(titleKeywords('1984'), '1984');
+  assert.equal(titleKeywords('Catch-22'), 'Catch-22');
+  assert.equal(titleKeywords('Heart of Glass'), 'Heart of Glass');
+  // nothing left → raw title
+  assert.equal(titleKeywords('Eleven'), 'Eleven');
+  assert.equal(titleKeywords(''), '');
 });

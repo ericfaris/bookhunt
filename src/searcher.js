@@ -536,6 +536,25 @@ function authorKeywords(author) {
   return (author || '').replace(/&/g, ' ').replace(/\band\b/gi, ' ').replace(/\s+/g, ' ').trim();
 }
 
+// Words with spelling variants the forum's literal search can't bridge
+// ("Mister" vs "Mr.", "Eleven" vs "11"). They're left out of the forum query
+// and enforced afterwards by fuzzyMatch, which folds both forms.
+const QUERY_SKIP = new Set(['and', 'mister', 'mr', 'doctor', 'dr', 'saint', 'st', ...NUMBER_WORDS,
+  ...NUMBER_WORDS.map((_, i) => String(i))]);
+
+/**
+ * PURE: title → forum keywords, minus variant-prone words (see QUERY_SKIP).
+ * Falls back to the raw title when nothing else is left ("Eleven", "1 2 3").
+ */
+function titleKeywords(title) {
+  const raw = (title || '').trim();
+  const kept = raw.split(/\s+/).filter((w) => {
+    const n = normalize(w);
+    return n && !QUERY_SKIP.has(n);
+  });
+  return kept.length ? kept.join(' ') : raw;
+}
+
 function buildSearchUrl(keywords, { sd = 'd', titleOnly = false } = {}) {
   const params = new URLSearchParams({
     keywords: keywords || '',
@@ -833,7 +852,7 @@ async function runSearch({ title, author, sort = 'newest' }, onProgress, signal)
   // Put title AND author in the first query when both are given — this mirrors
   // a manual titleonly search and lands directly on the match, instead of
   // searching the title alone and hoping the right post falls inside the caps.
-  const pass1Keywords = [title, authorKeywords(author)].filter(Boolean).join(' ');
+  const pass1Keywords = [titleKeywords(title), authorKeywords(author)].filter(Boolean).join(' ');
   const pass1Url = buildSearchUrl(pass1Keywords, { sd, titleOnly: !!title });
   const authorSearchUrl = author ? buildSearchUrl(author, { sd, titleOnly: false }) : null;
 
@@ -995,6 +1014,7 @@ module.exports = {
   fuzzyMatchLine,
   isCollection,
   authorKeywords,
+  titleKeywords,
   titleDeclaresNonEpub,
   titleLooksLikeAudiobook,
   collectionResult,
