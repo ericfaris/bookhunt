@@ -27,6 +27,12 @@ const COLLECTION_SEARCH_PAGES = 2;
 const MAX_AUTHOR_COLLECTION_SCAN = 6;
 
 const COLLECTION_KEYWORDS = ['collection', 'complete works', '&', 'series', 'omnibus'];
+// Set posts that carry none of the keywords above: "4 Novels by Jennifer
+// Hillier", "Books by Sally Hepworth", "Creep, Books 1-2", "… Box Set",
+// "… Bundle". Missing these meant the author fallback skipped the set unopened
+// (its name doesn't contain the searched title), so a book only available
+// inside it was never found.
+const COLLECTION_RE = /\b\d+\s+(?:novels|novellas|books)\b|\b(?:novels|books)\s+(?:by\b|\d)|\bbox\s?set\b|\bbundle\b/i;
 
 // ---------------------------------------------------------------------------
 // Shared, authenticated browser session (one persistent session reused
@@ -419,7 +425,7 @@ function fuzzyMatchLine(query, text) {
 
 function isCollection(title) {
   const t = (title || '').toLowerCase();
-  return COLLECTION_KEYWORDS.some((kw) => t.includes(kw));
+  return COLLECTION_KEYWORDS.some((kw) => t.includes(kw)) || COLLECTION_RE.test(t);
 }
 
 // Mobilism book topics declare the file format right in the title, e.g.

@@ -54,6 +54,24 @@ test('isCollection: detects bundle/series keywords (incl. "&")', () => {
   assert.equal(isCollection('1984'), false);
 });
 
+test('isCollection: detects counted/"books by"/box-set posts without a keyword', () => {
+  // Regression: this set held "Heart of Glass" but was skipped unopened.
+  assert.equal(isCollection('4 Novels by Jennifer Hillier (.ePUB)'), true);
+  assert.equal(isCollection('Books by Sally Hepworth (.ePUB)'), true);
+  assert.equal(isCollection('Creep, Books 1-2 by Jennifer Hillier (.ePUB)'), true);
+  assert.equal(isCollection('12 Books by Lee Child'), true);
+  assert.equal(isCollection('Bridgerton Box Set by Julia Quinn'), true);
+  assert.equal(isCollection('Reacher Boxset'), true);
+  assert.equal(isCollection('Mystery Bundle (.ePUB)'), true);
+  // Ordinary single-book titles must stay single.
+  assert.equal(isCollection('Heart of Glass by Jennifer Hillier (.ePUB)'), false);
+  assert.equal(isCollection('The Book Thief by Markus Zusak (.ePUB)'), false);
+  assert.equal(isCollection('The Books of Jacob by Olga Tokarczuk'), false);
+  assert.equal(isCollection('Novel Ideas by Jane Doe'), false);
+  assert.equal(isCollection('The Bookshop by Penelope Fitzgerald'), false);
+  assert.equal(isCollection('Catch-22 by Joseph Heller'), false);
+});
+
 test('titleDeclaresNonEpub: skips audiobook/PDF-only titles without opening them', () => {
   // Non-epub formats declared in the title → skip (the bug: these were opened).
   assert.equal(titleDeclaresNonEpub('Project Hail Mary by Andy Weir (.M4B)'), true);
