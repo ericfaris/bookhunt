@@ -18,14 +18,15 @@
 // entryKey = cleaned title + first author's last name. The `seen` map keyed
 // this way guarantees a book is processed once, ever, across all sources.
 
-const fs = require('fs');
 const path = require('path');
+const datastore = require('./datastore');
 
 const util = require('./listsources/util');
 const nyt = require('./listsources/nyt');
 const goodreads = require('./listsources/goodreads');
 
-const FILE = path.join(__dirname, '..', 'lists.json');
+const FILE = process.env.LISTS_FILE || path.join(__dirname, '..', 'lists.json');
+const store = datastore.defineStore('lists', { file: FILE, shape: 'object' });
 
 // A list book that never appears on Mobilism shouldn't be watched forever.
 const LIST_WATCH_MAX_AGE_MS = Number(process.env.LIST_WATCH_MAX_AGE_MS) || 56 * 24 * 3600 * 1000; // 8 weeks
@@ -98,28 +99,17 @@ function migrateState(state) {
 }
 
 function readState() {
-  try {
-    const data = JSON.parse(fs.readFileSync(FILE, 'utf8'));
-    if (data && typeof data === 'object' && !Array.isArray(data)) {
-      // `backfill` was the removed one-time Most Read backfill's state — drop it.
-      const { backfill: _removed, ...rest } = data;
-      return migrateState({ snapshots: {}, seen: {}, pendingEvents: [], lastRunAt: null, ...rest });
-    }
-  } catch { /* fresh state */ }
+  const data = store.read();
+  if (Object.keys(data).length) {
+    // `backfill` was the removed one-time Most Read backfill's state — drop it.
+    const { backfill: _removed, ...rest } = data;
+    return migrateState({ snapshots: {}, seen: {}, pendingEvents: [], lastRunAt: null, ...rest });
+  }
   return { v: 2, snapshots: {}, seen: {}, pendingEvents: [], lastRunAt: null };
 }
 
-// Atomic-with-fallback write (atomic rename can fail on Docker bind mounts).
 function writeState(state) {
-  const data = JSON.stringify(state, null, 2);
-  const tmp = FILE + '.tmp';
-  try {
-    fs.writeFileSync(tmp, data, 'utf8');
-    fs.renameSync(tmp, FILE);
-  } catch {
-    fs.writeFileSync(FILE, data, 'utf8');
-    try { fs.unlinkSync(tmp); } catch {}
-  }
+  store.write(state);
 }
 
 /** Append a digest event (read-modify-write; callers are single-process). */

@@ -6,39 +6,23 @@
 //  - kindleEmail: @kindle.com address; if set, Send also pushes the .epub there
 //  - phone/carrier: reserved for the future Twilio SMS/MMS channel
 
-const fs = require('fs');
 const path = require('path');
+const datastore = require('./datastore');
 
 // Overridable so tests can exercise the real read/mutate/write cycle against a
 // temp file instead of the live recipients. Unset in production → the real files.
 const FILE = process.env.RECIPIENTS_FILE || path.join(__dirname, '..', 'recipients.json');
 const GROUPS_FILE = process.env.RECIPIENT_GROUPS_FILE || path.join(__dirname, '..', 'recipient-groups.json');
 
+const store = datastore.defineStore('recipients', { file: FILE, shape: 'array' });
+const groupStore = datastore.defineStore('recipient-groups', { file: GROUPS_FILE, shape: 'array' });
+
 function readAll() {
-  try {
-    const data = JSON.parse(fs.readFileSync(FILE, 'utf8'));
-    return Array.isArray(data) ? data : [];
-  } catch {
-    return [];
-  }
+  return store.read();
 }
 
 function writeAll(list) {
-  writeJsonAtomic(FILE, list);
-}
-
-// Atomic-with-fallback JSON write, shared by recipients + groups. Atomic rename
-// can fail on Docker bind-mounted volumes (WSL2), so fall back to a direct write.
-function writeJsonAtomic(file, value) {
-  const data = JSON.stringify(value, null, 2);
-  const tmp = file + '.tmp';
-  try {
-    fs.writeFileSync(tmp, data, 'utf8');
-    fs.renameSync(tmp, file);
-  } catch {
-    fs.writeFileSync(file, data, 'utf8');
-    try { fs.unlinkSync(tmp); } catch {}
-  }
+  store.write(list);
 }
 
 /**
@@ -53,12 +37,7 @@ function writeJsonAtomic(file, value) {
  * array, or return false to abort without writing. Returns the persisted list.
  */
 function mutate(fn) {
-  const list = readAll();
-  const out = fn(list);
-  if (out === false || out === null) return list; // nothing to persist
-  const next = Array.isArray(out) ? out : list;
-  writeAll(next);
-  return next;
+  return store.mutate(fn);
 }
 
 // Cap field length so a hostile client can't bloat recipients.json, and cap the
@@ -149,16 +128,11 @@ function byIds(ids) {
 const MAX_GROUPS = 100;
 
 function readGroups() {
-  try {
-    const data = JSON.parse(fs.readFileSync(GROUPS_FILE, 'utf8'));
-    return Array.isArray(data) ? data : [];
-  } catch {
-    return [];
-  }
+  return groupStore.read();
 }
 
 function writeGroups(list) {
-  writeJsonAtomic(GROUPS_FILE, list);
+  groupStore.write(list);
 }
 
 // PURE: validate + normalize group input. Throws on bad input. Dangling ids

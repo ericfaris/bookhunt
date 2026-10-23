@@ -14,3 +14,12 @@ test('docker-compose: STORAGE defaults to r2', () => {
   assert.ok(m, 'STORAGE passthrough missing from docker-compose.yml');
   assert.equal(m[1], 'r2');
 });
+
+test('docker-compose: DATA_STORE defaults to mongo and passes MONGODB_* through', () => {
+  const m = COMPOSE.match(/^\s*-\s*DATA_STORE=\$\{DATA_STORE:-(\w+)\}\s*$/m);
+  assert.ok(m, 'DATA_STORE passthrough missing from docker-compose.yml');
+  assert.equal(m[1], 'mongo');
+  for (const v of ['MONGODB_URI', 'MONGODB_DB']) {
+    assert.match(COMPOSE, new RegExp(`^\\s*-\\s*${v}=\\$\\{${v}:-\\}\\s*$`, 'm'), `${v} passthrough missing`);
+  }
+});

@@ -22,9 +22,9 @@
 //     every Library open. Negatives carry a timestamp and expire (see
 //     NEGATIVE_TTL_MS) so a later-added cover can still be discovered.
 
-const fs = require('fs');
 const path = require('path');
 const { normalize, similarity, matchScore } = require('./correct');
+const datastore = require('./datastore');
 
 const OPEN_LIBRARY_URL = 'https://openlibrary.org/search.json';
 const GOOGLE_BOOKS_URL = 'https://www.googleapis.com/books/v1/volumes';
@@ -38,7 +38,7 @@ const LOOKUP_TIMEOUT_MS = 4000;
 // error). A 4xx other than 429 is a real answer and is never retried.
 const RETRY_DELAYS_MS = [500, 1500];
 const MAX_RETRY_AFTER_MS = 4000;
-const CACHE_FILE = path.join(__dirname, '..', 'covers-cache.json');
+const CACHE_FILE = process.env.COVERS_CACHE_FILE || path.join(__dirname, '..', 'covers-cache.json');
 
 // A candidate's title must match the query title at least this well (the same
 // variant-aware scorer the spell-corrector uses) before we'll trust its cover.
@@ -449,27 +449,16 @@ async function lookupMeta(q, opts = {}) {
 
 // --- Persistent cache -------------------------------------------------------
 
+// A re-derivable lookup cache: hardened file I/O from the datastore, but never
+// mirrored to Atlas.
+const cacheStore = datastore.defineStore('covers-cache', { file: CACHE_FILE, shape: 'object', mirror: false });
+
 function readCacheFile() {
-  try {
-    const raw = fs.readFileSync(CACHE_FILE, 'utf8');
-    const data = JSON.parse(raw);
-    return (data && typeof data === 'object') ? data : {};
-  } catch {
-    return {};
-  }
+  return cacheStore.read();
 }
 
 function writeCacheFile(data) {
-  const json = JSON.stringify(data, null, 2);
-  const tmp = CACHE_FILE + '.tmp';
-  try {
-    fs.writeFileSync(tmp, json, 'utf8');
-    fs.renameSync(tmp, CACHE_FILE);
-  } catch {
-    // Atomic rename can fail on bind-mounted volumes (Docker/WSL2) — fall back.
-    fs.writeFileSync(CACHE_FILE, json, 'utf8');
-    try { fs.unlinkSync(tmp); } catch {}
-  }
+  cacheStore.write(data);
 }
 
 // Default cache backed by the on-disk JSON file. Records are

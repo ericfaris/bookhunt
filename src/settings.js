@@ -5,10 +5,11 @@
 // key/value store so more user-tunable settings can be added. Pure helpers
 // (clampWatchMinutes) are exported for unit testing.
 
-const fs = require('fs');
 const path = require('path');
+const datastore = require('./datastore');
 
-const FILE = path.join(__dirname, '..', 'settings.json');
+const FILE = process.env.SETTINGS_FILE || path.join(__dirname, '..', 'settings.json');
+const store = datastore.defineStore('settings', { file: FILE, shape: 'object' });
 
 // Cadence bounds. The default seeds from the env (WATCH_CHECK_INTERVAL_MS) so an
 // operator can still set the initial value there; the UI then overrides it.
@@ -20,25 +21,11 @@ const DEFAULT_WATCH_MIN = Math.min(
 );
 
 function readAll() {
-  try {
-    const data = JSON.parse(fs.readFileSync(FILE, 'utf8'));
-    return data && typeof data === 'object' && !Array.isArray(data) ? data : {};
-  } catch {
-    return {};
-  }
+  return store.read();
 }
 
-// Atomic-with-fallback write (atomic rename can fail on Docker bind mounts).
 function writeAll(obj) {
-  const data = JSON.stringify(obj, null, 2);
-  const tmp = FILE + '.tmp';
-  try {
-    fs.writeFileSync(tmp, data, 'utf8');
-    fs.renameSync(tmp, FILE);
-  } catch {
-    fs.writeFileSync(FILE, data, 'utf8');
-    try { fs.unlinkSync(tmp); } catch {}
-  }
+  store.write(obj);
 }
 
 /** PURE: clamp arbitrary input to a valid cadence in minutes. */

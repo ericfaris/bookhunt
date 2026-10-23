@@ -1,7 +1,7 @@
 'use strict';
 
-const fs = require('fs');
 const path = require('path');
+const datastore = require('./datastore');
 
 // Overridable so tests can exercise the real read/mutate/write cycle against a
 // temp file instead of the live history. Unset in production → the real file.
@@ -11,28 +11,14 @@ const HISTORY_FILE = process.env.HISTORY_FILE || path.join(__dirname, '..', 'his
 // history entry rather than adding another one.
 const REDOWNLOAD_WINDOW_MS = 10 * 60 * 1000;
 
+const store = datastore.defineStore('history', { file: HISTORY_FILE, shape: 'array' });
+
 function readAll() {
-  try {
-    const raw = fs.readFileSync(HISTORY_FILE, 'utf8');
-    const data = JSON.parse(raw);
-    return Array.isArray(data) ? data : [];
-  } catch {
-    return [];
-  }
+  return store.read();
 }
 
 function writeAll(entries) {
-  const data = JSON.stringify(entries, null, 2);
-  const tmp = HISTORY_FILE + '.tmp';
-  try {
-    fs.writeFileSync(tmp, data, 'utf8');
-    fs.renameSync(tmp, HISTORY_FILE);
-  } catch {
-    // Atomic rename fails on Docker bind-mounted files (Windows/WSL2 filesystem).
-    // Fall back to a direct write — safe enough for a single-process app.
-    fs.writeFileSync(HISTORY_FILE, data, 'utf8');
-    try { fs.unlinkSync(tmp); } catch {}
-  }
+  store.write(entries);
 }
 
 /**
@@ -48,12 +34,7 @@ function writeAll(entries) {
  * persisted array.
  */
 function mutate(fn) {
-  const entries = readAll();
-  const out = fn(entries);
-  if (out === false || out === null) return entries; // nothing to persist
-  const next = Array.isArray(out) ? out : entries;
-  writeAll(next);
-  return next;
+  return store.mutate(fn);
 }
 
 /**

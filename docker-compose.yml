@@ -109,6 +109,13 @@ services:
       - STORAGE_STAGING_DIR=${STORAGE_STAGING_DIR:-}
       - STORAGE_INDEX_REFRESH_MS=${STORAGE_INDEX_REFRESH_MS:-}
       - STORAGE_STARTUP_TIMEOUT_MS=${STORAGE_STARTUP_TIMEOUT_MS:-}
+      # Data (history, watchlist, recipients, tags, radar state, settings): the
+      # bind-mounted JSON files above, mirrored to MongoDB Atlas as the offsite
+      # copy. Defaults to mongo so missing MONGODB_* fails loudly at startup
+      # instead of silently running with no offsite copy.
+      - DATA_STORE=${DATA_STORE:-mongo}
+      - MONGODB_URI=${MONGODB_URI:-}
+      - MONGODB_DB=${MONGODB_DB:-}
       # Server binding — 0.0.0.0 inside the container; the ports mapping above
       # restricts host-side exposure to 127.0.0.1
       - HOST=0.0.0.0

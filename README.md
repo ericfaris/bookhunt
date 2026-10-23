@@ -191,6 +191,32 @@ from a backup.
 Tests always run with `STORAGE=local` (pinned in `npm test`) and talk only to an
 in-memory fake S3 — never the real bucket.
 
+### App data (local JSON + MongoDB Atlas mirror)
+
+Everything that isn't a book (history/Library index, watchlist, recipients +
+groups, book tags, radar state, settings) lives in the bind-mounted JSON files,
+read and written through `src/datastore.js`. With `DATA_STORE=mongo` (the
+docker-compose default) each write is also mirrored, in the background, to one
+document per store in Atlas (`MONGODB_DB`, collection `stores`). That is the
+offsite copy: losing this machine loses no data.
+
+- **Startup** reconciles every store before serving: Atlas newer (or no local
+  file, e.g. a rebuilt machine) → restored locally; local newer (an Atlas write
+  failed before shutdown) or no Atlas copy yet → pushed up.
+- **Outage**: the app keeps running on the local files and retries Atlas in the
+  background; `/api/status` → `data` shows `connected`, `pending`, `lastError`.
+  If Atlas is down **and** a local file is missing, it refuses to start rather
+  than run empty and overwrite the good Atlas copy.
+- **Disaster recovery**: restore the repo + `.env` (keep `.env` in a password
+  manager — it is not in Atlas), `npm run docker:up`; the empty files are
+  restored from Atlas at startup.
+- `covers-cache.json`, `cover-images/` and `.browser-profile/` are rebuilt on
+  demand and are not mirrored.
+
+Tests pin `DATA_STORE=file` and point every store at a temp dir
+(`test/setup-env.js`); `test/datastore-mongo.test.js` runs against a real,
+throwaway MongoDB only when `MONGODB_TEST_URI` is set.
+
 ---
 
 ## Cloudflare Tunnel (remote access via bookhunt.mooseflip.com)
@@ -380,6 +406,9 @@ Notification channels live in `src/notify/` and share one contract (`isConfigure
 | `STORAGE_STAGING_DIR` | No | `<os tmp>/bookhunt-staging` | r2 only: scratch dir for in-flight downloads/extraction |
 | `STORAGE_INDEX_REFRESH_MS` | No | `600000` | r2 only: how often the bucket listing (key index) is refreshed |
 | `STORAGE_STARTUP_TIMEOUT_MS` | No | `15000` | r2 only: max wait for the first bucket listing before serving anyway |
+| `DATA_STORE` | No | `file` (`mongo` under docker-compose) | `mongo` mirrors the JSON stores to Atlas — see [App data](#app-data-local-json--mongodb-atlas-mirror) |
+| `MONGODB_URI` | When `DATA_STORE=mongo` | — | Atlas connection string for the dedicated bookhunt user — never logged |
+| `MONGODB_DB` | When `DATA_STORE=mongo` | — | Database name (`bookhunt`) |
 
 ---
 

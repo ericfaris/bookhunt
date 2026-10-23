@@ -151,12 +151,10 @@ function tmpFile(t) {
 }
 
 // The tmp companion lives in the shared os.tmpdir() (see tmpPathFor in
-// src/watchlist.js — /app is root-owned in production, so a tmp file can't be
+// src/datastore.js — /app is root-owned in production, so a tmp file can't be
 // created next to the target there). Since it's shared, tests must clean it up
 // explicitly rather than relying on tmpFile()'s per-test directory removal.
-function tmpCompanion(file) {
-  return path.join(os.tmpdir(), path.basename(file) + '.tmp');
-}
+const { tmpPathFor: tmpCompanion } = require('../src/datastore');
 
 test('writeJsonList: forced EXDEV rename failure still leaves valid JSON (acceptance #4)', (t) => {
   const file = tmpFile(t);

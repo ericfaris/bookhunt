@@ -8,10 +8,11 @@
 // The cleaning/merging logic is PURE (and exported) so it's unit-testable
 // without the filesystem; only readStore/writeStore touch disk.
 
-const fs = require('fs');
 const path = require('path');
+const datastore = require('./datastore');
 
-const FILE = path.join(__dirname, '..', 'booktags.json');
+const FILE = process.env.BOOKTAGS_FILE || path.join(__dirname, '..', 'booktags.json');
+const store = datastore.defineStore('booktags', { file: FILE, shape: 'object' });
 
 const MAX_TAGS = 25;
 const MAX_TAG_LEN = 40;
@@ -61,24 +62,11 @@ function allTags(store) {
 
 // --- Persistence ------------------------------------------------------------
 function readStore() {
-  try {
-    const data = JSON.parse(fs.readFileSync(FILE, 'utf8'));
-    return data && typeof data === 'object' && !Array.isArray(data) ? data : {};
-  } catch {
-    return {};
-  }
+  return store.read();
 }
 
-function writeStore(store) {
-  const data = JSON.stringify(store, null, 2);
-  const tmp = FILE + '.tmp';
-  try {
-    fs.writeFileSync(tmp, data, 'utf8');
-    fs.renameSync(tmp, FILE);
-  } catch {
-    fs.writeFileSync(FILE, data, 'utf8');
-    try { fs.unlinkSync(tmp); } catch {}
-  }
+function writeStore(value) {
+  store.write(value);
 }
 
 /** Set (replace) the tags for one book. Returns the cleaned tags. */

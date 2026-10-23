@@ -49,6 +49,11 @@ test('local GET /api/status: download block is exactly { path, exists, count, to
       }
       assert.equal(json.storage, undefined);
       assert.deepEqual(json.session, { browser: false, ready: false, loggedIn: false, cfOk: false });
+      // Data-store health: file mode in tests, never a URI.
+      assert.equal(json.data.mode, 'file');
+      assert.equal(json.data.connected, null);
+      assert.deepEqual(json.data.pending, []);
+      assert.ok(!/mongodb/i.test(JSON.stringify(json.data)));
     });
   } finally {
     searcher.sessionStatus = origStatus;

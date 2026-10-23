@@ -34,6 +34,7 @@ const settings = require('./settings');
 const lists = require('./lists');
 const listwatcher = require('./listwatcher');
 const reader = require('./reader');
+const datastore = require('./datastore');
 const storage = require('./storage');
 
 const PORT = process.env.PORT || 3000;
@@ -1124,6 +1125,7 @@ app.get('/api/status', async (_req, res) => {
     download,
     channels: notify.listChannels(),
     kindle: kindle.isConfigured(),
+    data: datastore.status(),
     premium: { hasCreds: downloader.hasPremiumCreds() },
     settings: {
       watchCheckIntervalMin: settings.getWatchIntervalMin(),
@@ -1342,6 +1344,21 @@ if (store.mode === 'r2') {
   storage.startRefreshTimer(Number(process.env.STORAGE_INDEX_REFRESH_MS) || 600000);
 }
 
+// Durable JSON stores (history, watchlist, recipients, …): with DATA_STORE=mongo
+// reconcile every store with its Atlas copy BEFORE anything reads them (a
+// rebuilt machine restores here). Bounded by the driver's server-selection
+// timeout; an outage runs on the local files unless one is missing, in which
+// case init refuses to start rather than overwrite Atlas with empty data.
+try {
+  const out = await datastore.init(process.env);
+  const st = datastore.status();
+  if (st.mode === 'mongo' && out) console.log(`Data: Atlas mirror on — ${JSON.stringify(out)}`);
+  else if (st.mode === 'file') console.log('Data: local JSON files only (DATA_STORE=file) — no offsite copy');
+} catch (err) {
+  console.error(`[datastore] ${err.message}`);
+  process.exit(1);
+}
+
 // Bind to loopback by default. In Docker the container is isolated by the
 // host-side port mapping (127.0.0.1:3000:3000), so HOST=0.0.0.0 is safe there.
 const HOST = process.env.HOST || '127.0.0.1';
@@ -1399,9 +1416,10 @@ server.on('error', (err) => {
   throw err;
 });
 
-// Clean shutdown of the browser session.
+// Clean shutdown: let queued Atlas writes land (bounded), then close the browser.
 for (const sig of ['SIGINT', 'SIGTERM']) {
   process.on(sig, async () => {
+    await datastore.flush(5000).catch(() => {});
     await searcher.closeSession();
     process.exit(0);
   });
