@@ -161,6 +161,12 @@ const CHROMIUM_ARGS = [
   '--disk-cache-size=268435456',
 ];
 
+/** Tests only: run the scraper against a fake page (see test/fake-forum.js). */
+function _setSessionForTests(page, context = null) {
+  _page = page;
+  _context = context;
+}
+
 async function getSession() {
   if (_page && !_page.isClosed()) return { context: _context, page: _page };
   if (_loginPromise) return _loginPromise;
@@ -219,13 +225,30 @@ async function sessionStatus() {
  * logged in, throws a typed `needWarm` error so the UI can prompt for /warm —
  * the browser is left OPEN either way so it can be warmed live.
  */
-async function ensureReady(page) {
+async function ensureReady(page, { trustCookie = false, status = sessionStatus } = {}) {
   try {
+    // Hot paths (search, download) skip the index.php round-trip when the
+    // session cookie says we're logged in; gotoAuthed() catches the case where
+    // the cookie outlived the server-side session.
+    if (trustCookie && (await status()).loggedIn) return;
     await ensureLoggedIn(page);
   } catch (err) {
     err.needWarm = true;
     throw err;
   }
+}
+
+/**
+ * Navigate, and if the page shows we're NOT logged in (the cookie outlived the
+ * server session, or a Cloudflare challenge interposed), run the full login
+ * once and load the page again. Without this, a dead session would read as "no
+ * results" — and count against a watch — instead of re-authenticating.
+ */
+async function gotoAuthed(page, url) {
+  await page.goto(url, { waitUntil: 'domcontentloaded' });
+  if (await isLoggedIn(page)) return;
+  await ensureReady(page); // full check: navigates + logs in, or throws needWarm
+  await page.goto(url, { waitUntil: 'domcontentloaded' });
 }
 
 async function closeSession() {
@@ -370,15 +393,27 @@ async function warmUp() {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-// Polite 2–5s gap between requests. When a cancel `signal` is supplied, the gap
-// resolves early on cancel so the next throwIfCancelled() aborts promptly instead
-// of making the user wait out the delay. Callers without a signal (download /
-// reupload / thanks) keep the original behaviour.
+// Polite 2–5s gap between forum requests. The gap is measured from the START
+// of the previous request, so time already spent loading/parsing a page counts
+// toward it — and the first request after an idle stretch goes straight out
+// instead of sleeping. When a cancel `signal` is supplied, the gap resolves
+// early on cancel so the next throwIfCancelled() aborts promptly instead of
+// making the user wait out the delay.
+let _lastRequestAt = 0;
+
+/** PURE: how long to wait so `targetGapMs` separates this request from the last. */
+function politeWaitMs(now, lastAt, targetGapMs) {
+  return Math.max(0, Math.min(targetGapMs, targetGapMs - (now - lastAt)));
+}
+
 const randomDelay = (signal) =>
   new Promise((resolve) => {
-    const t = setTimeout(resolve, 2000 + Math.floor(Math.random() * 3000));
+    const done = () => { _lastRequestAt = Date.now(); resolve(); };
+    const fixed = process.env.POLITE_GAP_MS; // tests pin this to 0
+    const gap = fixed !== undefined && fixed !== '' ? Number(fixed) : 2000 + Math.floor(Math.random() * 3000);
+    const t = setTimeout(done, politeWaitMs(Date.now(), _lastRequestAt, gap));
     if (signal && typeof signal.onCancel === 'function') {
-      signal.onCancel(() => { clearTimeout(t); resolve(); });
+      signal.onCancel(() => { clearTimeout(t); done(); });
     }
   });
 
@@ -606,7 +641,7 @@ async function collectRows(page, startUrl, maxPages, signal) {
     throwIfCancelled(signal);
     await randomDelay(signal);
     throwIfCancelled(signal);
-    await page.goto(url, { waitUntil: 'domcontentloaded' });
+    await gotoAuthed(page, url);
 
     const pageRows = await page.$$eval('td.expand a.topictitle', (els) =>
       els.map((a) => {
@@ -649,7 +684,7 @@ async function fetchDetail(page, topicUrl, signal) {
   throwIfCancelled(signal);
   await randomDelay(signal);
   throwIfCancelled(signal);
-  await page.goto(topicUrl, { waitUntil: 'domcontentloaded' });
+  await gotoAuthed(page, topicUrl);
 
   const raw = await page.evaluate(() => {
     const content = document.querySelector('div.content');
@@ -846,7 +881,7 @@ async function runSearch({ title, author, sort = 'newest' }, onProgress, signal)
   // Interrupt any in-flight navigation on cancel (the polite delays are handled
   // by randomDelay(signal); this catches a slow page load mid-goto).
   if (signal) signal.onCancel(() => { page.evaluate(() => window.stop()).catch(() => {}); });
-  await ensureReady(page); // require a Mobilism login (throws needWarm if stale)
+  await ensureReady(page, { trustCookie: true }); // require a Mobilism login (throws needWarm if stale)
   const seen = new Set();
   const results = [];
 
@@ -906,11 +941,11 @@ async function runSearch({ title, author, sort = 'newest' }, onProgress, signal)
   // ---- Author-sets pass ----
   // Searches the author's ePUB posts (title-only "{author} epub") and opens the
   // ones that are sets — "4 Novels by …", "… Series (.ePUB)+", "Books by …" —
-  // scanning each for the requested title. Always runs when both title and
-  // author are given: a book often only exists inside an old set thread that was
-  // updated with it, whose name never contains the title. Results merge with
-  // everything above and dedupe via `seen`.
-  if (title && author) {
+  // scanning each for the requested title: a book often only exists inside an
+  // old set thread that was updated with it, whose name never contains the
+  // title. Runs only when the passes above found nothing — a direct hit is what
+  // the user wants, and this pass costs several more forum page loads.
+  if (title && author && results.length === 0) {
     emit({ phase: 'author-collections' });
     const byAuthorUrl = buildSearchUrl(`${authorKeywords(author)} epub`, { sd, titleOnly: true });
     const byAuthorRows = await collectRows(page, byAuthorUrl, COLLECTION_SEARCH_PAGES, signal);
@@ -1002,6 +1037,7 @@ module.exports = {
   closeSession,
   sessionStatus,
   ensureReady,
+  gotoAuthed,
   warmUp,
   enqueue,
   randomDelay,
@@ -1009,6 +1045,8 @@ module.exports = {
   createCancelSignal,
   CancelledError,
   // exported for unit tests
+  _setSessionForTests,
+  politeWaitMs,
   CHROMIUM_ARGS,
   normalize,
   fuzzyMatch,

@@ -373,7 +373,7 @@ async function runPremiumDownload(topicUrl, onProgress = () => {}, targetTitle) 
 
   onProgress({ step: 'reading-post' });
   const { page } = await getSession();
-  await ensureReady(page); // forum login required to read the topic (throws needWarm if stale)
+  await ensureReady(page, { trustCookie: true }); // forum login required to read the topic (throws needWarm if stale)
   const detail = await fetchDetail(page, topicUrl);
   if (!detail) throw new Error('Could not read post content');
   if (!detail.premium) {
