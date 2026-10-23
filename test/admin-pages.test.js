@@ -73,3 +73,20 @@ test('Library page: sort, show filter, paging', () => {
   assert.ok(js.includes('function sortLibrary('));
   assert.ok(js.includes('const LIBRARY_PAGE = 60;'));
 });
+
+test('Library is the landing page; Search lives at #/search', () => {
+  assert.ok(js.includes("return m && ROUTES[m[1]] ? m[1] : 'library';"), 'unknown/empty hash falls back to Library');
+  assert.ok(js.includes("let currentRoute = 'library';"));
+  assert.match(html, /<a href="#\/search" data-route="search">Search<\/a>/);
+  assert.ok(!html.includes('href="#/"'), 'no nav link still pointing at the bare root');
+  assert.ok(!js.includes("href: '#/' }"), 'in-app links to Search use #/search');
+  // The markup's initial visibility matches the default route (no flash of Search).
+  assert.match(html, /data-page="library" aria-labelledby="libraryHeading">/);
+  assert.match(html, /data-page="search" aria-labelledby="searchHeading" hidden>/);
+  // Library is listed first in the nav.
+  assert.ok(html.indexOf('data-route="library"') < html.indexOf('data-route="search"'));
+});
+
+test('deep-link prefill (?title= / ?amazon=) switches to the Search page', () => {
+  assert.ok(js.includes("history.replaceState(null, '', `${location.pathname}#/search`); showRoute();"));
+});

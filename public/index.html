@@ -32,8 +32,8 @@
     <button id="navToggle" class="nav-toggle ghost-btn" type="button"
             aria-label="Menu" aria-expanded="false" aria-controls="topbarActions">☰</button>
     <nav class="topbar-actions topnav" id="topbarActions" aria-label="Sections">
-      <a href="#/" data-route="search">Search</a>
       <a href="#/library" data-route="library">Library</a>
+      <a href="#/search" data-route="search">Search</a>
       <a href="#/watchlist" data-route="watchlist">Watchlist</a>
       <a href="#/readers" data-route="readers">Readers</a>
       <a href="#/activity" data-route="activity">Activity</a>
@@ -58,7 +58,7 @@
   </div>
 
   <main id="main">
-    <section class="page page-search" data-page="search" aria-labelledby="searchHeading">
+    <section class="page page-search" data-page="search" aria-labelledby="searchHeading" hidden>
     <h2 id="searchHeading" class="sr-only">Search</h2>
     <form id="searchForm" class="search-card">
       <div class="card-toolbar">
@@ -108,7 +108,7 @@
     </section><!-- /search page -->
 
     <!-- Library (admin) -->
-    <section class="page page-wide" data-page="library" aria-labelledby="libraryHeading" hidden>
+    <section class="page page-wide" data-page="library" aria-labelledby="libraryHeading">
       <header class="page-head">
         <div>
           <h2 id="libraryHeading">Library</h2>

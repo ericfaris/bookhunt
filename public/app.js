@@ -11,7 +11,7 @@ if ('serviceWorker' in navigator) {
 const $ = (sel) => document.querySelector(sel);
 
 // The page the hash router is showing (see "Pages & routing" near the end).
-let currentRoute = 'search';
+let currentRoute = 'library';
 
 const searchForm = $('#searchForm');
 const searchBtn = $('#searchBtn');
@@ -139,7 +139,9 @@ async function prefillFromQuery() {
   const q = new URLSearchParams(location.search);
   const sort = $('#sort').value;
   const auto = q.get('go') !== '0';
-  const strip = () => history.replaceState(null, '', location.pathname);
+  // A deep link is a search hand-off, so it lands on Search (the default page
+  // is the Library); replaceState fires no hashchange, so re-render the route.
+  const strip = () => { history.replaceState(null, '', `${location.pathname}#/search`); showRoute(); };
 
   const title = (q.get('title') || '').trim();
   const author = (q.get('author') || '').trim();
@@ -3170,7 +3172,7 @@ function renderHistoryItem(entry) {
   if (entry.type === 'search') {
     icon = '🔍';
     text.append(`Searched for ${q(entry.title, entry.author) || '(nothing)'}: ${entry.resultCount} result${entry.resultCount === 1 ? '' : 's'}`);
-    const rerun = el('a', { className: 'activity-link', href: '#/' }, 'Search again');
+    const rerun = el('a', { className: 'activity-link', href: '#/search' }, 'Search again');
     rerun.addEventListener('click', () => {
       $('#title').value = entry.title || '';
       $('#author').value = entry.author || '';
@@ -3775,7 +3777,7 @@ const ROUTES = {
 
 function routeFromHash() {
   const m = /^#\/([a-z]+)/.exec(location.hash || '');
-  return m && ROUTES[m[1]] ? m[1] : 'search';
+  return m && ROUTES[m[1]] ? m[1] : 'library';
 }
 
 function showRoute() {
