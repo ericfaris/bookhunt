@@ -26,18 +26,7 @@ const path = require('path');
 const { normalize, similarity, matchScore } = require('./correct');
 const datastore = require('./datastore');
 
-const OPEN_LIBRARY_URL = 'https://openlibrary.org/search.json';
-const GOOGLE_BOOKS_URL = 'https://www.googleapis.com/books/v1/volumes';
-// Apple Books (iTunes Search API): keyless, and the strongest source for recent
-// ebooks — a 2026-10 probe found covers for ~half the books Open Library +
-// Google had missed. Rate-limited to roughly 20 requests/minute per IP, so it
-// sits behind Open Library and its 429s are retried / cached briefly.
-const ITUNES_URL = 'https://itunes.apple.com/search';
-const LOOKUP_TIMEOUT_MS = 4000;
-// Backoff between retries of a TRANSIENT failure (429, 5xx, timeout, network
-// error). A 4xx other than 429 is a real answer and is never retried.
-const RETRY_DELAYS_MS = [500, 1500];
-const MAX_RETRY_AFTER_MS = 4000;
+const { OPEN_LIBRARY_URL, ITUNES_URL, USER_AGENT, fetchJson, googleBooksUrl } = require('./catalog');
 const CACHE_FILE = process.env.COVERS_CACHE_FILE || path.join(__dirname, '..', 'covers-cache.json');
 
 // A candidate's title must match the query title at least this well (the same
@@ -262,43 +251,6 @@ function descriptionFromGoogleBooks(query, data) {
   return best ? cleanDescription(best) : null;
 }
 
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-
-/**
- * GET + parse JSON with an abort timeout. TRANSIENT failures (network error,
- * timeout, 429, 5xx) are retried with backoff (`retryDelays`; a Retry-After
- * header is honored up to MAX_RETRY_AFTER_MS). Throws once out of tries; the
- * error carries `.transient` so callers can tell "this source is down / rate
- * limiting us" from "this source answered".
- */
-async function fetchJson(url, { fetchImpl = fetch, timeoutMs = LOOKUP_TIMEOUT_MS, retryDelays = RETRY_DELAYS_MS, sleepImpl = sleep } = {}) {
-  for (let attempt = 0; ; attempt++) {
-    const ac = new AbortController();
-    const timer = setTimeout(() => ac.abort(), timeoutMs);
-    let res = null;
-    let err = null;
-    try {
-      res = await fetchImpl(url, { signal: ac.signal, headers: { 'User-Agent': 'bookhunt/1.0' } });
-    } catch (e) {
-      err = e;
-    } finally {
-      clearTimeout(timer);
-    }
-    if (res && res.ok) return res.json();
-    const transient = !res || res.status === 429 || res.status >= 500;
-    if (transient && attempt < retryDelays.length) {
-      let wait = retryDelays[attempt];
-      const ra = res && res.headers && typeof res.headers.get === 'function' ? Number(res.headers.get('retry-after')) : NaN;
-      if (Number.isFinite(ra) && ra > 0) wait = Math.min(ra * 1000, MAX_RETRY_AFTER_MS);
-      await sleepImpl(wait);
-      continue;
-    }
-    const e = err || new Error('HTTP ' + (res && res.status));
-    e.transient = transient;
-    throw e;
-  }
-}
-
 const IMAGE_FETCH_TIMEOUT_MS = 5000;
 
 /**
@@ -312,7 +264,7 @@ async function fetchCoverImage(url, { fetchImpl = fetch, timeoutMs = IMAGE_FETCH
   const ac = new AbortController();
   const timer = setTimeout(() => ac.abort(), timeoutMs);
   try {
-    const res = await fetchImpl(url, { signal: ac.signal, headers: { 'User-Agent': 'bookhunt/1.0' } });
+    const res = await fetchImpl(url, { signal: ac.signal, headers: { 'User-Agent': USER_AGENT } });
     if (!res || !res.ok) return null;
     const buf = Buffer.from(await res.arrayBuffer());
     return buf.length ? buf : null;
@@ -330,8 +282,7 @@ async function fetchCoverImage(url, { fetchImpl = fetch, timeoutMs = IMAGE_FETCH
 // later, looser source can never hand back the wrong book.
 
 function googleUrl(q, opts) {
-  const key = opts.apiKey || process.env.GOOGLE_BOOKS_API_KEY;
-  return `${GOOGLE_BOOKS_URL}?q=${encodeURIComponent(q)}&maxResults=10&country=US${key ? '&key=' + encodeURIComponent(key) : ''}`;
+  return googleBooksUrl(q, { maxResults: 10, apiKey: opts.apiKey });
 }
 
 const SOURCES = [

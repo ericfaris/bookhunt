@@ -25,9 +25,7 @@
 //     confident match exists, `corrected` is false and the original passes
 //     through untouched.
 
-const GOOGLE_BOOKS_URL = 'https://www.googleapis.com/books/v1/volumes';
-const OPEN_LIBRARY_URL = 'https://openlibrary.org/search.json';
-const LOOKUP_TIMEOUT_MS = 4000;
+const catalog = require('./catalog');
 
 // Levenshtein-ratio threshold for accepting a field correction. 0.75 keeps
 // typo-level edits ("hary poter" → "harry potter", ratio ≈ 0.83) while rejecting
@@ -184,18 +182,10 @@ function reconcile(original, candidate, source) {
   return { title, author, corrected, original, source: candidate.source || source || null };
 }
 
-/** GET + parse JSON with an abort timeout. Throws on any failure. */
-async function fetchJson(url, { fetchImpl = fetch, timeoutMs = LOOKUP_TIMEOUT_MS } = {}) {
-  const ac = new AbortController();
-  const timer = setTimeout(() => ac.abort(), timeoutMs);
-  let res;
-  try {
-    res = await fetchImpl(url, { signal: ac.signal, headers: { 'User-Agent': 'bookhunt/1.0' } });
-  } finally {
-    clearTimeout(timer);
-  }
-  if (!res || !res.ok) throw new Error('HTTP ' + (res && res.status));
-  return res.json();
+/** Catalog GET without retries: correction runs inline before every search,
+ *  so a slow or failing source is skipped, not waited on. Throws on failure. */
+function fetchJson(url, opts = {}) {
+  return catalog.fetchJson(url, { retryDelays: [], ...opts });
 }
 
 /**
@@ -212,9 +202,7 @@ async function fetchJson(url, { fetchImpl = fetch, timeoutMs = LOOKUP_TIMEOUT_MS
 async function lookupGoogleBooks({ title, author }, opts = {}) {
   const terms = [title, author].filter(Boolean).join(' ').trim();
   if (!terms) return null;
-  const key = opts.apiKey || process.env.GOOGLE_BOOKS_API_KEY;
-  // country is required by the Books API for unauthenticated calls.
-  const url = `${GOOGLE_BOOKS_URL}?q=${encodeURIComponent(terms)}&maxResults=5&country=US${key ? '&key=' + encodeURIComponent(key) : ''}`;
+  const url = catalog.googleBooksUrl(terms, { maxResults: 5, apiKey: opts.apiKey });
   const data = await fetchJson(url, opts);
   const items = (Array.isArray(data.items) ? data.items : []).filter((i) => i && i.volumeInfo && i.volumeInfo.title);
   const item = pickBest(title, items, (i) => i.volumeInfo.title);
@@ -235,7 +223,7 @@ async function lookupGoogleBooks({ title, author }, opts = {}) {
 async function lookupOpenLibrary({ title, author }, opts = {}) {
   const q = title || author;
   if (!q) return null;
-  const url = `${OPEN_LIBRARY_URL}?q=${encodeURIComponent(q)}&limit=5&fields=title,author_name`;
+  const url = `${catalog.OPEN_LIBRARY_URL}?q=${encodeURIComponent(q)}&limit=5&fields=title,author_name`;
   const data = await fetchJson(url, opts);
   const docs = (Array.isArray(data.docs) ? data.docs : []).filter((d) => d && d.title);
   const doc = pickBest(title, docs, (d) => d.title);
