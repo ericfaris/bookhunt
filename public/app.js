@@ -305,50 +305,32 @@ async function runSearch({ title, author, sort }) {
       throw new Error('Server returned an unexpected response — check the session or try re-warming.');
     }
 
-    // Read the Server-Sent-Events stream (`data: {…}\n\n`, with `: ping`
-    // heartbeats). Progress frames update the spinner; a terminal done/error
-    // frame carries the payload. The long scrape is what keeps Cloudflare from
-    // 524-ing — the stream never sits silent for 100s.
-    const reader = res.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = '';
+    // Progress frames update the spinner; a terminal done/error frame carries
+    // the payload (see consumeSSE).
     let finished = false;
-    for (;;) {
-      const { value, done } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-      let idx;
-      while ((idx = buffer.indexOf('\n\n')) >= 0) {
-        const frame = buffer.slice(0, idx);
-        buffer = buffer.slice(idx + 2);
-        const line = frame.split('\n').find((l) => l.startsWith('data:'));
-        if (!line) continue; // heartbeat / comment frame
-        let ev;
-        try { ev = JSON.parse(line.slice(5).trim()); } catch { continue; }
-
-        if (ev.step === 'progress') {
-          showSearchProgress(ev);
-        } else if (ev.step === 'corrected') {
-          applyCorrection(ev);
-        } else if (ev.step === 'library') {
-          renderLibraryHits(ev.books);
-        } else if (ev.step === 'error') {
-          finished = true;
-          renderSearchError(ev);
-        } else if (ev.step === 'done') {
-          finished = true;
-          stopSearchTimer();
-          if (!ev.results.length) {
-            renderNotFound(ev.fallbackLinks, ev.externalSources);
-          } else {
-            showResults(ev.results);
-            // Brief success confirmation, then get out of the way.
-            showStatus(`✓ Found ${ev.results.length} match${ev.results.length === 1 ? '' : 'es'}.`);
-            setTimeout(hideStatus, 2500);
-          }
+    await consumeSSE(res, (ev) => {
+      if (ev.step === 'progress') {
+        showSearchProgress(ev);
+      } else if (ev.step === 'corrected') {
+        applyCorrection(ev);
+      } else if (ev.step === 'library') {
+        renderLibraryHits(ev.books);
+      } else if (ev.step === 'error') {
+        finished = true;
+        renderSearchError(ev);
+      } else if (ev.step === 'done') {
+        finished = true;
+        stopSearchTimer();
+        if (!ev.results.length) {
+          renderNotFound(ev.fallbackLinks, ev.externalSources);
+        } else {
+          showResults(ev.results);
+          // Brief success confirmation, then get out of the way.
+          showStatus(`✓ Found ${ev.results.length} match${ev.results.length === 1 ? '' : 'es'}.`);
+          setTimeout(hideStatus, 2500);
         }
       }
-    }
+    });
     if (!finished) {
       renderSearchError({
         message: 'The search ended unexpectedly.',
@@ -1130,27 +1112,12 @@ async function premiumDownload(result, btn) {
     }
     if (!res.ok || !res.body) throw new Error('Download request failed (HTTP ' + res.status + ')');
 
-    // Read the Server-Sent-Events stream framed as `data: {…}\n\n`.
-    const reader = res.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = '';
-    for (;;) {
-      const { value, done } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-      let idx;
-      while ((idx = buffer.indexOf('\n\n')) >= 0) {
-        const frame = buffer.slice(0, idx);
-        buffer = buffer.slice(idx + 2);
-        const line = frame.split('\n').find((l) => l.startsWith('data:'));
-        if (!line) continue;
-        try {
-          const ev = JSON.parse(line.slice(5).trim());
-          if (ev.step === 'done' && Array.isArray(ev.downloads) && ev.downloads.length) downloaded = true;
-          handleDownloadEvent(ev, result);
-        } catch { /* ignore a malformed frame */ }
-      }
-    }
+    await consumeSSE(res, (ev) => {
+      try {
+        if (ev.step === 'done' && Array.isArray(ev.downloads) && ev.downloads.length) downloaded = true;
+        handleDownloadEvent(ev, result);
+      } catch { /* one bad frame must not abort the download stream */ }
+    });
   } catch (err) {
     renderDownloadError(err.message);
   } finally {
@@ -3289,7 +3256,9 @@ function updateBatchCount() {
   $('#batchCount').textContent = n ? `${n} book${n === 1 ? '' : 's'} detected${capped}` : 'No books yet';
 }
 
-// Shared SSE frame reader (data: {…}\n\n, with `: ping` heartbeats).
+// Shared Server-Sent-Events reader for search, download and batch: frames are
+// `data: {…}\n\n`; `: ping` heartbeat comments (they keep Cloudflare from
+// timing out a long scrape) and malformed frames are skipped.
 async function consumeSSE(res, onEvent) {
   const reader = res.body.getReader();
   const decoder = new TextDecoder();

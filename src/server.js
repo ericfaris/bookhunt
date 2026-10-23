@@ -34,6 +34,7 @@ const settings = require('./settings');
 const lists = require('./lists');
 const listwatcher = require('./listwatcher');
 const reader = require('./reader');
+const { openSSE } = require('./sse');
 const datastore = require('./datastore');
 const storage = require('./storage');
 
@@ -362,24 +363,11 @@ app.post('/api/search', async (req, res) => {
     return res.status(400).json({ error: 'Enter a title and/or an author.' });
   }
 
-  res.writeHead(200, {
-    'Content-Type': 'text/event-stream',
-    'Cache-Control': 'no-cache',
-    Connection: 'keep-alive',
-    'X-Accel-Buffering': 'no', // disable proxy buffering so events flush promptly
-  });
-  const send = (event) => { if (!res.writableEnded) res.write(`data: ${JSON.stringify(event)}\n\n`); };
-  // Comment-frame heartbeat (every 15s) keeps the connection alive across the
-  // long gaps between page fetches so Cloudflare's 524 timeout never fires.
-  const heartbeat = setInterval(() => { if (!res.writableEnded) res.write(': ping\n\n'); }, 15000);
-
-  // Cancellation (issue #28): cancel ONLY when the client truly disconnects
-  // mid-stream. Listen on the RESPONSE close (not req 'close', which also fires
-  // when the request body finishes being read — and does so early behind
-  // Cloudflare — spuriously cancelling every search). `writableEnded` is true
-  // once we've called res.end() ourselves, so a normal finish never cancels.
+  const stream = openSSE(res);
+  const { send } = stream;
+  // Cancellation (issue #28): cancel ONLY when the client truly disconnects.
   const signal = searcher.createCancelSignal();
-  res.on('close', () => { if (!res.writableEnded) signal.cancel(); });
+  stream.onClientGone(() => signal.cancel());
 
   try {
     // Fuzzy spell-correction BEFORE the scrape: a misspelled request yields bad
@@ -425,8 +413,7 @@ app.post('/api/search', async (req, res) => {
       send({ step: 'error', ...info });
     }
   } finally {
-    clearInterval(heartbeat);
-    if (!res.writableEnded) res.end();
+    stream.end();
   }
 });
 
@@ -456,14 +443,8 @@ app.post('/api/search/batch', async (req, res) => {
     /* fall through — the per-entry searches will surface a real error */
   }
 
-  res.writeHead(200, {
-    'Content-Type': 'text/event-stream',
-    'Cache-Control': 'no-cache',
-    Connection: 'keep-alive',
-    'X-Accel-Buffering': 'no',
-  });
-  const send = (event) => { if (!res.writableEnded) res.write(`data: ${JSON.stringify(event)}\n\n`); };
-  const heartbeat = setInterval(() => { if (!res.writableEnded) res.write(': ping\n\n'); }, 15000);
+  const stream = openSSE(res);
+  const { send } = stream;
 
   // Cancellation (same posture as /api/search): a batch is a long sequence of
   // per-entry scrapes, so when the client truly disconnects mid-stream we must
@@ -474,8 +455,7 @@ app.post('/api/search/batch', async (req, res) => {
   // never trips it.
   let batchCancelled = false;
   let currentSignal = null;
-  res.on('close', () => {
-    if (res.writableEnded) return;
+  stream.onClientGone(() => {
     batchCancelled = true;
     if (currentSignal) currentSignal.cancel();
   });
@@ -530,8 +510,7 @@ app.post('/api/search/batch', async (req, res) => {
     const info = messages.classifyError(err, { needWarm: !!err.needWarm });
     send({ step: 'error', ...info });
   } finally {
-    clearInterval(heartbeat);
-    res.end();
+    stream.end();
   }
 });
 
@@ -601,21 +580,12 @@ app.post('/api/download', async (req, res) => {
     return res.status(401).json({ error: 'Premium credentials required.', needCreds: true });
   }
 
-  res.writeHead(200, {
-    'Content-Type': 'text/event-stream',
-    'Cache-Control': 'no-cache',
-    Connection: 'keep-alive',
-    'X-Accel-Buffering': 'no', // disable proxy buffering so events flush promptly
-  });
-  const send = (event) => { if (!res.writableEnded) res.write(`data: ${JSON.stringify(event)}\n\n`); };
-
-  // Cancellation (same posture as /api/search): listen on the RESPONSE close
-  // (not req 'close', which also fires when the request body finishes being
-  // read — and does so early behind Cloudflare — spuriously cancelling every
-  // download). `writableEnded` is true once we've called res.end() ourselves,
-  // so a normal finish never cancels.
+  // Heartbeat included: a mirror walk can go quiet past Cloudflare's 100s timeout.
+  const stream = openSSE(res);
+  const { send } = stream;
+  // Cancellation (same posture as /api/search): only a real client disconnect.
   const signal = searcher.createCancelSignal();
-  res.on('close', () => { if (!res.writableEnded) signal.cancel(); });
+  stream.onClientGone(() => signal.cancel());
 
   try {
     // downloader.premiumDownload/runCandidates don't accept a cancel signal
@@ -680,7 +650,7 @@ app.post('/api/download', async (req, res) => {
     }
   } finally {
     signal.settle();
-    if (!res.writableEnded) res.end();
+    stream.end();
   }
 });
 
