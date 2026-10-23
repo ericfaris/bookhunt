@@ -96,3 +96,22 @@ test('Mister Mercedes: variant word left out of the forum query, folded in the f
   const { results } = await run(forum, { title: 'Mister Mercedes', author: 'Stephen King' });
   assert.deepEqual(results.map((r) => r.title), ['Mr. Mercedes by Stephen King (.ePUB)']);
 });
+
+test('author-sets pass skips other authors\' sets that merely name the searched author', async () => {
+  const forum = createFakeForum({
+    searches: {
+      'Pride and Prejudice Jane Austen': [],
+      'Jane Austen epub': [
+        ['Jane Austen Regency Life series by Maria Grace (.ePUB)', '50'],
+        ['Jane Austen Collection by Jane Austen (.ePUB)', '51'],
+      ],
+    },
+    topics: {
+      50: { title: 'Jane Austen Regency Life series by Maria Grace (.ePUB)', text: 'Requirements: .ePUB\nPride and Prejudice' },
+      51: { title: 'Jane Austen Collection by Jane Austen (.ePUB)', text: 'Requirements: .ePUB\nPride and Prejudice\nEmma' },
+    },
+  });
+  const { results } = await run(forum, { title: 'Pride and Prejudice', author: 'Jane Austen' });
+  assert.deepEqual(results.map((r) => r.setTitle), ['Jane Austen Collection by Jane Austen (.ePUB)']);
+  assert.ok(!forum.visits.some((v) => v.includes('t=50')), "another author's set is never opened");
+});

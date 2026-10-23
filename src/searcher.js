@@ -506,6 +506,20 @@ function fuzzyMatchLine(query, text) {
  * contains it ("Pride & Prejudice") — otherwise single books were treated as
  * sets and lost their own cover.
  */
+/**
+ * PURE: true when a set's title names a DIFFERENT author ("Jane Austen Regency
+ * Life series by Maria Grace" for author "Jane Austen") — someone else's set
+ * that merely mentions the searched author. A title with no "by" byline
+ * ("Reacher Series (.ePUB)+") can't be judged here and passes.
+ */
+function bylineMismatch(rowTitle, author) {
+  if (!author) return false;
+  const t = rowTitle || '';
+  const by = t.toLowerCase().lastIndexOf(' by ');
+  if (by < 0) return false;
+  return !fuzzyMatch(author, t.slice(by + 4));
+}
+
 function isCollection(title, searchedTitle = '') {
   const t = (title || '').toLowerCase();
   if (COLLECTION_KEYWORDS.some((kw) => t.includes(kw)) || COLLECTION_RE.test(t)) return true;
@@ -929,6 +943,7 @@ async function runSearch({ title, author, sort = 'newest' }, onProgress, signal)
     throwIfCancelled(signal);
     if (seen.has(col.url)) continue;
     if (titleDeclaresNonEpub(col.title)) continue; // skip audiobook/PDF collections
+    if (bylineMismatch(col.title, author)) continue; // someone else's set
     seen.add(col.url);
     const detail = await fetchDetail(page, col.url, signal);
     if (!detail) continue;
@@ -955,6 +970,7 @@ async function runSearch({ title, author, sort = 'newest' }, onProgress, signal)
       if (seen.has(row.url)) continue;
       if (!isCollection(row.title, title)) continue; // single books were judged by pass 1
       if (titleDeclaresNonEpub(row.title)) continue; // skip audiobook/PDF sets
+      if (bylineMismatch(row.title, author)) continue; // someone else's set
       if (scanned >= MAX_AUTHOR_COLLECTION_SCAN) break;
       seen.add(row.url);
       scanned++;
@@ -1052,6 +1068,7 @@ module.exports = {
   fuzzyMatch,
   fuzzyMatchLine,
   isCollection,
+  bylineMismatch,
   authorKeywords,
   titleKeywords,
   titleDeclaresNonEpub,

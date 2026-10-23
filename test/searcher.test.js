@@ -3,7 +3,7 @@
 const { test } = require('node:test');
 const assert = require('node:assert');
 
-const { normalize, fuzzyMatch, fuzzyMatchLine, isCollection, authorKeywords, titleKeywords, titleDeclaresNonEpub, titleLooksLikeAudiobook, collectionResult } = require('../src/searcher');
+const { normalize, fuzzyMatch, fuzzyMatchLine, isCollection, bylineMismatch, authorKeywords, titleKeywords, titleDeclaresNonEpub, titleLooksLikeAudiobook, collectionResult } = require('../src/searcher');
 
 test('normalize: lowercases, strips punctuation, collapses space', () => {
   assert.equal(normalize('1984: Illustrated!'), '1984 illustrated');
@@ -327,4 +327,21 @@ test('titleDeclaresNonEpub: review articles are not books', () => {
   assert.equal(titleDeclaresNonEpub('Review: Some Book'), true);
   assert.equal(titleDeclaresNonEpub('The Review by Jane Doe (.ePUB)'), false);
   assert.equal(titleDeclaresNonEpub('Book Review Club by Jane Doe (.ePUB)'), false);
+});
+
+test('bylineMismatch: someone else\'s set is rejected, the author\'s own (or unbylined) sets pass', () => {
+  // other authors' sets that merely name the searched author
+  assert.equal(bylineMismatch('Jane Austen Regency Life series by Maria Grace (.ePUB)', 'Jane Austen'), true);
+  assert.equal(bylineMismatch("Jane Austen's Pride & Prejudice Sequel Bundle by Linda Berdoll (.ePUB)", 'Jane Austen'), true);
+  assert.equal(bylineMismatch('3 Novels by Sharon Doering (.ePUB)', 'Jennifer Hillier'), true);
+  // the searched author's own sets
+  assert.equal(bylineMismatch('4 Novels by Jennifer Hillier (.ePUB)', 'Jennifer Hillier'), false);
+  assert.equal(bylineMismatch('The Academy series by Elin Hilderbrand & Shelby Cunningham (.ePUB)', 'Elin Hilderbrand and Shelby Cunningham'), false);
+  assert.equal(bylineMismatch('Jack Reacher series by Lee Child & Andrew Child (.ePUB)+', 'Lee Child'), false);
+  assert.equal(bylineMismatch('In Death Series by J. D. Robb (.ePUB)', 'J.D. Robb'), false);
+  // no byline, or no author searched → can't judge, keep
+  assert.equal(bylineMismatch('Reacher Series (.ePUB)+', 'Lee Child'), false);
+  assert.equal(bylineMismatch('Some Series by Anyone', ''), false);
+  // "by" inside the set name, author last: the LAST byline decides
+  assert.equal(bylineMismatch('Stand by Me Collection by Jane Doe', 'Jane Doe'), false);
 });
