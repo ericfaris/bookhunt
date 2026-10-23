@@ -94,3 +94,26 @@
   search is literal, so variant-prone words are dropped from the forum *query* (`titleKeywords`) too.
 - Known ceiling: very prolific authors (Stephen King: 120+ ePUB posts) can have the one set holding a book past
   the 8-set / 3-page caps (Mr. Mercedes only exists in "Bill Hodges Trilogy"). Raising caps costs forum hits on every search.
+
+## 2026-10-23 — Speed/cleanup pass + app data moved offsite (Atlas)
+- **Data safety:** only books (R2) and code (GitHub) were offsite; history (the Library index), recipients, watchlist,
+  tags, radar state and settings lived only in bind-mounted JSON. `src/datastore.js` now backs all seven: the file stays
+  the sync working copy, each write is mirrored (coalesced, retried) to one Atlas doc per store (db `bookhunt`,
+  collection `stores`). Boot reconciles (newer side wins by mtime vs `updatedAt`; restored files are stamped with the
+  Atlas time so the next boot doesn't push back). **Gotcha avoided:** a rebuilt machine with Atlas down would start
+  empty and its first write would overwrite the good offsite copy, so init refuses to start when Atlas is unreachable
+  AND a local file is missing, and no store is pushed before it has been reconciled.
+- Tests used to share the repo-root JSON files = the LIVE production data (bind mounts). `test/setup-env.js`
+  (`node --test --import`) now points every store at a temp dir; verified with the container stopped that a full run
+  leaves the live files byte-identical.
+- tmp copies were named by basename only (`/tmp/history.json.tmp`): parallel test processes / same-named stores could
+  rename each other's data into place. Now hashed per full path.
+- **Measure before optimizing:** history parse = 0.9 ms, so caching it was pointless (dropped). Blocking images/fonts via
+  Playwright `route()` made page loads SLOWER (285 → 626 ms) because routing disables the HTTP cache (dropped).
+  The real cost was the polite delay + the index.php login check: gap-from-last-request + trusting the login cookie
+  (with `gotoAuthed` re-login if a page comes back logged out) cut searches 35-85% (Eleven Numbers 46s → 7s).
+- Removing the always-on author-sets pass exposed that set scanning never checked the set's author: "Jane Austen
+  Regency Life series by Maria Grace" matched Pride and Prejudice. `bylineMismatch` now skips sets bylined to others.
+- `test/fake-forum.js` drives a whole `searcher.search()` offline (pass order, real miss cases, dead session) — use it
+  for future search changes instead of live probing.
+- The Atlas user was created with `readWriteAnyDatabase`; should be narrowed to `readWrite@bookhunt`.
