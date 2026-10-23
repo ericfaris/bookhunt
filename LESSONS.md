@@ -88,5 +88,9 @@
 - Debug recipe: copy the browser profile inside the container (`cp -r .browser-profile /tmp/prof2; rm /tmp/prof2/Singleton*`)
   and run a throwaway Playwright script to read real topic titles/search rows without disturbing the app's session.
   Hit `/api/search` with `cloudflared access token` to reproduce end-to-end.
-- Still open: old threads updated with new books sort by creation date and can fall past page caps; author fallback runs
-  only when nothing else matched; number words/abbreviations (Eleven/11, Mr/Mister) don't fold.
+- Follow-up same day: the author-sets pass now searches `"{author} epub"` title-only. The `epub` keyword drops the
+  author's MP3/M4B/[AB] posts, so old updated set threads stay within the page cap. It opens up to 8 set posts.
+  `(.ePUB)+` in a title marks an updated set thread. Folding (Mister/Mr, Eleven/11) only fixes the post-filter: the forum
+  search is literal, so variant-prone words are dropped from the forum *query* (`titleKeywords`) too.
+- Known ceiling: very prolific authors (Stephen King: 120+ ePUB posts) can have the one set holding a book past
+  the 8-set / 3-page caps (Mr. Mercedes only exists in "Bill Hodges Trilogy"). Raising caps costs forum hits on every search.
