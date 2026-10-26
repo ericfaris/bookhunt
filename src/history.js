@@ -17,6 +17,17 @@ function readAll() {
   return store.read();
 }
 
+/** Change token for memoizing derived views (see datastore signature()). */
+function signature() {
+  return store.signature();
+}
+
+/** The download entry with this id (optionally only one with a stored file). */
+function findDownload(id, { withFile = false } = {}) {
+  if (!id) return null;
+  return readAll().find((e) => e.id === id && e.type === 'download' && (!withFile || e.savePath)) || null;
+}
+
 function writeAll(entries) {
   store.write(entries);
 }
@@ -90,4 +101,4 @@ function logNotify({ downloadId, title, filename, to, kindlePushed, channels }) 
   return add({ type: 'notify', downloadId, title, filename, to, kindlePushed, channels });
 }
 
-module.exports = { REDOWNLOAD_WINDOW_MS, readAll, writeAll, mutate, add, logSearch, logDownload, logNotify };
+module.exports = { REDOWNLOAD_WINDOW_MS, readAll, signature, findDownload, writeAll, mutate, add, logSearch, logDownload, logNotify };

@@ -411,7 +411,7 @@ async function sendToReader(recipient, downloadId) {
   if (!sendAllowed(recipient.id)) {
     throw Object.assign(new Error('That’s a lot of books at once! Give it an hour and try again.'), { code: 'throttled' });
   }
-  const entry = history.readAll().find((e) => e.id === downloadId && e.type === 'download');
+  const entry = history.findDownload(downloadId);
   if (!entry || !entry.savePath || !entry.verified) {
     throw Object.assign(new Error('That book is no longer available.'), { code: 'gone' });
   }

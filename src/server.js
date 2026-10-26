@@ -858,7 +858,7 @@ app.delete('/api/library/:id', async (req, res) => {
 
 // Set the tags for a library book (identified by its download id).
 app.put('/api/library/:id/tags', (req, res) => {
-  const entry = history.readAll().find((e) => e.id === req.params.id && e.type === 'download' && e.savePath);
+  const entry = history.findDownload(req.params.id, { withFile: true });
   if (!entry) return res.status(404).json({ error: 'Library book not found.' });
   const tags = booktags.setTags(entry.savePath, (req.body && req.body.tags) || []);
   res.json({ ok: true, tags });
@@ -870,7 +870,7 @@ app.put('/api/library/:id/tags', (req, res) => {
 //     bypassed, by title+author). The new cover is written to EVERY download
 //     entry for the same file so re-downloads stay consistent. Returns the cover.
 app.put('/api/library/:id/cover', async (req, res) => {
-  const target = history.readAll().find((e) => e.id === req.params.id && e.type === 'download' && e.savePath);
+  const target = history.findDownload(req.params.id, { withFile: true });
   if (!target) return res.status(404).json({ error: 'Library book not found.' });
 
   let cover = typeof (req.body && req.body.cover) === 'string' ? req.body.cover.trim() : '';
@@ -1166,7 +1166,7 @@ app.post('/api/send', async (req, res) => {
 
   // Resolve the file via history (never trust a client-supplied path) and make
   // sure it lives inside DOWNLOAD_PATH and is an .epub before attaching it.
-  const entry = history.readAll().find((e) => e.id === downloadId && e.type === 'download');
+  const entry = history.findDownload(downloadId);
   if (!entry || !entry.savePath) return res.status(404).json({ error: 'Download not found.' });
   if (!downloader.isSafeEpubPath(entry.savePath, downloader.DOWNLOAD_PATH)) {
     return res.status(400).json({ error: 'Refusing to send that file.' });
