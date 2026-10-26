@@ -26,7 +26,7 @@ MOBILISM_USER/PASS, MOBILISM_PREMIUM_USER/PASS, CF_ACCESS_TEAM_DOMAIN/AUD/ALLOWE
 - Caches (all in memory): topic details (`searcher`), spell-correct candidates (`correct`), covers lookup cache (`covers`, flushed to `covers-cache.json`), Library build (`library.currentBooks`, keyed on `history.signature()`).
 
 ## Open items / next steps
-1. Merge + deploy the `perf/review-pass` PR, then check a Library page load and one search → download in the live app.
+1. Review pass (PR #76) is live since 2026-10-25 (commit 36a500c). Library, covers (348/348) and search are verified live. Still unexercised live: the R2 send path through `src/delivery.js`. Watch the next real Send / watcher delivery.
 2. Issue #35 (Mongo as primary store) is effectively done via the Atlas mirror; close or re-scope it.
 3. `src/reupload.js` forum-control selectors are still guesswork; tune them from logs if outcomes look wrong.
 4. Consider adding eslint (`no-unused-vars`, `no-undef`) to `npm test`. A throwaway run caught real dead code during the refactor.
