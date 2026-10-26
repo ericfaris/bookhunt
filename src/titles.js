@@ -74,4 +74,20 @@ function displayTitle({ title, author, filename } = {}) {
   return s || String(title || '').trim();
 }
 
-module.exports = { displayTitle, titleFromFilename, isJunkTitle, gentleTitleCase };
+/** PURE: reduce a forum topic title to just the work's title — drop a
+ *  trailing "by Author…", a dash-delimited format tail ("- ePUB …") and a
+ *  trailing format/edition/year parenthetical ("(.ePUB)", "(2024 Edition)").
+ *  May return '' (callers decide the fallback). Shared by download filenames
+ *  and catalog cover lookups. */
+function stripTitleNoise(t) {
+  let s = String(t || '');
+  s = s.replace(/\s+by\s+.+$/i, ''); // "… by Jane Doe (2024, Pub)"
+  s = s.replace(/\s*[-–—]\s*(?:retail|epub|pdf|mobi|azw3?|m4b|mp3|flac|cbr|cbz)\b.*$/i, '');
+  s = s.replace(
+    /\s*[([][^)\]]*\b(?:retail|epub|pdf|mobi|azw3?|edition|version|19\d{2}|20\d{2})\b[^)\]]*[)\]]\s*$/i,
+    ''
+  );
+  return s.replace(/\s+/g, ' ').trim();
+}
+
+module.exports = { displayTitle, titleFromFilename, isJunkTitle, gentleTitleCase, stripTitleNoise };

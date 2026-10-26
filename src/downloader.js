@@ -7,6 +7,7 @@ const { readEpubMetadata, parseEpubBuffer } = require('./epub');
 const { sniffArchive, extractEpubs } = require('./archive');
 const { giveThanks } = require('./thanks');
 const storage = require('./storage');
+const { stripTitleNoise } = require('./titles');
 
 // STORAGE=local: where books are saved. Under docker-compose it is /downloads,
 // which is also the LOGICAL prefix of every persisted savePath in r2 mode.
@@ -233,19 +234,9 @@ function extractYear(text) {
   return m ? m[0] : null;
 }
 
-/** Reduce a forum topic title to just the work's title for a filename: drop the
- *  trailing "by Author…" (author is bracketed separately) and any trailing
- *  format/edition/year parenthetical or dash-delimited format tail. */
-function cleanBookTitle(t) {
-  let s = String(t || '');
-  s = s.replace(/\s+by\s+.+$/i, ''); // "… by Jane Doe (2024, Pub)"
-  s = s.replace(/\s*[-–—]\s*(?:retail|epub|pdf|mobi|azw3?|m4b|mp3|flac|cbr|cbz)\b.*$/i, '');
-  s = s.replace(
-    /\s*[([][^)\]]*\b(?:retail|epub|pdf|mobi|azw3?|edition|version|19\d{2}|20\d{2})\b[^)\]]*[)\]]\s*$/i,
-    ''
-  );
-  return s.replace(/\s+/g, ' ').trim();
-}
+/** A forum topic title reduced to the work's title, for a filename (see
+ *  titles.stripTitleNoise; the author is bracketed separately). */
+const cleanBookTitle = stripTitleNoise;
 
 /**
  * Build a tidy "Title [Author] (Year).ext" filename from book metadata,

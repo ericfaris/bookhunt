@@ -25,6 +25,7 @@
 const path = require('path');
 const { normalize, similarity, matchScore } = require('./correct');
 const datastore = require('./datastore');
+const { stripTitleNoise } = require('./titles');
 
 const { OPEN_LIBRARY_URL, ITUNES_URL, USER_AGENT, fetchJson, googleBooksUrl } = require('./catalog');
 const CACHE_FILE = process.env.COVERS_CACHE_FILE || path.join(__dirname, '..', 'covers-cache.json');
@@ -55,23 +56,13 @@ function cacheKey({ title, author }) {
   return normalize(title) + '|' + normalize(author);
 }
 
-/** Strip the noise a forum title carries that a catalog title never will — a
- *  trailing "by Author…" (we look the author up separately) and a trailing
- *  format/edition/year parenthetical ("(.ePUB)", "(2024 Edition)"). Improves the
- *  match rate for messy stored titles; author gating still guards correctness.
- *  Returns the original when cleaning would empty it. PURE. (A trimmed cousin of
- *  downloader.cleanBookTitle, inlined to keep this module free of the browser
- *  stack that downloader pulls in.) */
+/** Strip the noise a forum title carries that a catalog title never will
+ *  (titles.stripTitleNoise: "by Author…", format/edition/year tails). Improves
+ *  the match rate for messy stored titles; author gating still guards
+ *  correctness. Returns the original when cleaning would empty it. PURE. */
 function cleanTitle(t) {
   const orig = String(t || '').trim();
-  let s = orig;
-  s = s.replace(/\s+by\s+.+$/i, '');
-  s = s.replace(
-    /\s*[([][^)\]]*\b(?:retail|epub|pdf|mobi|azw3?|edition|version|19\d{2}|20\d{2})\b[^)\]]*[)\]]\s*$/i,
-    ''
-  );
-  s = s.replace(/\s+/g, ' ').trim();
-  return s || orig;
+  return stripTitleNoise(orig) || orig;
 }
 
 /** Build the Open Library cover image URL from a cover id. `size` ∈ S|M|L. */
