@@ -117,3 +117,12 @@
 - `test/fake-forum.js` drives a whole `searcher.search()` offline (pass order, real miss cases, dead session) — use it
   for future search changes instead of live probing.
 - The Atlas user was created with `readWriteAnyDatabase`; replaced 2026-10-23 by `bookhunt-rw` (`readWrite@bookhunt`, scoped to Cluster0) per the lab DB-user standard in `~/.claude/ATLAS.md`.
+
+## 2026-10-25 — Principal-engineer review pass (caching + consolidation)
+- **Cache what the forum/catalogs already told us, briefly.** `searcher.fetchDetail` keeps topics 20 min (keyed without phpBB's `sid`/`hilit`), so search → download no longer re-scrapes the post. Keep it short: set threads get books added. `correct()` keeps catalog candidates 24h; misses aren't cached (they can't be told apart from "every source failed").
+- **Measure the fan-out, not the single call.** One history parse is ~1 ms (the 10-23 note was right), but every cover image rebuilt the whole Library, so a page of 347 covers cost ~0.7 s of event loop. Memoize on a cheap change token: datastore `signature()` = in-process write generation + mtime/size/inode, which also catches a background Atlas restore.
+- covers-cache.json was read + parsed on every get. It's not mirrored and has a single writer, so it now lives in memory with a 2 s debounced write and a flush on `exit`.
+- The local storage driver already implemented the full interface; the `store.mode === 'local'` branches at call sites were dead weight. Its `attachment()` now resolves the path, so the watcher's push matches /api/send.
+- The 10-02 `reader-buildbooks` "no await allowed" gotcha is gone: its `withTagStore` helper now awaits, so reader entry points simply `await storage.get().ensureIndex()`.
+- **Footgun:** `pkill -f "node src/server.js"` on the host also matches the PRODUCTION container's process (containers' processes show up in the host's `ps`). It SIGTERMed prod; Docker restarted it cleanly. Stop a local smoke server by PID (`$!`) or by a unique PORT pattern, never by the bare command line.
+- No eslint in the repo. A throwaway `eslint@9` (`no-unused-vars`, `no-undef`) in a scratch dir caught 28 dead requires and one undefined name after splitting `server.js` into `src/routes/*`. Worth doing after any large move.
