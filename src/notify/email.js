@@ -7,16 +7,10 @@
 // the silent @kindle.com push).
 
 const smtp = require('../smtp');
+const { ACCENT, NAVY, INK, MUTED, PAPER, escapeHtml: esc, emailShell } = require('./emailkit');
 
 const id = 'email';
 const label = 'Email';
-
-// BookHunt brand palette (kept inline; email clients ignore :root/vars).
-const ACCENT = '#f1592a'; // hot orange — the bookmark ribbon
-const NAVY = '#1c2a56';   // deep navy — the book / header band
-const INK = '#1c2a56';
-const MUTED = '#6b727e';
-const PAPER = '#f6f1e7';  // warm cream
 
 function isConfigured() {
   return smtp.isConfigured();
@@ -25,12 +19,6 @@ function isConfigured() {
 // Needs a real inbox address to notify.
 function supports(recipient) {
   return !!(recipient && recipient.email);
-}
-
-function esc(s) {
-  return String(s || '').replace(/[&<>"]/g, (c) =>
-    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])
-  );
 }
 
 // The cover cell: a real cover (inline CID image) when we have one, otherwise a
@@ -113,35 +101,7 @@ function buildMessage({ recipient, book }) {
        </td></tr>`
     : '';
 
-  const html = `
-  <div style="margin:0;padding:24px 12px;background:${PAPER};
-              font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif">
-    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse">
-      <tr><td align="center">
-        <table role="presentation" width="540" cellpadding="0" cellspacing="0"
-               style="width:540px;max-width:540px;background:#ffffff;border-radius:16px;
-                      overflow:hidden;box-shadow:0 4px 24px rgba(28,42,86,0.14)">
-
-          <!-- Header band -->
-          <tr><td style="background:${NAVY};padding:16px 28px">
-            <table role="presentation" cellpadding="0" cellspacing="0"><tr>
-              <td style="font-size:20px;line-height:1;padding-right:9px">🔎</td>
-              <td>
-                <p style="margin:0;color:#ffffff;font-size:16px;font-weight:800;letter-spacing:0.2px">
-                  Book<span style="color:${ACCENT}">Hunt</span>
-                </p>
-                <p style="margin:0;color:#aeb6d6;font-size:11px;font-weight:600">find your book.</p>
-              </td>
-            </tr></table>
-          </td></tr>
-
-          <!-- Sub-header -->
-          <tr><td style="padding:18px 28px 0">
-            <p style="margin:0;color:${ACCENT};font-size:13px;font-weight:700;letter-spacing:0.3px;text-transform:uppercase">
-              ${subHeader}
-            </p>
-          </td></tr>
-
+  const html = emailShell(subHeader, `
           <!-- Greeting -->
           <tr><td style="padding:12px 28px 0">
             <p style="margin:0 0 4px;font-size:15px;color:${MUTED}">${greeting}</p>
@@ -178,17 +138,7 @@ function buildMessage({ recipient, book }) {
           <!-- Delivery line -->
           <tr><td style="padding:20px 28px 24px">
             <p style="margin:0;font-size:15px;color:${INK};line-height:1.6">${delivery}</p>
-          </td></tr>
-
-          <!-- Footer -->
-          <tr><td style="padding:16px 28px;background:#faf7f0;border-top:1px solid #ece5d6">
-            <p style="margin:0;color:#9a93a1;font-size:11px">Sent with ♥ by Eric via BookHunt</p>
-          </td></tr>
-
-        </table>
-      </td></tr>
-    </table>
-  </div>`;
+          </td></tr>`);
 
   const text =
     `${name ? 'Hi ' + name + ',' : 'Hi there,'}\n\n` +
