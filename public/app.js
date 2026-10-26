@@ -269,9 +269,13 @@ async function refreshSessionStatus() {
 
 // Poll periodically, on load, and whenever the tab regains focus (e.g. after
 // the user finishes warming in the /warm tab and switches back).
+// A hidden tab skips the poll and catches up the moment it's visible again.
 refreshSessionStatus();
-setInterval(refreshSessionStatus, 30000);
+setInterval(() => { if (document.visibilityState === 'visible') refreshSessionStatus(); }, 30000);
 window.addEventListener('focus', refreshSessionStatus);
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') refreshSessionStatus();
+});
 
 // Remembered so the "Retry" affordance on a failed/stalled search can re-run it.
 let lastSearchParams = null;
@@ -781,7 +785,7 @@ function buildLibraryHitCard(book) {
 // After a send from a library-hit card, refresh just that book's send history.
 async function refreshHitSends(book, renderSends) {
   try {
-    const data = await fetch('/api/library').then((r) => r.json());
+    const data = await fetchLibrary();
     const fresh = (data.books || []).find((b) => b.id === book.id);
     if (fresh) { book.sends = fresh.sends || []; renderSends(); }
   } catch { /* best effort — leave the existing list */ }
@@ -966,11 +970,23 @@ function applyResultView() {
 // Soft match: same normalized title, and authors agree (or one is unknown).
 let libraryIndex = [];
 function libNorm(s) { return String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim(); }
+// One /api/library request shared by every concurrent caller (search hits,
+// the index, the Library page); each response also refreshes the index.
+let libraryInflight = null;
+function fetchLibrary() {
+  if (!libraryInflight) {
+    libraryInflight = fetch('/api/library')
+      .then((r) => r.json())
+      .then((data) => {
+        libraryIndex = (data.books || []).map((b) => ({ t: libNorm(b.title), a: libNorm(b.author) }));
+        return data;
+      })
+      .finally(() => { libraryInflight = null; });
+  }
+  return libraryInflight;
+}
 async function refreshLibraryIndex() {
-  try {
-    const data = await fetch('/api/library').then((r) => r.json());
-    libraryIndex = (data.books || []).map((b) => ({ t: libNorm(b.title), a: libNorm(b.author) }));
-  } catch { /* leave the previous index */ }
+  try { await fetchLibrary(); } catch { /* leave the previous index */ }
 }
 function isInLibrary(r) {
   const t = libNorm(r.title);
@@ -2139,7 +2155,7 @@ let libraryVisible = [];
 async function openLibrary() {
   if (!allLibraryBooks.length) renderLibrarySkeleton();
   try {
-    const data = await fetch('/api/library').then((r) => r.json());
+    const data = await fetchLibrary();
     allLibraryBooks = data.books || [];
     libraryAllTags = data.allTags || [];
     if (libraryTagFilter && !libraryAllTags.includes(libraryTagFilter)) libraryTagFilter = '';

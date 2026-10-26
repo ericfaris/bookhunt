@@ -90,3 +90,9 @@ test('Library is the landing page; Search lives at #/search', () => {
 test('deep-link prefill (?title= / ?amazon=) switches to the Search page', () => {
   assert.ok(js.includes("history.replaceState(null, '', `${location.pathname}#/search`); showRoute();"));
 });
+
+test('app.js: one shared /api/library request; session poll skips hidden tabs', () => {
+  assert.equal((js.match(/fetch\('\/api\/library'\)/g) || []).length, 1, 'all callers go through fetchLibrary()');
+  assert.match(js, /setInterval\(\(\) => \{ if \(document\.visibilityState === 'visible'\) refreshSessionStatus\(\); \}, 30000\)/);
+  assert.match(js, /addEventListener\('visibilitychange'/);
+});

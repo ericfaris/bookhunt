@@ -88,3 +88,26 @@ test('findDownload: by id, optionally requiring a stored file', () => {
   assert.equal(history.findDownload('3'), null);
   assert.equal(history.findDownload(''), null);
 });
+
+test('history pruning: only the newest N search / watch-hit entries are kept; books and sends never pruned', () => {
+  const entries = [];
+  for (let i = 0; i < 5; i++) entries.push({ id: 's' + i, type: 'search' }, { id: 'w' + i, type: 'watch-hit' });
+  entries.push(dl('d1', 'Book', '/downloads/Book [A].epub'), { id: 'n1', type: 'notify' }, { id: 'r1', type: 'reupload' });
+  const out = history.pruneEntries(entries, 2);
+  assert.deepEqual(out.filter((e) => e.type === 'search').map((e) => e.id), ['s0', 's1']);
+  assert.deepEqual(out.filter((e) => e.type === 'watch-hit').map((e) => e.id), ['w0', 'w1']);
+  assert.deepEqual(out.filter((e) => !['search', 'watch-hit'].includes(e.type)).map((e) => e.id), ['d1', 'n1', 'r1']);
+  assert.equal(history.pruneEntries(out, 2), out, 'nothing to cut → same array');
+});
+
+test('history.add of a search prunes old searches on write', () => {
+  const old = [];
+  for (let i = 0; i < history.KEEP_PER_TYPE + 5; i++) old.push({ id: 'old' + i, type: 'search', title: 't' });
+  old.push(dl('keep', 'Kept Book', '/downloads/Kept [A].epub'));
+  fs.writeFileSync(process.env.HISTORY_FILE, JSON.stringify(old));
+  history.logSearch({ title: 'new', author: '', sort: 'newest', resultCount: 0 });
+  const all = history.readAll();
+  assert.equal(all.filter((e) => e.type === 'search').length, history.KEEP_PER_TYPE);
+  assert.equal(all[0].title, 'new');
+  assert.ok(history.findDownload('keep'));
+});
