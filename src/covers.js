@@ -404,26 +404,60 @@ async function lookupMeta(q, opts = {}) {
 // mirrored to Atlas.
 const cacheStore = datastore.defineStore('covers-cache', { file: CACHE_FILE, shape: 'object', mirror: false });
 
-function readCacheFile() {
-  return cacheStore.read();
+// The cache lives in memory once loaded: the file was being read + parsed
+// (~300 KB) on every get and rewritten on every set. This process is its only
+// writer (not mirrored, nothing else touches it), so writes are coalesced and
+// flushed shortly after, and on exit.
+const WRITE_DEBOUNCE_MS = 2000;
+let _mem = null;
+let _writeTimer = null;
+
+function memCache() {
+  if (!_mem) _mem = cacheStore.read();
+  return _mem;
 }
 
-function writeCacheFile(data) {
-  cacheStore.write(data);
+function flushCache() {
+  if (_writeTimer) { clearTimeout(_writeTimer); _writeTimer = null; }
+  if (_mem && _dirty) {
+    _dirty = false;
+    try { cacheStore.write(_mem); } catch (err) { console.warn('[covers] cache write failed:', err.message); }
+  }
 }
+let _dirty = false;
+process.once('exit', flushCache);
 
-// Default cache backed by the on-disk JSON file. Records are
-// `{ cover: string|null, ts: epochMs }`.
 const fileCache = {
   get(key) {
-    return readCacheFile()[key] || null;
+    return memCache()[key] || null;
   },
   set(key, record) {
-    const data = readCacheFile();
-    data[key] = record;
-    writeCacheFile(data);
+    memCache()[key] = record;
+    _dirty = true;
+    if (!_writeTimer) {
+      _writeTimer = setTimeout(flushCache, WRITE_DEBOUNCE_MS);
+      if (_writeTimer.unref) _writeTimer.unref();
+    }
   },
 };
+
+/** Tests only: drop the in-memory copy so the next read comes from disk. */
+function _resetCache() {
+  flushCache();
+  _mem = null;
+}
+
+// Concurrent resolves of the same book (a Library page asks for many covers
+// at once) share one network lookup. Only for the default cache + lookup, so
+// injected test doubles never cross-talk.
+const _inflight = new Map();
+function shared(key, opts, fn) {
+  if (opts.cache || opts.lookup) return fn();
+  if (_inflight.has(key)) return _inflight.get(key);
+  const p = fn().finally(() => _inflight.delete(key));
+  _inflight.set(key, p);
+  return p;
+}
 
 /** Is a cached negative still fresh enough to trust (skip re-lookup)? A miss
  *  from an older (smaller) source chain is never fresh; a miss caused by a
@@ -453,7 +487,10 @@ async function resolveCover({ title, author }, opts = {}) {
   const t = String(title || '').trim();
   const a = String(author || '').trim();
   if (!t && !a) return null;
+  return shared('c|' + cacheKey({ title: t, author: a }), opts, () => resolveCoverUncoalesced(t, a, opts));
+}
 
+async function resolveCoverUncoalesced(t, a, opts) {
   const cache = opts.cache || fileCache;
   const lookup = opts.lookup || lookupCover;
   const key = cacheKey({ title: t, author: a });
@@ -494,7 +531,10 @@ async function resolveMeta({ title, author }, opts = {}) {
   const t = String(title || '').trim();
   const a = String(author || '').trim();
   if (!t && !a) return { cover: null, description: null };
+  return shared('m|' + cacheKey({ title: t, author: a }), opts, () => resolveMetaUncoalesced(t, a, opts));
+}
 
+async function resolveMetaUncoalesced(t, a, opts) {
   const cache = opts.cache || fileCache;
   const lookup = opts.lookup || lookupMeta;
   const key = 'meta:' + cacheKey({ title: t, author: a });
@@ -558,4 +598,6 @@ module.exports = {
   openLibraryCoverUrl,
   cacheKey,
   CACHE_FILE,
+  flushCache,
+  _resetCache,
 };

@@ -462,3 +462,46 @@ test('resolveMeta: an older partial record (cover, no blurb) is re-looked-up and
   const out = await resolveMeta({ title: 'Dune', author: 'Herbert' }, { cache, lookup: async () => ({ cover: null, description: 'Spice.' }) });
   assert.deepEqual(out, { cover: 'https://old/c.jpg', description: 'Spice.' });
 });
+
+test('covers cache: held in memory, flushed to the file on flushCache()', async () => {
+  const fs = require('node:fs');
+  const c = require('../src/covers');
+  c._resetCache();
+  const q = { title: 'Mem Cache Book', author: 'Some Author' };
+  let lookups = 0;
+  const lookup = async () => { lookups++; return 'https://example.com/mem.jpg'; };
+  assert.equal(await c.resolveCover(q, { lookup }), 'https://example.com/mem.jpg');
+  assert.equal(await c.resolveCover(q, { lookup }), 'https://example.com/mem.jpg');
+  assert.equal(lookups, 1);
+  c.flushCache();
+  const onDisk = JSON.parse(fs.readFileSync(c.CACHE_FILE, 'utf8'));
+  assert.equal(onDisk[c.cacheKey(q)].cover, 'https://example.com/mem.jpg');
+  c._resetCache(); // reload from disk: still a hit
+  assert.equal(await c.resolveCover(q, { lookup }), 'https://example.com/mem.jpg');
+  assert.equal(lookups, 1);
+});
+
+test('covers: concurrent resolves of the same book share one network lookup', async () => {
+  const c = require('../src/covers');
+  c._resetCache();
+  const realFetch = globalThis.fetch;
+  let calls = 0;
+  globalThis.fetch = async () => {
+    calls++;
+    await new Promise((r) => setTimeout(r, 5));
+    return { ok: true, status: 200, headers: { get: () => null }, json: async () => ({}) };
+  };
+  try {
+    const q = { title: 'Coalesce Me Please', author: 'Nobody' };
+    const [a, b] = await Promise.all([c.resolveCover(q), c.resolveCover(q)]);
+    assert.equal(a, null);
+    assert.equal(b, null);
+    const single = calls;
+    c._resetCache();
+    calls = 0;
+    await c.resolveCover({ title: 'Coalesce Me Too', author: 'Nobody' });
+    assert.equal(single, calls, 'two concurrent resolves cost the same as one');
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});

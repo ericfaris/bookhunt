@@ -65,14 +65,22 @@ function keyFor({ title, author }) {
 }
 
 /** The stored file for a key, if any: { file, mime, generated, mtimeMs }. */
+// Last known format per stored key, tried first so a hit is one stat, not up
+// to five. Only a hint: a miss falls back to probing every format.
+const knownExt = new Map();
+
 function findStored(key, dir) {
-  for (const ext of Object.values(EXT_BY_MIME)) {
+  const hint = knownExt.get(dir + '|' + key);
+  const exts = Object.values(EXT_BY_MIME);
+  for (const ext of hint ? [hint, ...exts.filter((e) => e !== hint)] : exts) {
     const file = path.join(dir, `${key}.${ext}`);
     try {
       const st = fs.statSync(file);
+      knownExt.set(dir + '|' + key, ext);
       return { file, mime: MIME_BY_EXT[ext], generated: ext === 'svg', mtimeMs: st.mtimeMs };
     } catch { /* not this one */ }
   }
+  knownExt.delete(dir + '|' + key);
   return null;
 }
 
@@ -84,6 +92,7 @@ function writeStored(key, dir, bytes, mime) {
     const tmp = `${file}.${process.pid}.tmp`;
     fs.writeFileSync(tmp, bytes);
     fs.renameSync(tmp, file);
+    knownExt.set(dir + '|' + key, EXT_BY_MIME[mime]);
     for (const ext of Object.values(EXT_BY_MIME)) {
       const other = path.join(dir, `${key}.${ext}`);
       if (other !== file) { try { fs.unlinkSync(other); } catch { /* none */ } }
@@ -280,11 +289,15 @@ async function getCoverImage(book, opts = {}) {
       }
       // A low-res cover (e.g. a 128px catalog thumbnail stored before the
       // chain became quality-aware) gets one upgrade attempt per process.
+      // Marked as checked whatever the outcome — measuring every serve of a
+      // fine cover re-ran sharp on each request.
       const flight = dir + '|' + key;
-      const lowRes = !img.generated && !upgradeTried.has(flight) && img.bytes.length < 120 * 1024
-        ? await widthOf(img.bytes, opts) : 0;
-      if (lowRes > 0 && lowRes < MIN_GOOD_W) {
+      let lowRes = 0;
+      if (!img.generated && !upgradeTried.has(flight) && img.bytes.length < 120 * 1024) {
         upgradeTried.add(flight);
+        lowRes = await widthOf(img.bytes, opts);
+      }
+      if (lowRes > 0 && lowRes < MIN_GOOD_W) {
         const better = await findRealCover(book || {}, opts);
         if (better && (better.width || 0) > lowRes) {
           const found = await optimizeImage(better, opts);

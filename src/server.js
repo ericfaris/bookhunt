@@ -136,12 +136,24 @@ app.use('/reader/api', (_req, res, next) => {
 // script/stylesheet URLs. A changed file is a new URL that no browser, edge,
 // or service-worker cache has seen; an unchanged one keeps its cached copy.
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
+// Memoized per file on its mtime: the files never change inside a container,
+// but a dev edit under `npm run dev` still gets a fresh hash.
+const _fileMemo = new Map();
+function memoFile(file, derive) {
+  const abs = path.join(PUBLIC_DIR, file);
+  const mtime = fs.statSync(abs).mtimeMs;
+  const hit = _fileMemo.get(abs);
+  if (hit && hit.mtime === mtime) return hit.value;
+  const value = derive(fs.readFileSync(abs));
+  _fileMemo.set(abs, { mtime, value });
+  return value;
+}
 function assetHash(file) {
-  return require('crypto').createHash('sha256').update(fs.readFileSync(path.join(PUBLIC_DIR, file))).digest('hex').slice(0, 12);
+  return memoFile(file, (buf) => require('crypto').createHash('sha256').update(buf).digest('hex').slice(0, 12));
 }
 /** Read public/<page> and version each `attr="url"` → hash of public/<file>. */
 function stampAssets(page, assets) {
-  let html = fs.readFileSync(path.join(PUBLIC_DIR, page), 'utf8');
+  let html = memoFile(page, (buf) => buf.toString('utf8'));
   for (const { attr, url, file } of assets) {
     html = html.replace(`${attr}="${url}"`, `${attr}="${url}?v=${assetHash(file)}"`);
   }

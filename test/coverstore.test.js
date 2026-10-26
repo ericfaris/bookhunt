@@ -408,3 +408,23 @@ test('getCoverImage: all sources placeholders → generated jacket, never the pl
   });
   assert.equal(img.generated, true);
 });
+
+test('getCoverImage: a stored, good-width cover is measured once per process, not on every serve', async () => {
+  const dir = tmpDir();
+  const good = await sharpLib({ create: { width: 500, height: 750, channels: 3, background: { r: 30, g: 60, b: 160 } } }).jpeg().toBuffer();
+  const book = { title: 'Measured Once', author: 'A' };
+  fs.writeFileSync(path.join(dir, coverstore.keyFor(book) + '.jpg'), good);
+  let metadataCalls = 0;
+  const countingSharp = (bytes, o) => {
+    const inst = sharpLib(bytes, o);
+    const meta = inst.metadata.bind(inst);
+    inst.metadata = () => { metadataCalls++; return meta(); };
+    return inst;
+  };
+  const opts = { dir, sharp: countingSharp, resolveCover: async () => { throw new Error('no catalog'); } };
+  for (let i = 0; i < 3; i++) {
+    const img = await coverstore.getCoverImage(book, opts);
+    assert.equal(img.source, 'stored');
+  }
+  assert.equal(metadataCalls, 1);
+});
