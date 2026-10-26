@@ -26,11 +26,7 @@ let _notifiedSinceBlocked = false; // dedupe: at most one alert per block episod
 // Who to ping when a human is required. Prefer an explicit WARM_ALERT_EMAIL, else
 // the first Cloudflare-Access allowed email, else whatever the SMTP sender is.
 function alertEmail() {
-  const allowed = (process.env.CF_ACCESS_ALLOWED_EMAILS || '')
-    .split(',')
-    .map((s) => s.trim())
-    .filter(Boolean);
-  return process.env.WARM_ALERT_EMAIL || allowed[0] || process.env.SMTP_FROM || process.env.SMTP_USER || '';
+  return smtp.operatorEmail(['WARM_ALERT_EMAIL']);
 }
 
 async function notifyHumanNeeded(action) {

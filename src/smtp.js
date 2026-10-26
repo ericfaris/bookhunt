@@ -30,4 +30,16 @@ function getTransport() {
   return _transport;
 }
 
-module.exports = { FROM, isConfigured, getTransport };
+/**
+ * Who to email about operational events (watch hits, radar digests, warm
+ * alerts): the first of `overrides` (env var names) that is set, else the
+ * first Cloudflare-Access allowed email, else the SMTP identity. Each caller
+ * passes its own override chain; the fallbacks are shared.
+ */
+function operatorEmail(overrides = [], env = process.env) {
+  for (const k of overrides) if (env[k]) return env[k];
+  const allowed = (env.CF_ACCESS_ALLOWED_EMAILS || '').split(',').map((s) => s.trim()).filter(Boolean);
+  return allowed[0] || env.SMTP_FROM || env.SMTP_USER || '';
+}
+
+module.exports = { FROM, isConfigured, getTransport, operatorEmail };

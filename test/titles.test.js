@@ -78,3 +78,16 @@ test('gentleTitleCase: no-op on anything already cased', () => {
   assert.equal(gentleTitleCase('McConaghy Writes'), 'McConaghy Writes');
   assert.equal(gentleTitleCase('NW'), 'NW');
 });
+
+test('stripTitleNoise: the one forum-title cleaner shared by filenames and cover lookups', () => {
+  const { stripTitleNoise } = require('../src/titles');
+  assert.equal(stripTitleNoise('Whistler by Ann Patchett (.ePUB)'), 'Whistler');
+  assert.equal(stripTitleNoise('Onyx Storm - ePUB retail'), 'Onyx Storm');
+  assert.equal(stripTitleNoise('Dune (2019 Edition)'), 'Dune');
+  assert.equal(stripTitleNoise(''), '');
+  const downloader = require('../src/downloader');
+  const covers = require('../src/covers');
+  assert.equal(covers.cleanTitle('Onyx Storm - ePUB retail'), 'Onyx Storm', 'covers uses the shared cleaner');
+  assert.equal(covers.cleanTitle('(.ePUB)'), '(.ePUB)', 'covers falls back to the original when cleaning empties it');
+  assert.equal(downloader.buildBookFilename({ title: 'Onyx Storm - ePUB retail', author: 'R Yarros' }, 'x.epub'), 'Onyx Storm [R Yarros].epub');
+});

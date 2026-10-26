@@ -19,17 +19,15 @@
 const searcher = require('./searcher');
 const watchlist = require('./watchlist');
 const notify = require('./notify');
-const coverstore = require('./coverstore');
 const recipients = require('./recipients');
 const history = require('./history');
 const settings = require('./settings');
 const downloader = require('./downloader');
-const kindle = require('./kindle');
 const booktags = require('./booktags');
 const lists = require('./lists');
 const covers = require('./covers');
-const storage = require('./storage');
 const smtp = require('./smtp');
+const delivery = require('./delivery');
 
 const TICK_MS = Number(process.env.WATCH_TICK_MS) || 300000; // wake every 5 min
 // A watch that has gone this many no-match checks without a hit is retired —
@@ -55,22 +53,9 @@ const OUTAGE_THRESHOLD = Number(process.env.WATCH_OUTAGE_THRESHOLD) || 5;
 // The per-watch re-check cadence is user-configurable in Settings (settings.js);
 // read it fresh each tick so changes take effect without a restart.
 
-// Who to notify by default — the operator who set the watch. Mirrors
-// autowarm's alertEmail(): explicit override, else first CF-Access email, else
-// the SMTP identity.
+// Who to notify by default — the operator who set the watch.
 function operatorEmail() {
-  const allowed = (process.env.CF_ACCESS_ALLOWED_EMAILS || '')
-    .split(',')
-    .map((s) => s.trim())
-    .filter(Boolean);
-  return (
-    process.env.WATCH_ALERT_EMAIL ||
-    process.env.WARM_ALERT_EMAIL ||
-    allowed[0] ||
-    process.env.SMTP_FROM ||
-    process.env.SMTP_USER ||
-    ''
-  );
+  return smtp.operatorEmail(['WATCH_ALERT_EMAIL', 'WARM_ALERT_EMAIL']);
 }
 
 // The watch's delivery audience: the recipients explicitly related to it. With
@@ -204,37 +189,16 @@ async function autoDeliver(watch, results, opts = {}) {
   let delivered = 0;
   let kindlePushed = 0;
   const emailed = new Set();
-  // The stored cover image (coverstore), without the ePUB step (that would read
-  // the book again on top of the Kindle attachment). A generated SVG jacket
-  // arrives rasterized to PNG, since email clients won't render SVG.
-  try {
-    const img = await coverstore.getEmailCoverImage({ ...book, savePath: download && download.savePath, filePresent: !!download }, { epub: false });
-    if (img) { book.coverBuffer = img.bytes; book.coverMime = img.mime; }
-  } catch { /* URL / placeholder fallback */ }
+  await delivery.attachEmailCover(book, { savePath: download && download.savePath, filePresent: !!download });
 
-  // Fetched at most once for all recipients (#47): local passes the savePath
-  // as-is (unresolved, as before); r2 pulls the bytes from the bucket.
-  let att = null;
-  let attErr = null;
+  // Fetched at most once for all recipients (local path, or the R2 bytes).
+  const getAttachment = download ? delivery.attachmentLoader(download.savePath) : null;
   for (const r of targets) {
     let pushed = false;
     if (download && r.kindleEmail) {
-      try {
-        if (!att && !attErr) {
-          const store = storage.get();
-          try {
-            att = store.mode === 'local' ? { filePath: download.savePath } : await store.attachment(download.savePath);
-          } catch (e) {
-            attErr = e;
-          }
-        }
-        if (attErr) throw attErr;
-        await kindle.pushToKindle({ kindleEmail: r.kindleEmail, filename: download.filename, ...att });
-        pushed = true;
-        kindlePushed++;
-      } catch (err) {
-        console.warn('[watcher] Kindle push failed for %s: %s', r.kindleEmail, err.message);
-      }
+      const k = await delivery.pushToKindle(r, { filename: download.filename, getAttachment });
+      if (k.ok) { pushed = true; kindlePushed++; }
+      else console.warn('[watcher] Kindle push failed for %s: %s', r.kindleEmail, k.error);
     }
     if (r.email && !quiet) {
       const channelResults = await notify.notify(r, { ...book, pushedToKindle: pushed }, ['email']);

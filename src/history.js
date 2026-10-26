@@ -13,8 +13,41 @@ const REDOWNLOAD_WINDOW_MS = 10 * 60 * 1000;
 
 const store = datastore.defineStore('history', { file: HISTORY_FILE, shape: 'array' });
 
+// Activity-log entry types that only feed the History view. They were ~60% of
+// the file and grew forever — and every write ships the whole store to Atlas —
+// so only the newest KEEP_PER_TYPE of each are kept. Downloads, sends and
+// re-upload requests (the Library and re-upload views) are never pruned.
+const PRUNABLE_TYPES = new Set(['search', 'watch-hit']);
+const KEEP_PER_TYPE = Number(process.env.HISTORY_KEEP_PER_TYPE) || 300;
+
+/** PURE: drop all but the newest `keep` entries of each prunable type
+ *  (entries are newest-first). Returns the same array when nothing is cut. */
+function pruneEntries(entries, keep = KEEP_PER_TYPE) {
+  const seen = new Map();
+  let cut = false;
+  const out = entries.filter((e) => {
+    if (!e || !PRUNABLE_TYPES.has(e.type)) return true;
+    const n = (seen.get(e.type) || 0) + 1;
+    seen.set(e.type, n);
+    if (n > keep) { cut = true; return false; }
+    return true;
+  });
+  return cut ? out : entries;
+}
+
 function readAll() {
   return store.read();
+}
+
+/** Change token for memoizing derived views (see datastore signature()). */
+function signature() {
+  return store.signature();
+}
+
+/** The download entry with this id (optionally only one with a stored file). */
+function findDownload(id, { withFile = false } = {}) {
+  if (!id) return null;
+  return readAll().find((e) => e.id === id && e.type === 'download' && (!withFile || e.savePath)) || null;
 }
 
 function writeAll(entries) {
@@ -46,7 +79,10 @@ function add(entry) {
     timestamp: new Date().toISOString(),
     ...entry,
   };
-  mutate((entries) => { entries.unshift(stored); });
+  mutate((entries) => {
+    entries.unshift(stored);
+    return PRUNABLE_TYPES.has(stored.type) ? pruneEntries(entries) : entries;
+  });
   return stored;
 }
 
@@ -90,4 +126,4 @@ function logNotify({ downloadId, title, filename, to, kindlePushed, channels }) 
   return add({ type: 'notify', downloadId, title, filename, to, kindlePushed, channels });
 }
 
-module.exports = { REDOWNLOAD_WINDOW_MS, readAll, writeAll, mutate, add, logSearch, logDownload, logNotify };
+module.exports = { REDOWNLOAD_WINDOW_MS, KEEP_PER_TYPE, pruneEntries, readAll, signature, findDownload, writeAll, mutate, add, logSearch, logDownload, logNotify };

@@ -134,6 +134,7 @@ function defineStore(name, { file, shape = 'array', mirror = true }) {
     reconciled: false, // pushes to Atlas are held until init() has loaded this store
     pending: null, // { json, updatedAt } — latest value not yet in Atlas
     flushing: null, // in-flight drain promise
+    gen: 0, // bumped on every write from this process (see signature())
   };
   stores.set(name, s);
   return {
@@ -141,6 +142,19 @@ function defineStore(name, { file, shape = 'array', mirror = true }) {
     file,
     read: () => readJsonFile(s.file, s.shape),
     write: (value) => writeStore(s, value),
+    /**
+     * Cheap change token for memoizing values derived from this store: the
+     * file's mtime + size (a stat, no read). Catches every writer, including a
+     * background Atlas restore. Null when the file is missing.
+     */
+    signature() {
+      try {
+        const st = fs.statSync(s.file);
+        return `${s.gen}:${st.mtimeMs}:${st.size}:${st.ino}`;
+      } catch {
+        return null;
+      }
+    },
     /**
      * Read-modify-write in ONE synchronous step against a FRESH read. `fn` may
      * mutate in place, return a replacement, or return false/null to abort.
@@ -158,6 +172,7 @@ function defineStore(name, { file, shape = 'array', mirror = true }) {
 
 function writeStore(s, value) {
   const json = writeJsonFile(s.file, value);
+  s.gen++;
   if (s.mirror && collection && s.reconciled) queueMirror(s, json, new Date());
   return value;
 }

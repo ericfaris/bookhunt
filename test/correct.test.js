@@ -332,3 +332,44 @@ test('reconcile: corrects BOTH fields when each corroborates the other', () => {
   assert.equal(out.title, 'Atomic Habits');
   assert.equal(out.author, 'James Clear');
 });
+
+test('correct(): default lookups are memoized — a repeat search skips the catalogs', async () => {
+  const c = require('../src/correct');
+  c._lookupCache.clear();
+  const realFetch = globalThis.fetch;
+  let calls = 0;
+  globalThis.fetch = async (url) => {
+    calls++;
+    const body = String(url).includes('googleapis')
+      ? { items: [{ volumeInfo: { title: 'Project Hail Mary', authors: ['Andy Weir'] } }] }
+      : { docs: [] };
+    return { ok: true, status: 200, headers: { get: () => null }, json: async () => body };
+  };
+  try {
+    const a = await c.correct({ title: 'Project Hail Mery', author: 'Andy Weir' });
+    const n = calls;
+    assert.ok(n > 0);
+    const b = await c.correct({ title: 'project hail  mery', author: 'andy weir' });
+    assert.equal(calls, n, 'second call served from the memo (normalized key)');
+    assert.deepEqual(b.title, a.title);
+  } finally {
+    globalThis.fetch = realFetch;
+    c._lookupCache.clear();
+  }
+});
+
+test('correct(): a lookup with no candidate is not memoized', async () => {
+  const c = require('../src/correct');
+  c._lookupCache.clear();
+  const realFetch = globalThis.fetch;
+  let calls = 0;
+  globalThis.fetch = async () => { calls++; return { ok: true, status: 200, headers: { get: () => null }, json: async () => ({}) }; };
+  try {
+    await c.correct({ title: 'Zzqx', author: '' });
+    const n = calls;
+    await c.correct({ title: 'Zzqx', author: '' });
+    assert.ok(calls > n, 'retried, not cached');
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});

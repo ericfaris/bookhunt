@@ -32,11 +32,11 @@ function resetHistory() {
 // booktags.js has no env-based file override (unlike history/recipients), so
 // point it at a real file on disk that actually exists/doesn't exist as the
 // test needs, rather than mutating the live project's booktags.json.
-function withTagStore(store, fn) {
+async function withTagStore(store, fn) {
   const orig = booktags.readStore;
   booktags.readStore = () => store;
   try {
-    return fn();
+    return await fn(); // held until the async read completes
   } finally {
     booktags.readStore = orig;
   }

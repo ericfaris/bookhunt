@@ -16,6 +16,7 @@ const watchlist = require('./watchlist');
 const library = require('./library');
 const settings = require('./settings');
 const smtp = require('./smtp');
+const { escapeHtml, emailShell, NAVY, MUTED } = require('./notify/emailkit');
 const coverstore = require('./coverstore');
 
 const TICK_MS = Number(process.env.LISTS_TICK_MS) || 3600000; // hourly wake; runs when the pull is due
@@ -29,18 +30,7 @@ const TICK_MS = Number(process.env.LISTS_TICK_MS) || 3600000; // hourly wake; ru
 const LIST_MAX_ACTIVE = Number(process.env.LIST_MAX_ACTIVE) || 40;
 
 function operatorEmail() {
-  // Same resolution as the watcher/autowarm: explicit override → CF-Access
-  // email → SMTP identity.
-  const allowed = (process.env.CF_ACCESS_ALLOWED_EMAILS || '')
-    .split(',').map((s) => s.trim()).filter(Boolean);
-  return (
-    process.env.LISTS_ALERT_EMAIL ||
-    process.env.WATCH_ALERT_EMAIL ||
-    allowed[0] ||
-    process.env.SMTP_FROM ||
-    process.env.SMTP_USER ||
-    ''
-  );
+  return smtp.operatorEmail(['LISTS_ALERT_EMAIL', 'WATCH_ALERT_EMAIL']);
 }
 
 /**
@@ -244,7 +234,7 @@ function buildDigest(events) {
     const evs = byType(s.type);
     if (!evs.length) continue;
     textParts.push(`${s.head}\n${evs.map((e) => `  • ${s.line(e)}`).join('\n')}`);
-    const head = `<p style="margin:0 0 8px;font-size:15px;font-weight:700;color:#1c2a56">${s.head}</p>`;
+    const head = `<p style="margin:0 0 8px;font-size:15px;font-weight:700;color:${NAVY}">${s.head}</p>`;
     if (COVER_SECTIONS.has(s.type)) {
       const rows = evs.map((e) => {
         let coverCell;
@@ -261,8 +251,8 @@ function buildDigest(events) {
         return `<tr>
           <td valign="top" width="54" style="padding:0 16px 14px 0">${coverCell}</td>
           <td valign="top" style="padding:0 0 14px">
-            <p style="margin:0 0 3px;font-size:15px;font-weight:700;color:#1c2a56;line-height:1.3">${escapeHtml(e.title)}</p>
-            ${sub ? `<p style="margin:0;font-size:13px;color:#6b727e;line-height:1.4">${escapeHtml(sub)}</p>` : ''}
+            <p style="margin:0 0 3px;font-size:15px;font-weight:700;color:${NAVY};line-height:1.3">${escapeHtml(e.title)}</p>
+            ${sub ? `<p style="margin:0;font-size:13px;color:${MUTED};line-height:1.4">${escapeHtml(sub)}</p>` : ''}
           </td>
         </tr>`;
       }).join('');
@@ -279,7 +269,6 @@ function buildDigest(events) {
     }
   }
   bodyRows.push('<tr><td style="padding:0 0 18px"></td></tr>');
-  const { emailShell } = require('./reader'); // lazy, matching this module's style
   const html = emailShell(
     'New-release radar',
     bodyRows.join(''),
@@ -287,10 +276,6 @@ function buildDigest(events) {
     'Automated digest from your BookHunt server'
   );
   return { subject, text: textParts.join('\n\n'), html, attachments };
-}
-
-function escapeHtml(s) {
-  return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
 
 /** Drain pending events into one operator email. Returns true when sent. */

@@ -275,6 +275,28 @@ async function defaultLookup(original, opts = {}) {
  * `opts.lookup` overrides the lookup fn (tests); `opts.fetchImpl`/`opts.timeoutMs`/
  * `opts.apiKey` are forwarded to the default source chain.
  */
+// Catalog answers for recent requests, so re-running a search (or a batch with
+// repeats) doesn't wait on Google Books / Open Library again before the scrape.
+// Only real candidates are kept — a null (no match OR every source failed) is
+// retried next time. In-memory only: losing it on restart costs one lookup.
+const LOOKUP_TTL_MS = 24 * 60 * 60 * 1000;
+const LOOKUP_CACHE_MAX = 500;
+const _lookupCache = new Map(); // key → { at, candidate }
+
+async function cachedLookup(original, opts) {
+  const key = normalize(original.title) + '|' + normalize(original.author);
+  const now = Date.now();
+  const hit = _lookupCache.get(key);
+  if (hit && now - hit.at < LOOKUP_TTL_MS) return hit.candidate;
+  const candidate = await defaultLookup(original, opts);
+  if (candidate) {
+    _lookupCache.delete(key);
+    _lookupCache.set(key, { at: now, candidate });
+    while (_lookupCache.size > LOOKUP_CACHE_MAX) _lookupCache.delete(_lookupCache.keys().next().value);
+  }
+  return candidate;
+}
+
 async function correct(input, opts = {}) {
   const original = {
     title: (input && typeof input.title === 'string' ? input.title : '').trim(),
@@ -282,7 +304,8 @@ async function correct(input, opts = {}) {
   };
   if (!original.title && !original.author) return passthrough(original);
 
-  const lookup = opts.lookup || defaultLookup;
+  // Injected lookups/fetchers (tests) bypass the cache.
+  const lookup = opts.lookup || (opts.fetchImpl ? defaultLookup : cachedLookup);
   try {
     const candidate = await lookup(original, opts);
     return reconcile(original, candidate, opts.source);
@@ -307,4 +330,5 @@ module.exports = {
   lookupOpenLibrary,
   defaultLookup,
   ACCEPT_THRESHOLD,
+  _lookupCache,
 };

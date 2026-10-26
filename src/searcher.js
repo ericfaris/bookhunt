@@ -165,6 +165,7 @@ const CHROMIUM_ARGS = [
 function _setSessionForTests(page, context = null) {
   _page = page;
   _context = context;
+  _detailCache.clear(); // fake forums reuse topic ids with different content
 }
 
 async function getSession() {
@@ -691,10 +692,60 @@ async function collectRows(page, startUrl, maxPages, signal) {
   return rows;
 }
 
+// Recently scraped topics, so a download (or a batch candidate walk) right
+// after the search that found the post doesn't pay another polite delay + page
+// load for the same content. Short TTL: set threads ("(.ePUB)+") get new books
+// added, and a mirror list can change. Keyed without phpBB's per-visit params
+// (sid, hilit) so the search row URL and the post's own URL share an entry.
+const DETAIL_TTL_MS = process.env.DETAIL_CACHE_TTL_MS !== undefined && process.env.DETAIL_CACHE_TTL_MS !== ''
+  ? Number(process.env.DETAIL_CACHE_TTL_MS) : 20 * 60 * 1000;
+const DETAIL_CACHE_MAX = 200;
+const _detailCache = new Map(); // key → { at, detail }; insertion order = age
+
+/** PURE: cache key for a topic URL — drops the session/highlight params. */
+function detailKey(url) {
+  try {
+    const u = new URL(url);
+    for (const p of ['sid', 'hilit', 'view']) u.searchParams.delete(p);
+    u.hash = '';
+    return u.href;
+  } catch {
+    return String(url || '');
+  }
+}
+
+function cachedDetail(url, now = Date.now()) {
+  const hit = _detailCache.get(detailKey(url));
+  if (!hit) return null;
+  if (now - hit.at > DETAIL_TTL_MS) { _detailCache.delete(detailKey(url)); return null; }
+  return hit.detail;
+}
+
+function rememberDetail(urls, detail, now = Date.now()) {
+  if (!(DETAIL_TTL_MS > 0)) return;
+  for (const u of new Set(urls.filter(Boolean).map(detailKey))) {
+    _detailCache.delete(u);
+    _detailCache.set(u, { at: now, detail });
+  }
+  while (_detailCache.size > DETAIL_CACHE_MAX) _detailCache.delete(_detailCache.keys().next().value);
+}
+
 /** Open a topic page and scrape its first div.content for detail fields.
  *  `signal` (optional) makes the polite delay + navigation cancellable on the
- *  search path; the download path calls this without one. */
-async function fetchDetail(page, topicUrl, signal) {
+ *  search path; the download path calls this without one. A topic scraped in
+ *  the last DETAIL_TTL_MS is served from memory (no request at all); pass
+ *  `{ fresh: true }` to force a reload. */
+async function fetchDetail(page, topicUrl, signal, { fresh = false } = {}) {
+  if (!fresh) {
+    const hit = cachedDetail(topicUrl);
+    if (hit) return hit;
+  }
+  const detail = await scrapeDetail(page, topicUrl, signal);
+  if (detail) rememberDetail([topicUrl, detail.url], detail);
+  return detail;
+}
+
+async function scrapeDetail(page, topicUrl, signal) {
   throwIfCancelled(signal);
   await randomDelay(signal);
   throwIfCancelled(signal);
@@ -1058,6 +1109,7 @@ module.exports = {
   enqueue,
   randomDelay,
   fetchDetail,
+  detailKey,
   createCancelSignal,
   CancelledError,
   // exported for unit tests

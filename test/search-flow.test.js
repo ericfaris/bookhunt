@@ -115,3 +115,37 @@ test('author-sets pass skips other authors\' sets that merely name the searched 
   assert.deepEqual(results.map((r) => r.setTitle), ['Jane Austen Collection by Jane Austen (.ePUB)']);
   assert.ok(!forum.visits.some((v) => v.includes('t=50')), "another author's set is never opened");
 });
+
+test('topic cache: a download right after the search reuses the scraped post (no second page load)', async () => {
+  const forum = createFakeForum({
+    searches: { 'Project Hail Mary Andy Weir': [['Project Hail Mary by Andy Weir (.ePUB)', '1']] },
+    topics: { 1: { title: 'Project Hail Mary by Andy Weir (.ePUB)', text: 'Project Hail Mary\nRequirements: .ePUB Reader, 2 MB' } },
+  });
+  const { results } = await run(forum, { title: 'Project Hail Mary', author: 'Andy Weir' });
+  const topicLoads = () => forum.visits.filter((v) => v.includes('viewtopic.php')).length;
+  assert.equal(topicLoads(), 1);
+  const again = await searcher.fetchDetail(forum.page, results[0].url);
+  assert.equal(again.title, 'Project Hail Mary by Andy Weir (.ePUB)');
+  assert.equal(topicLoads(), 1, 'served from the cache');
+  // phpBB's per-visit params don't defeat the cache…
+  await searcher.fetchDetail(forum.page, results[0].url + '&hilit=project&sid=abc123');
+  assert.equal(topicLoads(), 1);
+  // …and { fresh: true } forces a reload.
+  await searcher.fetchDetail(forum.page, results[0].url, undefined, { fresh: true });
+  assert.equal(topicLoads(), 2);
+});
+
+test('topic cache: a post that failed to load is not cached', async () => {
+  const forum = createFakeForum({ searches: {}, topics: {} });
+  searcher._setSessionForTests(forum.page, forum.context);
+  const url = `${searcher.BASE_URL}/viewtopic.php?f=1&t=999`;
+  assert.equal(await searcher.fetchDetail(forum.page, url), null);
+  assert.equal(await searcher.fetchDetail(forum.page, url), null);
+  assert.equal(forum.visits.filter((v) => v.includes('t=999')).length, 2);
+});
+
+test('detailKey: strips sid/hilit/hash, keeps the topic identity', () => {
+  const a = searcher.detailKey(`${searcher.BASE_URL}/viewtopic.php?f=1&t=5&sid=x&hilit=y#p1`);
+  assert.equal(a, `${searcher.BASE_URL}/viewtopic.php?f=1&t=5`);
+  assert.notEqual(a, searcher.detailKey(`${searcher.BASE_URL}/viewtopic.php?f=1&t=6`));
+});

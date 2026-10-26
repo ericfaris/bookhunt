@@ -35,6 +35,9 @@ function buildLibrary(entries, fileExists = () => true) {
   //    entry for a given savePath is the representative, but we remember every
   //    download id for that file so sends keyed to an older id still correlate.
   const byKey = new Map();
+  // Send correlation lookups (step 2): download id / filename → book.
+  const byId = new Map();
+  const byFilename = new Map();
   for (const e of list) {
     if (e.type !== 'download' || !e.savePath) continue;
     const key = bookKey(e);
@@ -53,14 +56,12 @@ function buildLibrary(entries, fileExists = () => true) {
         verified: !!e.verified,
         size: e.size || null,
         acquiredAt: e.timestamp,
-        _ids: new Set(),
-        _filenames: new Set(),
         sends: [],
       };
       byKey.set(key, book);
     }
-    if (e.id) book._ids.add(e.id);
-    if (e.filename) book._filenames.add(e.filename);
+    if (e.id && !byId.has(e.id)) byId.set(e.id, book);
+    if (e.filename && !byFilename.has(e.filename)) byFilename.set(e.filename, book);
     // Backfill from an older re-download if the representative lacks the field —
     // the newest entry is canonical, but covers/authors fill in where missing.
     if (!book.author && e.author) book.author = e.author;
@@ -71,7 +72,7 @@ function buildLibrary(entries, fileExists = () => true) {
   //    legacy notify entries written before downloadId was stamped.
   for (const e of list) {
     if (e.type !== 'notify') continue;
-    const book = matchSendToBook(e, byKey);
+    const book = (e.downloadId && byId.get(e.downloadId)) || (e.filename && byFilename.get(e.filename)) || null;
     if (!book) continue;
     book.sends.push({
       to: Array.isArray(e.to) ? e.to : e.to ? [e.to] : [],
@@ -84,10 +85,9 @@ function buildLibrary(entries, fileExists = () => true) {
   // 3. Finalize: resolve file presence and drop the internal bookkeeping fields.
   const books = [];
   for (const book of byKey.values()) {
-    const { _ids, _filenames, ...pub } = book;
-    pub.filePresent = !!fileExists(book.savePath);
+    book.filePresent = !!fileExists(book.savePath);
     // sends were pushed newest-first (entries are newest-first); keep that.
-    books.push(pub);
+    books.push(book);
   }
   return books;
 }
@@ -145,21 +145,6 @@ function removeBook(entries, id) {
   return { entries: keep, savePath: target.savePath, removed: true };
 }
 
-// Correlate a notify entry to a book: exact downloadId first, then filename.
-function matchSendToBook(notifyEntry, byKey) {
-  if (notifyEntry.downloadId) {
-    for (const book of byKey.values()) {
-      if (book._ids.has(notifyEntry.downloadId)) return book;
-    }
-  }
-  if (notifyEntry.filename) {
-    for (const book of byKey.values()) {
-      if (book._filenames.has(notifyEntry.filename)) return book;
-    }
-  }
-  return null;
-}
-
 /**
  * PURE: find the library books that match a { title, author } query, best first.
  * Used by the search route to surface "you already own this" BEFORE the Mobilism
@@ -214,10 +199,22 @@ function ownsBook(entry) {
  * that need it current use loadBooks() (or await ensureIndex() first).
  * Lazy requires — history/storage would otherwise form a require cycle.
  */
+// The history → books reshape is memoized on the history file's change token:
+// every cover image request (Library + reader shelf) needs the book list, and
+// re-reading + rebuilding it per image added up across a full page of covers.
+// File presence is NOT memoized — it's re-checked per call (a key-index lookup
+// in r2 mode), and each call gets fresh shallow copies so callers can't
+// corrupt the memo.
+let _memo = { sig: null, books: null };
+
 function currentBooks() {
   const history = require('./history');
   const store = require('./storage').get();
-  return buildLibrary(history.readAll(), (p) => store.existsSync(p));
+  const sig = history.signature();
+  if (!sig || sig !== _memo.sig || !_memo.books) {
+    _memo = { sig, books: buildLibrary(history.readAll()) };
+  }
+  return _memo.books.map((b) => ({ ...b, filePresent: !!store.existsSync(b.savePath) }));
 }
 
 /** currentBooks() after making sure the storage key index is loaded. */

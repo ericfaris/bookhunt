@@ -55,3 +55,59 @@ test('history and library agree after a logged download (no stale snapshot)', (t
   history.logDownload({ title: 'New One', author: 'A', filename: 'New One [A].epub', savePath: '/downloads/New One [A].epub', mode: 'premium', verified: true });
   assert.deepEqual(library.currentBooks().map((b) => b.title), ['New One']);
 });
+
+test('currentBooks: memoized on the history file — rebuilt after any write, presence always re-checked', (t) => {
+  fs.writeFileSync(process.env.HISTORY_FILE, JSON.stringify([dl('1', 'First', '/downloads/First [A].epub')]));
+  let present = true;
+  withDriver(t, { existsSync: () => present, ensureIndex: async () => {} });
+  const a = library.currentBooks();
+  assert.deepEqual(a.map((b) => b.title), ['First']);
+
+  a[0].title = 'MUTATED'; // callers get copies — the memo can't be corrupted
+  present = false;
+  const b = library.currentBooks();
+  assert.equal(b[0].title, 'First');
+  assert.equal(b[0].filePresent, false, 'presence is not memoized');
+
+  history.add({ type: 'download', title: 'Second', author: 'A', savePath: '/downloads/Second [A].epub', filename: 'Second [A].epub' });
+  assert.deepEqual(library.currentBooks().map((x) => x.title).sort(), ['First', 'Second']);
+
+  history.add({ type: 'notify', downloadId: '1', to: ['R'], channels: [] });
+  assert.equal(library.currentBooks().find((x) => x.title === 'First').sends.length, 1, 'a send invalidates too');
+});
+
+test('findDownload: by id, optionally requiring a stored file', () => {
+  fs.writeFileSync(process.env.HISTORY_FILE, JSON.stringify([
+    dl('1', 'Here', '/downloads/Here [A].epub'),
+    { id: '2', type: 'download', title: 'Link only', savePath: null },
+    { id: '3', type: 'search', title: 'nope' },
+  ]));
+  assert.equal(history.findDownload('1').title, 'Here');
+  assert.equal(history.findDownload('2').title, 'Link only');
+  assert.equal(history.findDownload('2', { withFile: true }), null);
+  assert.equal(history.findDownload('3'), null);
+  assert.equal(history.findDownload(''), null);
+});
+
+test('history pruning: only the newest N search / watch-hit entries are kept; books and sends never pruned', () => {
+  const entries = [];
+  for (let i = 0; i < 5; i++) entries.push({ id: 's' + i, type: 'search' }, { id: 'w' + i, type: 'watch-hit' });
+  entries.push(dl('d1', 'Book', '/downloads/Book [A].epub'), { id: 'n1', type: 'notify' }, { id: 'r1', type: 'reupload' });
+  const out = history.pruneEntries(entries, 2);
+  assert.deepEqual(out.filter((e) => e.type === 'search').map((e) => e.id), ['s0', 's1']);
+  assert.deepEqual(out.filter((e) => e.type === 'watch-hit').map((e) => e.id), ['w0', 'w1']);
+  assert.deepEqual(out.filter((e) => !['search', 'watch-hit'].includes(e.type)).map((e) => e.id), ['d1', 'n1', 'r1']);
+  assert.equal(history.pruneEntries(out, 2), out, 'nothing to cut → same array');
+});
+
+test('history.add of a search prunes old searches on write', () => {
+  const old = [];
+  for (let i = 0; i < history.KEEP_PER_TYPE + 5; i++) old.push({ id: 'old' + i, type: 'search', title: 't' });
+  old.push(dl('keep', 'Kept Book', '/downloads/Kept [A].epub'));
+  fs.writeFileSync(process.env.HISTORY_FILE, JSON.stringify(old));
+  history.logSearch({ title: 'new', author: '', sort: 'newest', resultCount: 0 });
+  const all = history.readAll();
+  assert.equal(all.filter((e) => e.type === 'search').length, history.KEEP_PER_TYPE);
+  assert.equal(all[0].title, 'new');
+  assert.ok(history.findDownload('keep'));
+});
