@@ -29,18 +29,7 @@ const TICK_MS = Number(process.env.LISTS_TICK_MS) || 3600000; // hourly wake; ru
 const LIST_MAX_ACTIVE = Number(process.env.LIST_MAX_ACTIVE) || 40;
 
 function operatorEmail() {
-  // Same resolution as the watcher/autowarm: explicit override → CF-Access
-  // email → SMTP identity.
-  const allowed = (process.env.CF_ACCESS_ALLOWED_EMAILS || '')
-    .split(',').map((s) => s.trim()).filter(Boolean);
-  return (
-    process.env.LISTS_ALERT_EMAIL ||
-    process.env.WATCH_ALERT_EMAIL ||
-    allowed[0] ||
-    process.env.SMTP_FROM ||
-    process.env.SMTP_USER ||
-    ''
-  );
+  return smtp.operatorEmail(['LISTS_ALERT_EMAIL', 'WATCH_ALERT_EMAIL']);
 }
 
 /**

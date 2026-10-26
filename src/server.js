@@ -25,7 +25,6 @@ const messages = require('./messages');
 const batch = require('./batch');
 const correct = require('./correct');
 const sources = require('./sources');
-const health = require('./health');
 const version = require('./version');
 const autowarm = require('./autowarm');
 const watchlist = require('./watchlist');
@@ -37,6 +36,7 @@ const reader = require('./reader');
 const { openSSE } = require('./sse');
 const datastore = require('./datastore');
 const storage = require('./storage');
+const delivery = require('./delivery');
 
 const PORT = process.env.PORT || 3000;
 const app = express();
@@ -835,21 +835,11 @@ app.delete('/api/library/:id', async (req, res) => {
   if (!removed) return res.status(404).json({ error: 'Library book not found.' });
   let fileDeleted = false;
   if (savePath && downloader.isSafeEpubPath(savePath, downloader.DOWNLOAD_PATH)) {
-    const store = storage.get();
-    if (store.mode === 'local') {
-      try {
-        const abs = path.resolve(savePath);
-        if (fs.existsSync(abs)) { fs.unlinkSync(abs); fileDeleted = true; }
-      } catch (err) {
-        console.error('Library delete: file removal failed:', err.message);
-      }
-    } else {
-      // R2: true iff the object was in the index; the delete itself is idempotent.
-      try {
-        fileDeleted = await store.remove(savePath);
-      } catch (err) {
-        console.error('Library delete: file removal failed:', err.message);
-      }
+    // true iff the file was there (local disk, or the R2 key index).
+    try {
+      fileDeleted = await storage.get().remove(savePath);
+    } catch (err) {
+      console.error('Library delete: file removal failed:', err.message);
     }
   }
   try { booktags.setTags(savePath, []); } catch { /* best effort */ }
@@ -1083,16 +1073,10 @@ app.get('/api/status', async (_req, res) => {
     /* leave defaults on a transient error */
   }
   const store = storage.get();
-  let download;
-  if (store.mode === 'local') {
-    const dir = downloader.DOWNLOAD_PATH;
-    const downloads = health.readDownloadStats(dir);
-    download = { path: dir, ...downloads, disk: health.freeSpace(dir) };
-  } else {
-    // R2 (#47): counts come from the key index (only .epub objects, like local).
-    const st = await store.stats().catch(() => ({ exists: false, count: 0, totalBytes: 0 }));
-    download = { path: store.displayPath(), ...st, disk: null, storage: store.healthInfo() };
-  }
+  // Counts are .epub files only: the local dir listing or the R2 key index.
+  const st = await store.stats().catch(() => ({ exists: false, count: 0, totalBytes: 0 }));
+  const download = { path: store.displayPath(), ...st, disk: store.disk() };
+  if (store.mode !== 'local') download.storage = store.healthInfo();
   res.json({
     version: version.info(),
     session,
@@ -1158,7 +1142,6 @@ app.post('/api/lists/run', async (_req, res) => {
 // --- Send: notify recipients (+ optional Kindle push) -----------------------
 app.post('/api/send', async (req, res) => {
   const { downloadId, recipientIds, channels, book } = req.body || {};
-  const pushToKindle = true; // always push to Kindle when recipient has a Kindle email
   if (!downloadId) return res.status(400).json({ error: 'Missing downloadId.' });
   if (!Array.isArray(recipientIds) || !recipientIds.length) {
     return res.status(400).json({ error: 'Pick at least one recipient.' });
@@ -1171,7 +1154,6 @@ app.post('/api/send', async (req, res) => {
   if (!downloader.isSafeEpubPath(entry.savePath, downloader.DOWNLOAD_PATH)) {
     return res.status(400).json({ error: 'Refusing to send that file.' });
   }
-  const filePath = path.resolve(entry.savePath);
   // Existence via storage (#47): local = fs.existsSync of the resolved path;
   // r2 = the key index (loaded once, no per-send HEAD).
   const store = storage.get();
@@ -1197,57 +1179,20 @@ app.post('/api/send', async (req, res) => {
     description: (book && book.description) || '',
     filename: entry.filename,
   };
-  // Fill any missing cover/blurb so the email always has artwork + a synopsis.
-  // CRUCIAL: only when we know the author — a title-only lookup can grab the
-  // wrong same-titled book (e.g. "Whistler"). With an author we use the SAME
-  // author-aware lookup the Library shows, so the email matches it; with no
-  // author we leave blanks rather than risk the wrong book. Fails soft.
-  if (bookInfo.author && (!bookInfo.cover || !bookInfo.description)) {
-    try {
-      if (!bookInfo.cover) {
-        bookInfo.cover = await covers.resolveCover({ title: bookInfo.title, author: bookInfo.author });
-      }
-      if (!bookInfo.description) {
-        const meta = await covers.resolveMeta({ title: bookInfo.title, author: bookInfo.author });
-        if (meta.description) bookInfo.description = meta.description;
-      }
-    } catch { /* leave blanks — never block a send on metadata */ }
-  }
-  // The same stored image the Library shows (incl. the ePUB's own cover once
-  // the Library has resolved it). The ePUB step is skipped here — it would read
-  // the book a second time on top of the Kindle attachment. A generated SVG
-  // jacket arrives rasterized to PNG, since email clients won't render SVG.
-  try {
-    const img = await coverstore.getEmailCoverImage({ ...bookInfo, savePath: entry.savePath, filePresent: true }, { epub: false });
-    if (img) { bookInfo.coverBuffer = img.bytes; bookInfo.coverMime = img.mime; }
-  } catch { /* fall back to the URL / placeholder */ }
+  // Fill any missing cover/blurb so the email always has artwork + a synopsis
+  // (author-gated — see delivery.fillMissingMeta), then attach the stored
+  // cover image the Library shows.
+  await delivery.fillMissingMeta(bookInfo);
+  await delivery.attachEmailCover(bookInfo, { savePath: entry.savePath, filePresent: true });
+
+  // The attachment is fetched at most once per send (not per recipient). A
+  // fetch failure surfaces as each recipient's Kindle error, never a 500.
+  const getAttachment = delivery.attachmentLoader(entry.savePath, store);
   const results = [];
-  // The attachment is fetched at most once per send (not per recipient): local
-  // passes the resolved path as before; r2 fetches the bytes from the bucket.
-  // A fetch failure surfaces as each recipient's Kindle error, never a 500.
-  let att = null;
-  let attErr = null;
   for (const r of recips) {
     const out = { id: r.id, name: r.name, kindle: null, channels: [] };
-
-    if (pushToKindle && r.kindleEmail) {
-      try {
-        if (!att && !attErr) {
-          try {
-            att = store.mode === 'local' ? { filePath } : await store.attachment(entry.savePath);
-          } catch (e) {
-            attErr = e;
-          }
-        }
-        if (attErr) throw attErr;
-        await kindle.pushToKindle({ kindleEmail: r.kindleEmail, filename: entry.filename, ...att });
-        out.kindle = { ok: true };
-      } catch (err) {
-        out.kindle = { ok: false, error: err.message };
-      }
-    } else if (pushToKindle && !r.kindleEmail) {
-      out.kindle = { ok: false, skipped: true, error: 'no Kindle email' };
-    }
+    // Always pushed when the recipient has a Kindle address.
+    out.kindle = await delivery.pushToKindle(r, { filename: entry.filename, getAttachment });
 
     out.channels = await notify.notify(r, { ...bookInfo, pushedToKindle: !!(out.kindle && out.kindle.ok) }, channels);
 

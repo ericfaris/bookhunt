@@ -196,7 +196,7 @@ function createLocalDriver({ root = DEFAULT_DOWNLOAD_PATH } = {}) {
     },
     stats: async () => health.readDownloadStats(rawRoot),
     disk: () => health.freeSpace(rawRoot),
-    attachment: async (savePath) => ({ filePath: savePath }),
+    attachment: async (savePath) => ({ filePath: path.resolve(savePath) }),
     healthInfo: () => ({ mode: 'local', ok: true }),
     displayPath: () => rawRoot,
   };

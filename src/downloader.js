@@ -407,18 +407,12 @@ async function runPremiumDownload(topicUrl, onProgress = () => {}, targetTitle) 
 }
 
 /**
- * Throw away a superseded/rejected saved download. Local mode is exactly the
- * original unscoped best-effort unlink; r2 mode deletes the stored object
- * (savePaths are logical in both modes, so winner/loser guards still compare
- * like with like).
+ * Throw away a superseded/rejected saved download, best effort: the local
+ * file or the stored R2 object (savePaths are logical in both modes, so
+ * winner/loser guards still compare like with like).
  */
 async function discardFile(p) {
-  const store = storage.get();
-  if (store.mode === 'local') {
-    try { fs.unlinkSync(p); } catch { /* best effort */ }
-    return;
-  }
-  try { await store.remove(p); } catch { /* best effort */ }
+  try { await storage.get().remove(p); } catch { /* best effort */ }
 }
 
 /**

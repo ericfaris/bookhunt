@@ -16,7 +16,6 @@
 // and the routes ride a tight rate limit in server.js.
 
 const crypto = require('crypto');
-const path = require('path');
 
 const recipients = require('./recipients');
 const history = require('./history');
@@ -150,16 +149,8 @@ function buildBooks() {
   // booktags.attachTags() to actually put tags on the books. Read the tag
   // store once, not once per book.
   // Existence goes through the storage layer (#47): local disk, or the R2 key
-  // index (callers load it first via ensureStorageIndex).
+  // index (callers load it first via storage.get().ensureIndex()).
   return booktags.attachTags(library.currentBooks(), booktags.readStore());
-}
-
-// Load the R2 key index before a sync buildBooks(). Local mode has no index,
-// so it deliberately does NOT await anything there: callers keep running
-// buildBooks() synchronously on entry, exactly as before #47.
-function ensureStorageIndex() {
-  const store = storage.get();
-  return store.mode === 'local' ? null : store.ensureIndex();
 }
 
 /** PURE: is this book actually sendable — verified AND still on disk? Shared
@@ -230,8 +221,7 @@ const largeCoverUrl = covers.largeCoverUrl;
  *  shelf wouldn't show. */
 async function findSendableBook(id) {
   if (!id || typeof id !== 'string') return null;
-  const pendingIndex = ensureStorageIndex();
-  if (pendingIndex) await pendingIndex;
+  await storage.get().ensureIndex();
   return sendableBooks(buildBooks()).find((x) => x.id === id) || null;
 }
 
@@ -285,8 +275,7 @@ function paginate(list, offset, limit) {
  * stable within a request). Returns `{ books, total, hasMore }`.
  */
 async function booksForReaderPage(recipient, offset = 0, limit = PAGE_SIZE) {
-  const pendingIndex = ensureStorageIndex();
-  if (pendingIndex) await pendingIndex;
+  await storage.get().ensureIndex();
   const { slice, total, hasMore } = paginate(sendableBooks(buildBooks()), offset, limit);
   const books = [];
   for (const b of slice) books.push(await toReaderTile(b, recipient));
@@ -356,8 +345,7 @@ function searchLibrary(books, query) {
 
 /** Search the whole library (not just the recent shelf) for one reader. */
 async function searchForReader(recipient, query) {
-  const pendingIndex = ensureStorageIndex();
-  if (pendingIndex) await pendingIndex;
+  await storage.get().ensureIndex();
   const hits = searchLibrary(buildBooks(), query);
   const out = [];
   for (const b of hits) out.push(await toReaderTile(b, recipient));
@@ -411,40 +399,28 @@ async function sendToReader(recipient, downloadId) {
   if (!sendAllowed(recipient.id)) {
     throw Object.assign(new Error('That’s a lot of books at once! Give it an hour and try again.'), { code: 'throttled' });
   }
+  const gone = () => Object.assign(new Error('That book is no longer available.'), { code: 'gone' });
   const entry = history.findDownload(downloadId);
-  if (!entry || !entry.savePath || !entry.verified) {
-    throw Object.assign(new Error('That book is no longer available.'), { code: 'gone' });
-  }
-  if (!downloader.isSafeEpubPath(entry.savePath, downloader.DOWNLOAD_PATH)) {
-    throw Object.assign(new Error('That book is no longer available.'), { code: 'gone' });
-  }
+  if (!entry || !entry.savePath || !entry.verified) throw gone();
+  if (!downloader.isSafeEpubPath(entry.savePath, downloader.DOWNLOAD_PATH)) throw gone();
   // The file itself may have been deleted (library cleanup, manual removal)
   // even though history still has a verified entry for it. Without this check
   // a missing file surfaces as a raw 500 from nodemailer's attachment read
-  // instead of the intended, friendlier 410 "gone".
-  // Existence + bytes go through storage (#47): local disk as before, or the
-  // R2 key index + a GetObject.
+  // instead of the intended, friendlier 410 "gone". Existence + bytes go
+  // through storage (#47): local disk, or the R2 key index + a GetObject.
   const store = storage.get();
   await store.ensureIndex();
   let onDisk = false;
   try { onDisk = store.existsSync(entry.savePath); } catch { onDisk = false; }
-  if (!onDisk) {
-    throw Object.assign(new Error('That book is no longer available.'), { code: 'gone' });
-  }
+  if (!onDisk) throw gone();
   let att;
-  if (store.mode === 'local') {
-    att = { filePath: path.resolve(entry.savePath) };
-  } else {
-    try {
-      att = await store.attachment(entry.savePath);
-    } catch (err) {
-      // The index said present but the object is gone (deleted elsewhere since
-      // the last refresh) → the same friendly "gone", not a raw 500.
-      if (err && (err.name === 'NoSuchKey' || (err.$metadata && err.$metadata.httpStatusCode === 404))) {
-        throw Object.assign(new Error('That book is no longer available.'), { code: 'gone' });
-      }
-      throw err;
-    }
+  try {
+    att = await store.attachment(entry.savePath);
+  } catch (err) {
+    // The index said present but the object is gone (deleted elsewhere since
+    // the last refresh) → the same friendly "gone", not a raw 500.
+    if (err && (err.name === 'NoSuchKey' || (err.$metadata && err.$metadata.httpStatusCode === 404))) throw gone();
+    throw err;
   }
   await kindle.pushToKindle({
     kindleEmail: recipient.kindleEmail,
@@ -762,8 +738,7 @@ function announcementTargets(list, id) {
 async function pickAnnouncementSample(opts = {}) {
   const resolve = opts.resolveMeta || covers.resolveMeta;
   const tries = opts.tries || 8;
-  const pendingIndex = ensureStorageIndex();
-  if (pendingIndex) await pendingIndex;
+  await storage.get().ensureIndex();
   for (const b of sendableBooks(buildBooks()).slice(0, tries)) {
     let meta = { cover: null, description: null };
     try { meta = (await resolve({ title: b.title, author: b.author })) || meta; } catch { continue; }
@@ -828,8 +803,7 @@ async function invite(id) {
  */
 async function notifyNewBooks() {
   if (!smtp.isConfigured()) return 0;
-  const pendingIndex = ensureStorageIndex();
-  if (pendingIndex) await pendingIndex;
+  await storage.get().ensureIndex();
   const now = Date.now();
   const recent = recentBooks(buildBooks(), now);
   if (!recent.length) return 0;

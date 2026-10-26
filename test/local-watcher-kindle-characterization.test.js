@@ -1,9 +1,9 @@
 'use strict';
 
-// Characterization test (issue #47): pin TODAY's watcher Kindle push in local
-// mode — it passes the download's savePath UNRESOLVED as filePath, with exactly
-// { kindleEmail, filePath, filename }. Written and passing against the
-// unmodified code; must stay green, unchanged. Stubbing mirrors
+// Characterization test (issue #47): pin the watcher Kindle push in local mode
+// — exactly { kindleEmail, filePath, filename }. Since the delivery helpers
+// were shared (src/delivery.js) the path is RESOLVED, like /api/send and the
+// reader send always did (it used to pass the savePath unresolved). Stubbing mirrors
 // test/watcher.test.js (the watcher calls its deps via the module objects).
 const { test } = require('node:test');
 const assert = require('node:assert');
@@ -21,7 +21,7 @@ const listwatcher = require('../src/listwatcher');
 const covers = require('../src/covers');
 const watcher = require('../src/watcher');
 
-test('local watcher autoDeliver: pushToKindle gets exactly { kindleEmail, filePath: savePath (unresolved), filename }', async () => {
+test('local watcher autoDeliver: pushToKindle gets exactly { kindleEmail, filePath: resolved savePath, filename }', async () => {
   const targets = [
     [searcher, 'search', async () => ({ results: [{ title: 'Dune', author: 'Herbert', url: 'https://forum.mobilism.org/t1', premium: true }] })],
     [watchlist, 'update', () => {}],
@@ -57,5 +57,5 @@ test('local watcher autoDeliver: pushToKindle gets exactly { kindleEmail, filePa
     else process.env.WATCH_ALERT_EMAIL = prevAlert;
   }
   assert.equal(pushes.length, 1);
-  assert.deepStrictEqual(pushes[0], { kindleEmail: 'sam@kindle.com', filePath: 'relative/dir/../Dune.epub', filename: 'Dune.epub' });
+  assert.deepStrictEqual(pushes[0], { kindleEmail: 'sam@kindle.com', filePath: require('node:path').resolve('relative/dir/../Dune.epub'), filename: 'Dune.epub' });
 });
