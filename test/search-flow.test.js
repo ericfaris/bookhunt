@@ -149,3 +149,23 @@ test('detailKey: strips sid/hilit/hash, keeps the topic identity', () => {
   assert.equal(a, `${searcher.BASE_URL}/viewtopic.php?f=1&t=5`);
   assert.notEqual(a, searcher.detailKey(`${searcher.BASE_URL}/viewtopic.php?f=1&t=6`));
 });
+
+test('request thread: the download link posted as a REPLY is picked up (Lady Tremaine, 2026-10-27)', async () => {
+  const forum = createFakeForum({
+    searches: { 'Lady Tremaine Rachel Hochhauser': [['Looking for Lady Tremaine by Rachel Hochhauser', '70']] },
+    topics: {
+      70: {
+        title: 'Looking for Lady Tremaine by Rachel Hochhauser',
+        text: "Name and Author of eBook: Lady Tremaine by Rachel Hochhauser\nI would prefer .epub",
+        premium: true,
+        links: [
+          { url: 'https://www.amazon.com/dp/B0F5PC98JW', premium: false, sectionHeader: '', post: 0 },
+          { url: 'https://filer.example/lady-tremaine.epub', premium: true, sectionHeader: '', post: 1 },
+        ],
+      },
+    },
+  });
+  const { results } = await run(forum, { title: 'Lady Tremaine', author: 'Rachel Hochhauser' });
+  assert.equal(results.length, 1);
+  assert.deepEqual(results[0].postlinks.map((l) => l.url), ['https://filer.example/lady-tremaine.epub']);
+});

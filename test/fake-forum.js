@@ -32,7 +32,7 @@ function createFakeForum({ searches = {}, topics = {}, loggedOutLoads = 0 } = {}
       if (src.includes('div.content')) {
         const t = topics[new URL(current).searchParams.get('t')];
         if (!t) return null;
-        return { url: current, title: t.title, cover: null, text: t.text, links: [], premium: false };
+        return { url: current, title: t.title, cover: null, text: t.text, links: t.links || [], premium: !!t.premium };
       }
       return undefined; // window.stop() on cancel
     },

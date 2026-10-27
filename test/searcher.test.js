@@ -3,7 +3,7 @@
 const { test } = require('node:test');
 const assert = require('node:assert');
 
-const { normalize, fuzzyMatch, fuzzyMatchLine, isCollection, bylineMismatch, authorKeywords, titleKeywords, titleDeclaresNonEpub, titleLooksLikeAudiobook, collectionResult } = require('../src/searcher');
+const { normalize, fuzzyMatch, fuzzyMatchLine, isCollection, bylineMismatch, authorKeywords, titleKeywords, titleDeclaresNonEpub, titleLooksLikeAudiobook, collectionResult, pickPostLinks } = require('../src/searcher');
 
 test('normalize: lowercases, strips punctuation, collapses space', () => {
   assert.equal(normalize('1984: Illustrated!'), '1984 illustrated');
@@ -344,4 +344,35 @@ test('bylineMismatch: someone else\'s set is rejected, the author\'s own (or unb
   assert.equal(bylineMismatch('Some Series by Anyone', ''), false);
   // "by" inside the set name, author last: the LAST byline decides
   assert.equal(bylineMismatch('Stand by Me Collection by Jane Doe', 'Jane Doe'), false);
+});
+
+test('pickPostLinks: opening post wins when it has a premium link', () => {
+  const links = [
+    { url: 'a', premium: true, post: 0 },
+    { url: 'b', premium: true, post: 1 },
+  ];
+  assert.deepEqual(pickPostLinks(links).map((l) => l.url), ['a']);
+});
+
+test('pickPostLinks: request thread — no premium link up top, reply premium links used', () => {
+  const links = [
+    { url: 'amazon', premium: false, post: 0 },
+    { url: 'thanks-ref', premium: false, post: 2 },
+    { url: 'm1', premium: true, post: 1 },
+    { url: 'm2', premium: true, post: 1 },
+  ];
+  assert.deepEqual(pickPostLinks(links).map((l) => l.url), ['m1', 'm2']);
+});
+
+test('pickPostLinks: no premium anywhere — opening post links only (standard-links upload)', () => {
+  const links = [
+    { url: 's1', premium: false, post: 0 },
+    { url: 'reply-link', premium: false, post: 1 },
+  ];
+  assert.deepEqual(pickPostLinks(links).map((l) => l.url), ['s1']);
+});
+
+test('pickPostLinks: links without a post index are treated as the opening post', () => {
+  assert.deepEqual(pickPostLinks([{ url: 'x', premium: false }]).map((l) => l.url), ['x']);
+  assert.deepEqual(pickPostLinks(undefined), []);
 });

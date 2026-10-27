@@ -752,7 +752,11 @@ async function scrapeDetail(page, topicUrl, signal) {
   await gotoAuthed(page, topicUrl);
 
   const raw = await page.evaluate(() => {
-    const content = document.querySelector('div.content');
+    // Every post on the page: [0] is the opening post, the rest are replies.
+    // Replies matter for request threads ("Looking for X by Y"), where the
+    // download link is posted as an answer, not in the opening post.
+    const contents = [...document.querySelectorAll('div.content')];
+    const content = contents[0];
     if (!content) return null;
     const img = content.querySelector('img');
 
@@ -768,7 +772,8 @@ async function scrapeDetail(page, topicUrl, signal) {
     // "W:" (Whistler) or "TL:" — without it, those links inherit the PREVIOUS
     // section and a per-book download grabs the wrong book (or the all-books archive).
     const isHeader = (t) => t.length > 2 || /[:：]$/.test(t);
-    (function walk(node) {
+    let postIndex = 0;
+    function walk(node) {
       if (!node) return;
       if (node.nodeType === 3) { // Text node
         const t = node.textContent.trim();
@@ -789,7 +794,7 @@ async function scrapeDetail(page, topicUrl, signal) {
             break;
           }
         }
-        links.push({ url: node.href, premium, sectionHeader: currentSection });
+        links.push({ url: node.href, premium, sectionHeader: currentSection, post: postIndex });
         return; // don't recurse into the link itself
       }
       // Update section for header-like elements that don't themselves contain links
@@ -798,7 +803,8 @@ async function scrapeDetail(page, topicUrl, signal) {
         if (isHeader(t)) currentSection = t;
       }
       for (const child of node.childNodes) walk(child);
-    })(content);
+    }
+    contents.forEach((c, i) => { postIndex = i; currentSection = ''; walk(c); });
 
     const premium = !!document.querySelector('img.MobilismDownloaderIcon');
 
@@ -838,7 +844,7 @@ async function scrapeDetail(page, topicUrl, signal) {
   // Deduplicate postlinks by href and attach a host label.
   const seenLinks = new Set();
   const postlinks = [];
-  for (const l of raw.links) {
+  for (const l of pickPostLinks(raw.links)) {
     if (seenLinks.has(l.url)) continue;
     seenLinks.add(l.url);
     postlinks.push({ host: hostLabel(l.url), url: l.url, premium: l.premium, sectionHeader: l.sectionHeader || '' });
@@ -856,6 +862,22 @@ async function scrapeDetail(page, topicUrl, signal) {
     premium: raw.premium,
     postlinks,
   };
+}
+
+/**
+ * PURE: which scraped links belong to the post's download. Normally the opening
+ * post's (post 0). A request thread ("Looking for X by Y") has no premium link
+ * up top — at most a reference link (Amazon/Goodreads) — and the file arrives
+ * as a REPLY, so when the opening post has no premium-flagged link, use the
+ * replies' premium links instead. Downloads still go through ePUB + embedded-
+ * title verification, so a reply carrying some other book can't slip through.
+ */
+function pickPostLinks(links) {
+  const all = Array.isArray(links) ? links : [];
+  const first = all.filter((l) => !l.post);
+  if (first.some((l) => l.premium)) return first;
+  const replyPremium = all.filter((l) => l.post && l.premium);
+  return replyPremium.length ? replyPremium : first;
 }
 
 // `row` carries date + category scraped from the search-results listing, which
@@ -1127,5 +1149,6 @@ module.exports = {
   titleLooksLikeAudiobook,
   collectionResult,
   resultForRow,
+  pickPostLinks,
   throwIfCancelled,
 };

@@ -891,7 +891,7 @@ img.lib-cover { overflow: hidden; }
 }
 @keyframes warm-bob { 0%, 100% { transform: translateY(0) rotate(-2deg); } 50% { transform: translateY(-1px) rotate(2deg); } }
 
-.warm-copy { display: flex; flex-direction: column; line-height: 1.25; min-width: 0; max-width: 60ch; }
+.warm-copy { display: flex; flex-direction: column; line-height: 1.25; min-width: 0; max-width: 110ch; }
 .warm-headline { font-weight: 700; }
 .warm-headline.swap { animation: warm-fade 0.5s ease; }
 @keyframes warm-fade { from { opacity: 0; transform: translateY(3px); } to { opacity: 1; transform: none; } }
