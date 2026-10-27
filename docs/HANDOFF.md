@@ -31,11 +31,14 @@ MOBILISM_USER/PASS, MOBILISM_PREMIUM_USER/PASS, CF_ACCESS_TEAM_DOMAIN/AUD/ALLOWE
 3. `src/reupload.js` forum-control selectors are still guesswork; tune them from logs if outcomes look wrong.
 4. Consider adding eslint (`no-unused-vars`, `no-undef`) to `npm test`. A throwaway run caught real dead code during the refactor.
 
+5. 2026-10-27: request threads are now handled. Links are read from every post, and reply premium links are used when the opening post has none. Premium-icon detection now actually flags links; before, every link came back non-premium. Watch the next few watcher runs for unexpected mirror selection: `selectPremiumLinks` now filters to flagged links where it used to fall back to all of them.
+
 ## Decisions that may get revisited
 - Topic-cache TTL is 20 min: long enough for search → download, short enough for updated set threads. The watcher's re-check interval is longer, so watch re-checks still scrape fresh.
 - History prunes only `search` / `watch-hit` entries (History view only); downloads, sends and re-uploads are kept forever.
 
 ## Gotchas
+- "no verified ePUB in N results" with no errors means 0 mirrors were found, not a wrong book. Inspect the real thread DOM via a copied browser profile (see LESSONS 2026-10-27).
 - A stale open tab can run old `app.js` after a deploy; assets are content-hashed (`?v=`) but ask for a hard refresh first.
 - `prefillFromQuery()` must stay at the bottom of `public/app.js` (TDZ).
 - Single-file bind mounts: never rename over a store file (datastore writes in place after verifying a tmp copy).

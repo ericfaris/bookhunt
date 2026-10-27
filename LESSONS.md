@@ -126,3 +126,9 @@
 - The 10-02 `reader-buildbooks` "no await allowed" gotcha is gone: its `withTagStore` helper now awaits, so reader entry points simply `await storage.get().ensureIndex()`.
 - **Footgun:** `pkill -f "node src/server.js"` on the host also matches the PRODUCTION container's process (containers' processes show up in the host's `ps`). It SIGTERMed prod; Docker restarted it cleanly. Stop a local smoke server by PID (`$!`) or by a unique PORT pattern, never by the bare command line.
 - No eslint in the repo. A throwaway `eslint@9` (`no-unused-vars`, `no-undef`) in a scratch dir caught 28 dead requires and one undefined name after splitting `server.js` into `src/routes/*`. Worth doing after any large move.
+
+## 2026-10-27 — Request threads fulfilled in a reply (Lady Tremaine)
+- "no verified ePUB in N results" with an empty `errors` list means 0 mirrors were tried; it is not a wrong-book rejection, which reads "embedded title mismatch". The only hit was a "Looking for X by Y" request thread whose file came in a REPLY, and `scrapeDetail` read only the first `div.content`.
+- Second bug: the premium-icon check looked 3 siblings past each `a.postlink`, but the real markup is link → (`<style>` on the page's first link) → QR `<a>` → lightbox `<div>` → `<script>` → `img.MobilismDownloaderIcon`. Links were never flagged premium, which `selectPremiumLinks` papered over by falling back to all links. The scan now goes up to 8 siblings and stops at the next postlink.
+- To see the real forum DOM without disturbing the live session, copy the browser profile in-container (`cp -r $PROFILE_DIR /tmp/prof-copy; rm /tmp/prof-copy/Singleton*`) and run a throwaway Playwright script headed on the container's `DISPLAY=:99`. Delete the copy afterwards.
+- `page.evaluate` DOM-walking code isn't covered by unit tests (the fake forum stubs `evaluate`), so verify it live with `POST /api/download` on the real thread.

@@ -783,9 +783,14 @@ async function scrapeDetail(page, topicUrl, signal) {
       if (node.nodeType !== 1) return;
       const tag = node.tagName.toLowerCase();
       if (tag === 'a' && node.classList && node.classList.contains('postlink')) {
+        // The Premium icon follows its link, after the QR button, its lightbox,
+        // a <script> and (on the first link of a page) a <style> — up to five
+        // elements on. Stop at the next postlink so an icon is never credited
+        // to the link before its own.
         let premium = false;
         let n = node.nextElementSibling;
-        for (let i = 0; n && i < 3; i++, n = n.nextElementSibling) {
+        for (let i = 0; n && i < 8; i++, n = n.nextElementSibling) {
+          if (n.matches && n.matches('a.postlink')) break;
           if (
             (n.matches && n.matches('img.MobilismDownloaderIcon')) ||
             (n.querySelector && n.querySelector('img.MobilismDownloaderIcon'))
