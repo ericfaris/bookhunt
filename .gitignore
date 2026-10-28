@@ -17,3 +17,6 @@ lists.json
 cover-images/
 booktags.json.bak-*
 downloads/
+
+# Impeccable design-critique snapshots (local tooling state)
+.impeccable/
