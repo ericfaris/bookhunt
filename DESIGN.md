@@ -159,19 +159,23 @@ Two families, same as before, now scaled formally:
 - **Body / UI**: `system-ui, -apple-system, "Segoe UI", Roboto, sans-serif`
   — the native platform face. Deliberate: this is a personal utility, not a
   brand statement; body copy should disappear and let content lead.
-- **Display / brand voice**: `--font-rounded` = `ui-rounded, "SF Pro Rounded",
-  "Hiragino Maru Gothic ProN", "Quicksand", "Segoe UI", system-ui,
-  sans-serif` — a soft, rounded, friendly face used only where the app's
-  personality should show through: the wordmark, all `h1`/`h2`/`h3`, modal
-  titles, empty-state titles, section headings. Rounded terminals read as
+- **Display / brand voice**: `--font-rounded` = `"Nunito", ui-rounded,
+  "SF Pro Rounded", "Hiragino Maru Gothic ProN", "Quicksand", "Segoe UI",
+  system-ui, sans-serif` — a soft, rounded, friendly face used only where the
+  app's personality should show through: the wordmark (800), all
+  `h1`/`h2`/`h3`, modal titles, empty-state titles, section headings; on the
+  reader page also book titles and tip headings. Rounded terminals read as
   approachable/cozy rather than corporate, matching the "coffee mug" warm
   banner and the hand-drawn logo.
 
-No self-hosted webfont: `ui-rounded`/`SF Pro Rounded` cost nothing to load
-(native on Apple platforms) and the fallback chain (`Quicksand` → system-ui)
-degrades gracefully on Windows/Linux/Android without a network request —
-right call for an app that must work over a phone's mobile data while
-someone's fetching a book.
+**Self-hosted Nunito** (variable weight, latin subset, 39KB woff2, SIL OFL —
+`public/fonts/`). Previously the stack relied on `ui-rounded`, which only
+exists on Apple platforms, so Windows/Linux (including the desktop the admin
+is designed for) never showed the rounded voice. Nunito comes first so every
+OS renders the same face; `font-display: swap` + a `<link rel="preload">`
+keep it from blocking text. The admin loads `/fonts/…`; the reader loads the
+same file from `/reader/fonts/…` because only `/reader/*` is outside
+Cloudflare Access. Body text stays system-ui (no extra request for it).
 
 ### Type scale (new — `--text-*` tokens)
 

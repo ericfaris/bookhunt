@@ -204,6 +204,21 @@ test('reader.js: announces the feature once via the reusable spotlight, keyed fo
   assert.match(js, /id: 'shelf-search-2026-07'/);
 });
 
+test('GET /reader/fonts/nunito-latin-wght.woff2: served past CF Access as a cacheable font', async () => {
+  const http = require('node:http');
+  await withServer(app, (port) => new Promise((resolve, reject) => {
+    http.get({ host: '127.0.0.1', port, path: '/reader/fonts/nunito-latin-wght.woff2' }, (res) => {
+      res.resume();
+      try {
+        assert.equal(res.statusCode, 200);
+        assert.match(res.headers['content-type'], /font\/woff2/);
+        assert.match(res.headers['cache-control'], /immutable/);
+        resolve();
+      } catch (e) { reject(e); }
+    }).on('error', reject);
+  }));
+});
+
 // --- Announcement email ------------------------------------------------------------
 
 const smtp = require('../src/smtp');

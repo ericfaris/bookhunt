@@ -78,6 +78,12 @@ router.get('/reader/icon-:size.png', (req, res) => {
   res.setHeader('Cache-Control', 'public, max-age=86400');
   res.sendFile(path.join(PUBLIC_DIR, file));
 });
+// The display font, for the same reason (public/fonts, Nunito, SIL OFL).
+router.get('/reader/fonts/nunito-latin-wght.woff2', (req, res) => {
+  res.setHeader('Cache-Control', 'public, max-age=2592000, immutable');
+  res.type('font/woff2');
+  res.sendFile(path.join(PUBLIC_DIR, 'fonts', 'nunito-latin-wght.woff2'));
+});
 router.get('/reader/favicon.ico', (req, res) => {
   res.setHeader('Cache-Control', 'public, max-age=86400');
   res.sendFile(path.join(PUBLIC_DIR, 'favicon.ico'));

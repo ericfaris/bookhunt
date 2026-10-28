@@ -171,3 +171,15 @@ test('reader.html: a11y fixes — labelled search, single clear button, calm pul
   assert.ok(html.includes('.err { color: var(--err);'));
   assert.ok(!/\.err \{ color: #c0392b/.test(html));
 });
+
+// --- Self-hosted display font (critique 2026-10-27) ---------------------------
+
+test('Nunito ships for both surfaces; reader gets it from under /reader/*', () => {
+  const css = fs.readFileSync(path.join(PUBLIC, 'style.css'), 'utf8');
+  assert.ok(fs.statSync(path.join(PUBLIC, 'fonts', 'nunito-latin-wght.woff2')).size > 10_000);
+  assert.ok(fs.existsSync(path.join(PUBLIC, 'fonts', 'Nunito-OFL.txt')), 'OFL licence shipped with the font');
+  assert.match(css, /@font-face \{\s*font-family: "Nunito";\s*src: url\("\/fonts\/nunito-latin-wght\.woff2"\)/);
+  assert.match(css, /--font-rounded: "Nunito", ui-rounded/, 'Nunito comes first so every OS gets it');
+  assert.ok(html.includes('url("/reader/fonts/nunito-latin-wght.woff2")'), 'reader font is inside the CF Access bypass');
+  assert.ok(!html.includes('url("/fonts/'), 'reader never points at a CF-Access-walled path');
+});

@@ -14,6 +14,7 @@
 <meta name="apple-mobile-web-app-title" content="BookHunt">
 <link rel="apple-touch-icon" href="/reader/icon-180.png">
 <link rel="icon" href="/reader/favicon.ico" sizes="any">
+<link rel="preload" href="/reader/fonts/nunito-latin-wght.woff2" as="font" type="font/woff2" crossorigin>
 <style>
   /* Same values as the admin's style.css tokens (DESIGN.md §3/§9): --accent is
      the brand orange for rings and the logo; buttons use --accent-fill with
@@ -31,6 +32,13 @@
       --accent-glow: rgba(0, 0, 0, 0.4);
       --good: #43c97f; --warn: #e0a049; --err: #ff6b57; }
   }
+  /* Same self-hosted Nunito as the admin, served under /reader/* so it clears
+     Cloudflare Access. Display only: wordmark, book titles, tip headings. */
+  @font-face { font-family: "Nunito"; src: url("/reader/fonts/nunito-latin-wght.woff2") format("woff2");
+    font-weight: 200 1000; font-style: normal; font-display: swap;
+    unicode-range: U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD; }
+  :root { --font-rounded: "Nunito", ui-rounded, "SF Pro Rounded", "Segoe UI", system-ui, sans-serif; }
+  header .logo, .t, .book h2, .spotlight-bubble .st, .install .it b { font-family: var(--font-rounded); }
   * { box-sizing: border-box; }
   body { margin: 0; background: var(--bg); color: var(--text);
     font-family: -apple-system, "Segoe UI", Roboto, sans-serif; }
