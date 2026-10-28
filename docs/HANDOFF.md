@@ -33,6 +33,8 @@ MOBILISM_USER/PASS, MOBILISM_PREMIUM_USER/PASS, CF_ACCESS_TEAM_DOMAIN/AUD/ALLOWE
 
 5. 2026-10-27: request threads are now handled. Links are read from every post, and reply premium links are used when the opening post has none. Premium-icon detection now actually flags links; before, every link came back non-premium. Watch the next few watcher runs for unexpected mirror selection: `selectPremiumLinks` now filters to flagged links where it used to fall back to all of them.
 
+6. 2026-10-27 design critique (`/impeccable critique`, snapshots in `.impeccable/critique/`, untracked). All four P1s are fixed on main (reader books-first + honest send flow, Watchlist closes watches for owned books, AA contrast tokens, self-hosted Nunito). **Not yet deployed** when this was written; check `git log` against the running version. Deferred P2s: Watchlist/Readers button density (move Pause/Remove into More▾), labelled + focus-visible Library tile actions (no bare 📧🗑✎), mapping raw downloader errors to plain reasons, and a quieter tile Send on the reader. Re-run `/impeccable critique` after (baseline: admin 26/40, reader 24/40).
+
 ## Decisions that may get revisited
 - Topic-cache TTL is 20 min: long enough for search → download, short enough for updated set threads. The watcher's re-check interval is longer, so watch re-checks still scrape fresh.
 - History prunes only `search` / `watch-hit` entries (History view only); downloads, sends and re-uploads are kept forever.
@@ -41,4 +43,7 @@ MOBILISM_USER/PASS, MOBILISM_PREMIUM_USER/PASS, CF_ACCESS_TEAM_DOMAIN/AUD/ALLOWE
 - "no verified ePUB in N results" with no errors means 0 mirrors were found, not a wrong book. Inspect the real thread DOM via a copied browser profile (see LESSONS 2026-10-27).
 - A stale open tab can run old `app.js` after a deploy; assets are content-hashed (`?v=`) but ask for a hard refresh first.
 - `prefillFromQuery()` must stay at the bottom of `public/app.js` (TDZ).
+- `public/reader.js` top-level helpers read by the async IIFE (`SENT_HELP`, `spotlightShownThisVisit`) are `var`, not `const`/`let`: the IIFE starts before those lines run, so a `let` there would hit the TDZ.
+- Colors: never put a label on `--accent` or use it as a text color. Fills take `--accent-fill` + `--on-accent`, and orange text takes `--accent-ink`. `test/contrast.test.js` enforces AA for both stylesheets.
+- Reader-page assets (JS, icons, fonts) must be served under `/reader/*`; anything else sits behind Cloudflare Access, which readers can't pass.
 - Single-file bind mounts: never rename over a store file (datastore writes in place after verifying a tmp copy).

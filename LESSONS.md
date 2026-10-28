@@ -132,3 +132,12 @@
 - Second bug: the premium-icon check looked 3 siblings past each `a.postlink`, but the real markup is link → (`<style>` on the page's first link) → QR `<a>` → lightbox `<div>` → `<script>` → `img.MobilismDownloaderIcon`. Links were never flagged premium, which `selectPremiumLinks` papered over by falling back to all links. The scan now goes up to 8 siblings and stops at the next postlink.
 - To see the real forum DOM without disturbing the live session, copy the browser profile in-container (`cp -r $PROFILE_DIR /tmp/prof-copy; rm /tmp/prof-copy/Singleton*`) and run a throwaway Playwright script headed on the container's `DISPLAY=:99`. Delete the copy afterwards.
 - `page.evaluate` DOM-walking code isn't covered by unit tests (the fake forum stubs `evaluate`), so verify it live with `POST /api/download` on the real thread.
+
+## 2026-10-27 — Design critique → P1 fixes (reader, watchlist, contrast, type)
+- DESIGN.md claimed white on `#f1592a` (3.4:1) was fine for 0.95rem/600 labels as "large text". It isn't: bold "large" starts at 18.66px. Split the accent into roles (brand / fill + on-accent / ink). Dark mode uses navy labels on bright orange rather than white. A token-reading test (`test/contrast.test.js`) now guards it, because the doc alone had drifted.
+- The reader's dark palette had silently drifted from the admin's, even though DESIGN.md §9 said "values match". The contrast test now asserts the two dark palettes are equal.
+- `ui-rounded` exists only on Apple platforms, so the "rounded brand voice" never showed on the Windows desktop the admin is designed for. Self-hosting a 39KB Nunito fixed it. The reader copy must load it from `/reader/fonts/` (CF Access).
+- A watch closed only through the watcher's own download path, so a manual download left it "retrying" for days. `watcher.reconcileOwned()` closes titled watches whose book is owned, but never author-only ones, since owning one book by an author says nothing about the next.
+- "Sent" ≠ delivered: Amazon silently drops mail from unapproved senders, so the reader UI now says "Sent to your Kindle" and names the fix, rather than "On your Kindle".
+- Verifying UI without touching prod: Playwright `context.route('http://bh.test/**')` serves `public/` plus mocked `/api/*` JSON. It is safe, fast, and covers both themes and phone widths. Driving the live admin with a cached `cloudflared access token` cookie also works read-only, if every non-GET request is aborted in a route guard.
+
