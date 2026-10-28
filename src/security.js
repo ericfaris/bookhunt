@@ -92,16 +92,83 @@ const ACCESS_ENABLED = !!(TEAM_DOMAIN && AUD);
 // kid miss in case a rotation just happened).
 let keysCache = { keys: [], at: 0 };
 const KEYS_TTL_MS = 60 * 60 * 1000;
+const JWKS_FETCH_TIMEOUT_MS = 5000;
+const STALE_RETRY_MS = 60 * 1000;
+
+// "Couldn't verify" (Cloudflare's JWKS endpoint unreachable — DNS/network
+// outage) is not "token invalid". Callers answer it with 503, not 401, so an
+// infrastructure blip doesn't read as an auth/security event. Still fails
+// closed: nothing gets through unverified.
+class JwksUnavailableError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = 'JwksUnavailableError';
+    this.code = 'JWKS_UNAVAILABLE';
+  }
+}
+
+async function fetchKeys() {
+  let res;
+  try {
+    res = await fetch(`https://${TEAM_DOMAIN}/cdn-cgi/access/certs`, {
+      signal: AbortSignal.timeout(JWKS_FETCH_TIMEOUT_MS),
+    });
+  } catch (err) {
+    // undici's "fetch failed" hides the real reason (EAI_AGAIN etc.) in .cause
+    const cause = err.cause && err.cause.message ? `: ${err.cause.message}` : '';
+    throw new JwksUnavailableError(`JWKS fetch failed (${err.message}${cause})`);
+  }
+  if (!res.ok) throw new JwksUnavailableError(`JWKS fetch failed (HTTP ${res.status})`);
+  let body;
+  try {
+    body = await res.json();
+  } catch (err) {
+    throw new JwksUnavailableError(`JWKS fetch failed (bad JSON: ${err.message})`);
+  }
+  const keys = Array.isArray(body.keys) ? body.keys : [];
+  if (!keys.length) throw new JwksUnavailableError('JWKS fetch failed (no keys in response)');
+  return keys;
+}
 
 async function getKeys(force) {
   if (!force && keysCache.keys.length && Date.now() - keysCache.at < KEYS_TTL_MS) {
     return keysCache.keys;
   }
-  const res = await fetch(`https://${TEAM_DOMAIN}/cdn-cgi/access/certs`);
-  if (!res.ok) throw new Error(`JWKS fetch failed (${res.status})`);
-  const body = await res.json();
-  keysCache = { keys: Array.isArray(body.keys) ? body.keys : [], at: Date.now() };
+  try {
+    keysCache = { keys: await fetchKeys(), at: Date.now() };
+  } catch (err) {
+    // Serve stale keys rather than lock everyone out: Cloudflare rotates
+    // rarely, so the last good set is almost always still the right one.
+    // Not on a forced (kid-miss) refresh: the cached set already lacks that
+    // kid, so we genuinely can't verify — let it surface as unavailable.
+    // Retry in a minute rather than putting a timed-out fetch on every request.
+    if (keysCache.keys.length && !force) {
+      console.warn(`[security] ${err.message}; using cached keys`);
+      keysCache.at = Date.now() - KEYS_TTL_MS + STALE_RETRY_MS;
+      return keysCache.keys;
+    }
+    throw err;
+  }
   return keysCache.keys;
+}
+
+// Fetch the JWKS at startup so the first request after a restart doesn't
+// depend on the network; retries in the background (backoff, capped) until
+// it succeeds, like the R2/Atlas startup retries.
+function warmAccessKeys({ retryMs = 5000, maxRetryMs = 60_000 } = {}) {
+  let delay = retryMs;
+  const attempt = () =>
+    getKeys(false).catch((err) => {
+      console.warn(`[security] ${err.message} at startup; retrying in background`);
+      const t = setTimeout(attempt, delay);
+      if (t.unref) t.unref();
+      delay = Math.min(delay * 2, maxRetryMs);
+    });
+  return attempt();
+}
+
+function resetKeysCacheForTest() {
+  keysCache = { keys: [], at: 0 };
 }
 
 function decodeSegment(seg) {
@@ -172,6 +239,7 @@ function cloudflareAccess() {
     return (_req, _res, next) => next();
   }
   console.log(`[security] Cloudflare Access verification ON (team ${TEAM_DOMAIN})`);
+  warmAccessKeys();
   return async (req, res, next) => {
     // The reader portal (issue #34) is the one deliberate hole in the CF wall:
     // readers aren't in the Access policy, so /reader/* is bypassed at the edge
@@ -185,6 +253,11 @@ function cloudflareAccess() {
       req.cfAccess = await verifyAccessToken(token);
       next();
     } catch (err) {
+      if (err.code === 'JWKS_UNAVAILABLE') {
+        console.warn(`[security] Access JWKS unreachable: ${err.message}`);
+        res.setHeader('Retry-After', '10');
+        return res.status(503).json({ error: 'Authentication temporarily unavailable' });
+      }
       console.warn(`[security] Access token rejected: ${err.message}`);
       res.status(401).json({ error: 'Unauthorized' });
     }
@@ -200,7 +273,11 @@ async function isUpgradeAuthorized(req) {
     await verifyAccessToken(token);
     return true;
   } catch (err) {
-    console.warn(`[security] Access upgrade rejected: ${err.message}`);
+    if (err.code === 'JWKS_UNAVAILABLE') {
+      console.warn(`[security] Access JWKS unreachable (upgrade): ${err.message}`);
+    } else {
+      console.warn(`[security] Access upgrade rejected: ${err.message}`);
+    }
     return false;
   }
 }
@@ -291,6 +368,9 @@ module.exports = {
   isForumUrl,
   // exported for tests
   verifyAccessToken,
+  warmAccessKeys,
+  resetKeysCacheForTest,
+  JwksUnavailableError,
   tokenFromHeaders,
   isTrustedProxyPeer,
   clientIp,
