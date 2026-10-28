@@ -669,6 +669,7 @@ img.lib-cover { overflow: hidden; }
 .lib-title { margin: 0 0 0.2rem; font-size: 1rem; overflow-wrap: anywhere; }
 .lib-filename { margin-bottom: 0.5rem; word-break: break-word; }
 .badge.ok-badge { background: color-mix(in srgb, var(--good) 18%, transparent); color: var(--good); }
+.badge.warn-badge { background: color-mix(in srgb, var(--warn) 14%, transparent); color: var(--warn); }
 
 /* Merged metaline: format/verified pills, size, date, warn chip, tag pills. */
 .lib-metaline { display: flex; flex-wrap: wrap; align-items: center;

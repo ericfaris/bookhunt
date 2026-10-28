@@ -52,6 +52,16 @@ test('Watchlist page: status tabs with counts; text-labeled row actions', () => 
   assert.ok(!js.includes('watch-icon-btn') && !js.includes("'⏸'"), 'no icon-only pause/delete buttons on watches');
 });
 
+test('Watchlist page: failures get their own first tab and an honest badge (critique 2026-10-27)', () => {
+  assert.ok(js.indexOf("['attention', 'Needs attention'") < js.indexOf("['active', 'Active'"), 'triage tab comes first');
+  assert.ok(js.includes("if (!watchTab) watchTab = allWatches.some(watchNeedsAttention) ? 'attention' : 'active';"));
+  assert.ok(js.includes('`Download failing (${w.downloadMisses}/${watchMaxMisses})`'));
+  assert.ok(js.includes("w.fulfilledBy === 'library'") && js.includes("'In your Library ✓'"));
+  assert.ok(!js.includes('Found — retrying download'), 'old badge that read like success is gone');
+  assert.ok(css.includes('.badge.warn-badge'));
+  assert.ok(js.includes("} else if (w.fulfilledBy !== 'library') {"), 'no "Watch again" for a book you already have');
+});
+
 test('Activity page: day groups, type filters, sends rendered as sends, no file paths', () => {
   assert.ok(js.includes('function dayLabel('));
   assert.ok(js.includes("['notify', 'Sends']"));

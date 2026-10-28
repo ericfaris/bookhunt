@@ -122,7 +122,7 @@ function setStatus(id, status) {
   // (lists.expiredListWatches), which otherwise re-expires an old resumed
   // list watch on the next daily run, before it is ever re-checked.
   const patch = status === 'active'
-    ? { status, foundUrl: null, foundAt: null, lastError: null, checkCount: 0, downloadMisses: 0, retryAfter: null, resumedAt: new Date().toISOString() }
+    ? { status, foundUrl: null, foundAt: null, fulfilledBy: null, lastError: null, checkCount: 0, downloadMisses: 0, retryAfter: null, resumedAt: new Date().toISOString() }
     : { status };
   return update(id, patch);
 }

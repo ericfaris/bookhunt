@@ -414,10 +414,39 @@ function _resetOutageState() {
 }
 
 let _inFlight = false;
+/**
+ * Close watches whose book is already in the Library — e.g. downloaded by hand
+ * while the watch sat in its retry backoff. Without this a watch keeps saying
+ * "retrying" for a book that is sitting first in the Library. Marked fulfilled
+ * (fulfilledBy 'library'), not removed, so the Found tab still shows what
+ * happened. Title-less (author-only) watches are left alone: owning ONE book
+ * by an author says nothing about the next one. Returns the ids it closed.
+ */
+function reconcileOwned(ownsBook = (w) => require('./library').ownsBook(w)) {
+  const closed = [];
+  for (const w of watchlist.readAll()) {
+    if (!w || (w.status !== 'active' && w.status !== 'paused')) continue;
+    if (!String(w.title || '').trim()) continue;
+    if (!ownsBook({ title: w.title, author: w.author })) continue;
+    watchlist.update(w.id, {
+      status: 'fulfilled',
+      fulfilledBy: 'library',
+      downloaded: true,
+      foundAt: new Date().toISOString(),
+      retryAfter: null,
+      lastError: null,
+    });
+    closed.push(w.id);
+  }
+  if (closed.length) console.log('[watcher] closed %d watch(es) already in the Library', closed.length);
+  return closed;
+}
+
 async function tick() {
   if (_inFlight) return; // don't stack ticks
   _inFlight = true;
   try {
+    try { reconcileOwned(); } catch (err) { console.warn('[watcher] reconcile failed:', err.message); }
     const due = watchlist.dueWatchesMixed(
       watchlist.readAll(),
       Date.now(),
@@ -485,7 +514,7 @@ function start() {
 }
 
 module.exports = {
-  start, tick, checkWatch, checkNow, autoDeliver, operatorEmail,
+  start, tick, checkWatch, checkNow, autoDeliver, operatorEmail, reconcileOwned,
   // exported for unit tests
   missBackoffMs, summarizeDownloadErrors, noteDeliveryOutcome, _resetOutageState,
   MAX_DOWNLOAD_MISSES, OUTAGE_THRESHOLD,

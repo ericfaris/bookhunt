@@ -65,3 +65,75 @@ test('GET /api/watchlist: returns watches newest-added first', async () => {
     server.close();
   }
 });
+
+// --- Watches for books already in the Library (critique 2026-10-27) -----------
+// Regression: a watch sat in its download-retry backoff ("Found — retrying,
+// next try 10/30") while the same book, downloaded by hand, was first in the
+// Library. GET now closes such watches before answering.
+
+const history = require('../src/history');
+const watcher = require('../src/watcher');
+
+function seedLibrary() {
+  fs.writeFileSync(process.env.HISTORY_FILE, '[]');
+  history.add({
+    type: 'download', title: 'Lady Tremaine', author: 'Rachel Hochhauser',
+    savePath: path.join(TMP, 'lt.epub'), filename: 'lt.epub', mode: 'premium', verified: true,
+  });
+}
+
+test('GET /api/watchlist: closes a retrying watch whose book is already in the Library', async () => {
+  seedLibrary();
+  fs.writeFileSync(process.env.WATCHLIST_FILE, '[]');
+  const w = watchlist.add({ title: 'Lady Tremaine', author: 'Rachel Hochhauser' });
+  watchlist.update(w.id, { downloadMisses: 5, retryAfter: '2026-10-30T00:00:00Z', lastError: 'No Premium icon found' });
+  const other = watchlist.add({ title: 'Some Unowned Book', author: 'Nobody' });
+
+  const server = await listen();
+  try {
+    const { status, json } = await get(server.address().port, '/api/watchlist');
+    assert.equal(status, 200);
+    const got = json.watches.find((x) => x.id === w.id);
+    assert.equal(got.status, 'fulfilled');
+    assert.equal(got.fulfilledBy, 'library');
+    assert.equal(got.retryAfter, null);
+    assert.equal(got.lastError, null);
+    assert.equal(json.watches.find((x) => x.id === other.id).status, 'active', 'unowned watch untouched');
+    assert.equal(json.maxDownloadMisses, watcher.MAX_DOWNLOAD_MISSES, 'UI gets the retry cap for "n/6"');
+  } finally {
+    server.close();
+  }
+});
+
+test('reconcileOwned: skips author-only, expired and unowned watches; closes paused owned ones', () => {
+  fs.writeFileSync(process.env.WATCHLIST_FILE, '[]');
+  const authorOnly = watchlist.add({ author: 'Rachel Hochhauser' });
+  const owned = watchlist.add({ title: 'Owned Title', author: 'X' });
+  const paused = watchlist.add({ title: 'Paused Owned', author: 'Y' });
+  watchlist.setStatus(paused.id, 'paused');
+  const expired = watchlist.add({ title: 'Expired Owned', author: 'Z' });
+  watchlist.setStatus(expired.id, 'expired');
+  const unowned = watchlist.add({ title: 'Not Mine', author: 'Q' });
+
+  const asked = [];
+  const owns = (e) => { asked.push(e.title); return /Owned/.test(e.title); };
+  const closed = watcher.reconcileOwned(owns);
+
+  assert.deepEqual(closed.sort(), [owned.id, paused.id].sort());
+  assert.ok(!asked.includes(undefined) && !asked.includes(''), 'author-only watch never matched');
+  const byId = Object.fromEntries(watchlist.readAll().map((w) => [w.id, w]));
+  assert.equal(byId[authorOnly.id].status, 'active');
+  assert.equal(byId[expired.id].status, 'expired');
+  assert.equal(byId[unowned.id].status, 'active');
+  assert.equal(byId[owned.id].fulfilledBy, 'library');
+});
+
+test('reconcileOwned: resuming a library-closed watch clears fulfilledBy', () => {
+  fs.writeFileSync(process.env.WATCHLIST_FILE, '[]');
+  const w = watchlist.add({ title: 'Owned Again', author: 'X' });
+  watcher.reconcileOwned(() => true);
+  watchlist.setStatus(w.id, 'active');
+  const got = watchlist.readAll().find((x) => x.id === w.id);
+  assert.equal(got.status, 'active');
+  assert.equal(got.fulfilledBy, null);
+});

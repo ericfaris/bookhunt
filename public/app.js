@@ -2896,7 +2896,10 @@ function renderReupRequests(data) {
 let watchRecipientsList = []; // [{id, name, hasKindle}] for relating to a watch
 // Which status tab the Watchlist page shows. Expired watches (most of the
 // list after a few months) get their own tab instead of burying active ones.
-let watchTab = 'active';
+// null = not chosen yet: the first load opens "Needs attention" when anything
+// is failing, otherwise "Active".
+let watchTab = null;
+let watchMaxMisses = 6; // the watcher's retry cap, sent by /api/watchlist
 $('#watchForm').addEventListener('submit', async (e) => {
   e.preventDefault();
   const title = $('#watchTitle').value.trim();
@@ -2958,6 +2961,7 @@ async function loadWatchlist() {
       notice.hidden = true;
     }
     watchRecipientsList = data.recipients || [];
+    if (data.maxDownloadMisses) watchMaxMisses = data.maxDownloadMisses;
     // (Re)render the add-form recipient chooser.
     const addBox = $('#watchAddRecipients');
     addBox.innerHTML = '';
@@ -2982,16 +2986,28 @@ function watchStatusBadge(w) {
     expired: ['Expired', ''],
   };
   let [label, cls] = map[w.status] || [w.status, ''];
-  // Found but no file: say so instead of a misleading "Found ✓".
-  if (w.status === 'active' && w.downloadMisses > 0) [label, cls] = ['Found — retrying download', ''];
-  else if (w.status === 'fulfilled' && w.downloaded === false) [label, cls] = ['Found — not downloaded', ''];
+  // Found but no file: say so instead of a misleading "Found ✓". A failing
+  // download is a problem to look at, not a kind of "found".
+  if (watchFailing(w)) [label, cls] = [`Download failing (${w.downloadMisses}/${watchMaxMisses})`, 'warn-badge'];
+  else if (w.status === 'fulfilled' && w.fulfilledBy === 'library') [label, cls] = ['In your Library ✓', 'ok-badge'];
+  else if (w.status === 'fulfilled' && w.downloaded === false) [label, cls] = ['Found, not downloaded', 'warn-badge'];
   const badge = el('span', { className: 'badge ' + cls }, label);
   // List-origin watches carry a provenance badge so hand-added ones stand out.
   if (w.source !== 'list') return badge;
   return el('span', { className: 'watch-badges' }, [badge, el('span', { className: 'badge', title: w.listLabel || 'From a bestseller list' }, '📈 List')]);
 }
 
+/** Found on the forum but the download keeps failing: needs a human look. */
+function watchFailing(w) {
+  return w.status === 'active' && w.downloadMisses > 0;
+}
+/** Failing downloads and checks that errored out — the triage list. */
+function watchNeedsAttention(w) {
+  return watchFailing(w) || (w.status === 'active' && !!w.lastError);
+}
+
 const WATCH_TABS = [
+  ['attention', 'Needs attention', watchNeedsAttention],
   ['active', 'Active', (w) => w.status === 'active' || w.status === 'paused'],
   ['fulfilled', 'Found', (w) => w.status === 'fulfilled'],
   ['expired', 'Expired', (w) => w.status === 'expired'],
@@ -3011,13 +3027,19 @@ function renderWatchTabs(all) {
 }
 
 function renderWatchlist(allWatches) {
+  if (!watchTab) watchTab = allWatches.some(watchNeedsAttention) ? 'attention' : 'active';
   renderWatchTabs(allWatches);
   const test = (WATCH_TABS.find(([k]) => k === watchTab) || WATCH_TABS[0])[2];
-  const watches = allWatches.filter(test);
+  // Problems first within any tab (stable: otherwise newest-added first).
+  const watches = allWatches.filter(test)
+    .map((w, i) => [w, i])
+    .sort((a, b) => (watchNeedsAttention(b[0]) - watchNeedsAttention(a[0])) || (a[1] - b[1]))
+    .map(([w]) => w);
   const body = $('#watchlistBody');
   body.innerHTML = '';
   if (allWatches.length && !watches.length) {
-    body.append(el('p', { className: 'hint table-empty' }, 'Nothing in this tab.'));
+    body.append(el('p', { className: 'hint table-empty' },
+      watchTab === 'attention' ? 'Nothing needs attention. Every watch is checking normally.' : 'Nothing in this tab.'));
     return;
   }
   if (!watches.length) {
@@ -3116,7 +3138,9 @@ function renderWatchlist(allWatches) {
         await loadWatchlist();
       });
       actions.append(toggle);
-    } else {
+    } else if (w.fulfilledBy !== 'library') {
+      // (A watch closed because the book is already in the Library would just
+      // be closed again on the next load, so it gets no "Watch again".)
       const again = el('button', { className: 'ghost-btn', type: 'button' }, 'Watch again');
       again.addEventListener('click', async () => {
         again.disabled = true;

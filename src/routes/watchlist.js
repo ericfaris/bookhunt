@@ -18,6 +18,9 @@ const router = express.Router();
 // the user when a match finally appears. The list also reports whether email is
 // configured (no email channel = notifications can't be delivered).
 router.get('/api/watchlist', (_req, res) => {
+  // Close watches for books that already reached the Library some other way,
+  // so the page never shows "retrying" for a book you have. Best-effort.
+  try { watcher.reconcileOwned(); } catch { /* the page still renders */ }
   // Newest-added first — readAll() is insertion order (oldest first), so sort
   // by createdAt desc for display; sort is a copy, doesn't touch storage order.
   const watches = [...watchlist.readAll()].sort(
@@ -27,6 +30,7 @@ router.get('/api/watchlist', (_req, res) => {
     watches,
     emailReady: notify.listChannels().some((c) => c.id === 'email' && c.configured),
     notifyTo: watcher.operatorEmail() || null,
+    maxDownloadMisses: watcher.MAX_DOWNLOAD_MISSES,
     // For relating recipients to a watch (id, name, whether they have a Kindle).
     recipients: recipients.readAll().map((r) => ({ id: r.id, name: r.name, hasKindle: !!r.kindleEmail })),
   });
