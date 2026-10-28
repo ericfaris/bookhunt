@@ -22,7 +22,8 @@
   mani.href = '/reader/manifest.webmanifest?t=' + encodeURIComponent(t);
   document.head.append(mani);
 
-  setupInstallHint(t, $, el);
+  const visits = countVisit();
+  const installHint = setupInstallHint(t, $, el);
 
   let data;
   try {
@@ -51,32 +52,60 @@
   // Wires a Send-to-Kindle button for book `b`. Shared by the tile and the
   // details modal so both POST the same call; `onSent` lets the other copy of
   // the button (tile ↔ modal) flip to "sent" too.
-  function wireSend(btn, err, b, kindleSet, onSent) {
-    btn.className = 'send' + (b.sent ? ' sent' : '');
+  //
+  // "Sent" only ever means we emailed it to Amazon — Amazon can still drop it
+  // (unapproved sender), so the copy never claims it is ON the Kindle. On a
+  // tile a sent book's button just opens the details; sending AGAIN (new
+  // Kindle, lost book) lives only in the modal, where it's a deliberate act.
+  function wireSend(btn, err, b, kindleSet, onSent, where = 'tile') {
+    const status = where === 'modal' ? $('#bookStatus') : null;
+    const setStatus = (text) => { if (status) { status.textContent = text; status.hidden = !text; } };
+    const idle = () => {
+      btn.disabled = !kindleSet;
+      if (b.sent && where === 'tile') {
+        btn.className = 'send sent';
+        btn.textContent = '✓ Sent';
+        btn.setAttribute('aria-label', `Sent to your Kindle. Open details for ${b.title}`);
+        btn.disabled = false;
+      } else if (b.sent) {
+        btn.className = 'send again';
+        btn.textContent = 'Send again';
+        btn.removeAttribute('aria-label');
+        setStatus('✓ Already sent to your Kindle.');
+      } else {
+        btn.className = 'send';
+        btn.textContent = 'Send to my Kindle';
+        btn.removeAttribute('aria-label');
+        setStatus('');
+      }
+    };
     btn.type = 'button';
-    btn.textContent = b.sent ? '✓ On your Kindle' : '📤 Send to my Kindle';
-    btn.disabled = b.sent || !kindleSet;
+    idle();
     btn.onclick = async (e) => {
+      // A sent tile behaves like the rest of the tile: let the click bubble
+      // up and open the details, where "Send again" lives.
+      if (b.sent && where === 'tile') return;
       e.stopPropagation(); // never also open the details modal
       btn.disabled = true;
       btn.textContent = 'Sending…';
       err.textContent = '';
+      setStatus('');
       try {
         const res = await fetch('/reader/api/send', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ t, id: b.id }),
         });
-        const out = await res.json();
-        if (!res.ok) throw new Error(out.error || 'Send failed');
+        const out = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(sendErrorMessage(res.status, out.error));
         b.sent = true;
-        btn.classList.add('sent');
-        btn.textContent = '✓ On its way!';
+        btn.className = 'send sent';
+        btn.textContent = '✓ Sent to your Kindle';
+        setStatus(SENT_HELP);
         if (onSent) onSent();
       } catch (e2) {
-        btn.disabled = false;
-        btn.textContent = '📤 Send to my Kindle';
-        err.textContent = e2.message;
+        idle();
+        err.textContent = e2 instanceof TypeError ? sendErrorMessage(0) : e2.message;
       }
     };
   }
@@ -91,11 +120,7 @@
     if (cover.tagName === 'IMG') cover.onerror = () => cover.replaceWith(el('div', { className: 'cover ph' }, '📕'));
     const err = el('div', { className: 'err' });
     const btn = el('button');
-    const markSent = () => {
-      btn.disabled = true;
-      btn.classList.add('sent');
-      btn.textContent = '✓ On its way!';
-    };
+    const markSent = () => wireSend(btn, err, b, kindleSet);
     wireSend(btn, err, b, kindleSet);
     const tile = el('div', { className: 'tile' }, [
       cover,
@@ -132,6 +157,10 @@
   }
 
   setupSearch(t, $, el, renderTile);
+
+  // The home-screen hint waits for a return visit, and never shares a page
+  // load with a "what's new" tip: first-time readers see books, not homework.
+  if (visits >= 2 && !spotlightShownThisVisit) installHint.allow();
 
   const stopEmails = async () => {
     try {
@@ -170,33 +199,65 @@
   if (qs.get('unsub') === '1') askStopEmails($('#banner'), (banner, bar) => banner.append(bar));
 })();
 
+// Shown under the button right after a send. Amazon silently drops documents
+// from senders the reader hasn't approved, so say what "sent" means and what
+// to do if it never arrives — at the moment it matters. (var, not const: the
+// async IIFE above starts before this line runs, and must never hit the TDZ.)
+var SENT_HELP = 'It should appear on your Kindle within a few minutes. Not there after 10 minutes? Ask Eric to check your Kindle’s approved senders.';
+
+/** PURE: the reader-facing message for a failed send. The server's own
+ *  messages for 409/410/429 are written for readers; anything else (5xx,
+ *  network) gets a calm retry line instead of a raw server error. */
+function sendErrorMessage(status, serverMessage) {
+  if ((status === 409 || status === 410 || status === 429) && serverMessage) return serverMessage;
+  return 'Couldn’t send it right now. Please try again in a minute.';
+}
+
+// Counts page loads per device so first-visit onboarding stays light.
+// Returns the visit number including this one (1 when storage is blocked).
+function countVisit() {
+  try {
+    const n = (parseInt(localStorage.getItem('bh_visits'), 10) || 0) + 1;
+    localStorage.setItem('bh_visits', String(n));
+    return n;
+  } catch { return 1; }
+}
+
 // A gentle, dismissable "Add BookHunt to your home screen" hint. Written for
 // non-technical readers: plain words, no jargon, and it never blocks the page.
 // - Android/Chrome: we get a real one-tap install via beforeinstallprompt.
 // - iOS/Safari: no programmatic install exists, so we show the exact taps.
 // - Already installed (standalone) or dismissed before: show nothing.
+// Nothing shows until the caller calls allow() — the beforeinstallprompt
+// listener is attached up front anyway, because that event fires early.
 function setupInstallHint(t, $, el) {
+  const none = { allow() {} };
   const box = document.getElementById('install');
-  if (!box) return;
+  if (!box) return none;
 
   const standalone = window.matchMedia('(display-mode: standalone)').matches ||
     window.navigator.standalone === true;
-  if (standalone) return;                          // already added — don't nag
-  try { if (localStorage.getItem('bh_install_dismissed') === '1') return; } catch { /* ok */ }
+  if (standalone) return none;                     // already added — don't nag
+  try { if (localStorage.getItem('bh_install_dismissed') === '1') return none; } catch { /* ok */ }
 
   const ua = navigator.userAgent || '';
   const isiOS = /iphone|ipad|ipod/i.test(ua) || (/mac/i.test(ua) && 'ontouchend' in document);
 
   const icon = el('img', { src: '/reader/icon-192.png', alt: '' });
   const dismiss = el('button', { className: 'x', type: 'button', title: 'Not now', textContent: '✕' });
+  dismiss.setAttribute('aria-label', 'Not now');
   dismiss.onclick = () => {
     box.hidden = true;
     try { localStorage.setItem('bh_install_dismissed', '1'); } catch { /* ok */ }
   };
 
-  const show = (inner) => {
+  let allowed = false;
+  let pending = null; // content waiting for allow()
+  const show = (kids) => {
+    pending = kids;
+    if (!allowed) return;
     box.innerHTML = '';
-    box.append(icon, inner, dismiss);
+    box.append(...kids);
     box.hidden = false;
   };
 
@@ -208,24 +269,29 @@ function setupInstallHint(t, $, el) {
       e.prompt();
       try { await e.userChoice; } catch { /* ok */ }
     };
-    box.innerHTML = '';
-    box.append(icon,
+    show([icon,
       el('div', { className: 'it' }, [
         el('b', { textContent: 'Add BookHunt to your phone' }),
         el('span', { textContent: 'One tap puts it on your home screen like an app.' }),
-      ]), add, dismiss);
-    box.hidden = false;
+      ]), add, dismiss]);
   });
 
   if (isiOS) {
     // iOS gives us no install event — guide the two taps, gently.
-    show(el('div', { className: 'it' }, [
+    show([icon, el('div', { className: 'it' }, [
       el('b', { textContent: 'Add BookHunt to your home screen' }),
       el('span', { textContent: 'Tap the Share button below, then “Add to Home Screen.”' }),
-    ]));
+    ]), dismiss]);
   }
   // Non-iOS without a beforeinstallprompt (e.g. desktop, or already eligible
   // later): the event handler above will reveal the hint if/when it fires.
+
+  return {
+    allow() {
+      allowed = true;
+      if (pending) show(pending);
+    },
+  };
 }
 
 // Lazy-loads further pages of the shelf as the reader scrolls near the
@@ -291,13 +357,19 @@ function setupLazyShelf({ $, el, t, grid, renderTile, kindleSet, offset, limit, 
 // off — a leaked/shared link seeing the tip again is harmless.
 //
 // `bubbleAt` (optional) — `{ el, where }` for insertAdjacentElement — places
-// the callout somewhere other than right after the target (e.g. above a grid
-// when the target is one tile in it). Returns a dismiss function (no-op when
-// nothing was shown) so the feature can retire its own tip once it's used.
+// the callout somewhere other than right after the target (e.g. below the
+// first row of a grid when the target is one tile in it). Returns a dismiss
+// function (no-op when nothing was shown) so the feature can retire its own
+// tip once it's used.
+//
+// At most ONE tip shows per page load; the first caller wins, and the others
+// wait (unseen) for a later visit. Call in priority order.
+var spotlightShownThisVisit = false; // var: read by the IIFE above (no TDZ)
 function spotlightFeature({ id, target, title, body, el, bubbleAt }) {
-  if (!id || !target) return () => {};
+  if (!id || !target || spotlightShownThisVisit) return () => {};
   const key = 'bh_spotlight_' + id;
   try { if (localStorage.getItem(key) === '1') return () => {}; } catch { return () => {}; /* no storage — just skip the tip */ }
+  spotlightShownThisVisit = true;
 
   target.classList.add('spotlight-ring');
   const dismiss = () => {
@@ -387,7 +459,7 @@ function setupBookDetails({ $, el, t, wireSend }) {
     a.hidden = !b.author;
     const err = $('#bookErr');
     err.textContent = '';
-    wireSend($('#bookSend'), err, b, kindleSet, onSent);
+    wireSend($('#bookSend'), err, b, kindleSet, onSent, 'modal');
   }
 
   async function open(b, kindleSet, onSent, tile) {
@@ -421,13 +493,18 @@ function setupBookDetails({ $, el, t, wireSend }) {
 
   // One-time "what's new" tip on the first shelf tile; retired as soon as the
   // reader actually opens a book (they've found it — no need to keep nagging).
+  // The callout sits right under the first ROW of covers (a full-width grid
+  // item), so the first thing a reader sees is books, not instructions.
   function announce(grid) {
     const first = grid && grid.querySelector('.tile');
     if (!first) return;
+    const tiles = grid.querySelectorAll('.tile');
+    const cols = Math.max(1, getComputedStyle(grid).gridTemplateColumns.split(' ').filter(Boolean).length);
+    const endOfRow = tiles[Math.min(cols, tiles.length) - 1];
     dismissTip = spotlightFeature({
       id: 'book-details-2026-10',
       target: first,
-      bubbleAt: { el: grid, where: 'beforebegin' },
+      bubbleAt: { el: endOfRow, where: 'afterend' },
       title: '📖 New: tap a book to learn more',
       body: 'Tap or click any book to see a bigger cover and what it’s about. Give it a try!',
       el,
