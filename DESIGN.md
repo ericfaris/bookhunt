@@ -94,11 +94,15 @@ its role, most just invert lightness while keeping hue.
 | `--text-dim` | `#616a8c` | Muted ink | Hints, labels, secondary metadata |
 | `--border` | `#e7ddc8` | Hairline | Card/panel borders |
 | `--border-strong` | `#d7cab0` | Hairline (emphasis) | Input borders, hover borders |
-| `--accent` | `#f1592a` | **Primary accent** | Primary buttons, focus ring, links, the "hunt" wordmark, active states |
-| `--accent-hover` | `#d8481c` | Accent (pressed) | Primary button hover/active |
+| `--accent` | `#f1592a` | **Brand orange** | Focus ring, borders, rules, active tab underline, the "hunt" wordmark — never a text color or a label's fill |
+| `--accent-hover` | `#d8481c` | Accent (pressed) | Decorative hover tints only |
+| `--accent-fill` / `--accent-fill-hover` | `#c94418` / `#b03a12` | **Button fill** | Primary buttons, active chips/toggles, Send buttons (with `--on-accent`) |
+| `--on-accent` | `#fff` | Label on a saturated fill | Text on `--accent-fill`, `--good` and `--danger` fills |
+| `--accent-ink` | `#b83c12` | **Orange text** | Links and orange text on `--bg`/`--surface` |
+| `--accent-glow` | accent-fill @ 35% | Button shadow | Primary-button drop shadow (goes black in dark) |
 | `--accent-2` | `#f4b73f` | Secondary accent (warm gold) | The "warming up" banner's glow/shimmer — a second, rarer accent, never used for actions |
-| `--good` | `#1f9d57` | Semantic: success | "In library" badge, done steps, success text |
-| `--warn` | `#c2871c` | Semantic: warning | Stale-file chips, warn pills, warn text |
+| `--good` | `#177a44` | Semantic: success | "In library" badge, done steps, success text |
+| `--warn` | `#8a5a0a` | Semantic: warning | Stale-file chips, warn pills, "Download failing" badge, warn text |
 | `--danger` | `#d6402c` | Semantic: danger/error | Cancel button, delete hover, error text |
 | `--badge-bg` | `#e7e9f4` | Chip surface | Neutral badges (source, groups) |
 | `--badge-text` | `#2a3a72` | Chip ink | Neutral badge text |
@@ -118,17 +122,25 @@ its role, most just invert lightness while keeping hue.
 | `--text-dim` | `#9aa3bf` | |
 | `--border` / `--border-strong` | `#313c5d` / `#41507a` | |
 | `--accent` / `--accent-hover` | `#ff6a3d` / `#ff8157` | Brightened so orange still pops on dark paper |
+| `--accent-fill` / `--accent-fill-hover` | `#ff6a3d` / `#ff8157` | Fill stays bright on dark… |
+| `--on-accent` | `#131a30` | …and the label goes dark navy (6.1:1) |
+| `--accent-ink` | `#ff7a50` | Orange text on dark surfaces |
+| `--accent-glow` | `rgba(0,0,0,0.4)` | Shadows go black in dark (§5) |
 | `--accent-2` | `#f4b73f` | Unchanged — gold already reads on dark |
 | `--good` / `--warn` / `--danger` | `#43c97f` / `#e0a049` / `#ff6b57` | Brightened for dark-surface contrast |
 | `--badge-bg` / `--badge-text` | `#26315a` / `#bcc7ee` | |
 | `--brand-fg` | `#f2ece1` | Wordmark/logo strokes go cream |
 
 **Contrast:** `--text` on `--bg` is 12.6:1 (light) and 13.9:1 (dark) —
-comfortably AAA. `--text-dim` on `--bg` is 4.9:1 (light) / 5.7:1 (dark) —
-AA for body text. `--accent` white-on-orange button text (`#fff` on
-`#f1592a`) is 3.4:1 — meets AA for the 0.95rem/600-weight button label
-(large/bold text threshold), not for small body copy, which is why
-`--accent` is never used as a body-text-on-background color at small sizes.
+comfortably AAA. `--text-dim` on `--bg` is 4.7:1 (light) / 5.7:1 (dark) —
+AA for body text. Every label on a saturated fill and every orange or
+semantic text color meets **AA 4.5:1** in both themes: `--on-accent` on
+`--accent-fill` is 4.9:1 (light) / 6.1:1 (dark), `--accent-ink` on
+`--surface` 5.6:1 / 5.9:1. (White on the brand `#f1592a` is only 3.4:1, and a
+0.95rem/600 label is *not* WCAG "large text" — that starts at 18.66px bold —
+so the brand orange is kept for rings, borders and the logo.)
+`test/contrast.test.js` reads these tokens from both stylesheets and fails
+if a pairing drops below AA.
 
 **Fix applied in this pass:** several semantic states (`.status.error`,
 `.reup-msg.error`, `.batch-pill.error`, `.dl-step.warn`, etc.) had hardcoded
@@ -261,7 +273,7 @@ Every component below is rendered live (real markup + real CSS, no
 redrawing) on the showcase page, `public/design-showcase.html`.
 
 ### Buttons
-- **`.primary-btn`** — solid `--accent` fill, white text, 600 weight,
+- **`.primary-btn`** — solid `--accent-fill`, `--on-accent` text, 600 weight,
   `--radius-sm`, colored drop shadow that intensifies on hover, 1px press
   translate. Variant **`.cancel-btn`** swaps the fill to `--danger` (used
   when Search flips to Cancel mid-flight). `:disabled` drops to 55% opacity
@@ -497,10 +509,9 @@ Wired in `index.html` (`rel="icon"` → `/favicon.ico`, `apple-touch-icon`),
   §5); nothing relies on motion to convey information that isn't also
   stated in text (e.g. the warm-banner's copy explains the state; the
   animation is flavor).
-- Text contrast is documented in §3; the one soft spot (`--accent` white
-  text at small sizes) is avoided in practice — the accent is only used for
-  large/bold button labels and for text-on-`--surface` links, not
-  small caption text on an orange fill.
+- Text contrast is documented in §3 and enforced by `test/contrast.test.js`:
+  labels on fills use `--on-accent`, orange text uses `--accent-ink`, and the
+  brand `--accent` is never used as a text color or behind a label.
 - **Known gap, not fixed in this pass:** there is no distinct error-state
   input style (a red-bordered `input.invalid` or similar) — form validation
   today surfaces via a separate `.status.error` panel rather than inline

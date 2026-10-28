@@ -15,13 +15,21 @@
 <link rel="apple-touch-icon" href="/reader/icon-180.png">
 <link rel="icon" href="/reader/favicon.ico" sizes="any">
 <style>
+  /* Same values as the admin's style.css tokens (DESIGN.md §3/§9): --accent is
+     the brand orange for rings and the logo; buttons use --accent-fill with
+     --on-accent text, which pass AA in both themes. */
   :root {
     --bg: #f6f1e7; --surface: #fffdf8; --text: #1c2a56; --dim: #616a8c;
-    --border: #e7ddc8; --accent: #f1592a; --accent-hover: #d8481c; --good: #1a7f47; --err: #b03224;
+    --border: #e7ddc8; --accent: #f1592a;
+    --accent-fill: #c94418; --accent-fill-hover: #b03a12; --on-accent: #fff;
+    --accent-glow: rgba(201, 68, 24, 0.3);
+    --good: #177a44; --warn: #8a5a0a; --err: #b03224;
   }
   @media (prefers-color-scheme: dark) {
-    :root { --bg: #131a30; --surface: #1b2440; --text: #eef1fa; --dim: #9aa3c4; --border: #2b3557;
-      --good: #4cc47f; --err: #ff8a7a; }
+    :root { --bg: #131a30; --surface: #1b2440; --text: #f2ece1; --dim: #9aa3bf; --border: #313c5d;
+      --accent: #ff6a3d; --accent-fill: #ff6a3d; --accent-fill-hover: #ff8157; --on-accent: #131a30;
+      --accent-glow: rgba(0, 0, 0, 0.4);
+      --good: #43c97f; --warn: #e0a049; --err: #ff6b57; }
   }
   * { box-sizing: border-box; }
   body { margin: 0; background: var(--bg); color: var(--text);
@@ -34,9 +42,9 @@
   header p { color: var(--dim); margin: 6px 0 0; font-size: 0.95rem; }
   .note { background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
     padding: 14px 16px; margin: 0 0 16px; font-size: 0.95rem; }
-  .note.warn { border-color: #c2871c; }
+  .note.warn { border-color: var(--warn); }
   .note button.add { border: 0; border-radius: 9px; padding: 9px 14px; font-weight: 600;
-    font-size: 0.85rem; cursor: pointer; background: var(--accent); color: #fff; }
+    font-size: 0.85rem; cursor: pointer; background: var(--accent-fill); color: var(--on-accent); }
   .note button.plain { border: 1px solid var(--border); border-radius: 9px; padding: 8px 14px;
     font-size: 0.85rem; cursor: pointer; background: none; color: var(--text); }
   .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 16px; }
@@ -49,8 +57,8 @@
   .a { color: var(--dim); font-size: 0.8rem; }
   button.send { margin-top: auto; border: 0; border-radius: 9px; padding: 10px 8px;
     font-size: 0.9rem; font-weight: 600; cursor: pointer;
-    background: var(--accent); color: #fff; }
-  button.send:hover:not(:disabled) { background: var(--accent-hover); }
+    background: var(--accent-fill); color: var(--on-accent); }
+  button.send:hover:not(:disabled) { background: var(--accent-fill-hover); }
   button.send:disabled { opacity: 0.85; cursor: default; }
   /* Sent: a quiet outline, not another loud call to action. On a tile it opens
      the details; in the modal "Send again" is the deliberate re-send. */
@@ -69,8 +77,8 @@
   .install .it b { display: block; font-size: 0.95rem; }
   .install .it span { font-size: 0.82rem; color: var(--dim); }
   .install button.add { border: 0; border-radius: 9px; padding: 9px 14px; font-weight: 600;
-    font-size: 0.85rem; cursor: pointer; background: var(--accent); color: #fff; flex-shrink: 0; }
-  .install button.add:hover { background: var(--accent-hover); }
+    font-size: 0.85rem; cursor: pointer; background: var(--accent-fill); color: var(--on-accent); flex-shrink: 0; }
+  .install button.add:hover { background: var(--accent-fill-hover); }
   .install button.x { border: 0; background: none; color: var(--dim); font-size: 1.2rem;
     cursor: pointer; width: 44px; height: 44px; margin: -10px -10px -10px 0; line-height: 1; flex-shrink: 0; }
   .center { text-align: center; padding: 40px 10px; color: var(--dim); }
@@ -97,8 +105,8 @@
   .spotlight-bubble .st { font-weight: 700; margin: 0 0 4px; }
   .spotlight-bubble .sb { color: var(--dim); margin: 0 0 10px; line-height: 1.5; }
   .spotlight-bubble button { border: 0; border-radius: 9px; padding: 7px 14px; font-weight: 600;
-    font-size: 0.85rem; cursor: pointer; background: var(--accent); color: #fff; }
-  .spotlight-bubble button:hover { background: var(--accent-hover); }
+    font-size: 0.85rem; cursor: pointer; background: var(--accent-fill); color: var(--on-accent); }
+  .spotlight-bubble button:hover { background: var(--accent-fill-hover); }
   /* A tip anchored to the first tile sits under the first row of covers. */
   .grid > .spotlight-bubble { grid-column: 1 / -1; margin: 0; }
   #searchResults { margin: 0 0 24px; }
@@ -149,7 +157,7 @@
   .book .desc { margin: 8px 0 4px; font-size: 1rem; line-height: 1.65; white-space: pre-line; }
   .book .desc.loading, .book .desc.none { color: var(--dim); font-style: italic; }
   .book .actions { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
-  .book button.send { padding: 14px; font-size: 1rem; box-shadow: 0 6px 18px rgba(241, 89, 42, 0.3); }
+  .book button.send { padding: 14px; font-size: 1rem; box-shadow: 0 6px 18px var(--accent-glow); }
   .book button.send.sent, .book button.send.again { box-shadow: inset 0 0 0 1.5px currentColor; }
   .book .status { color: var(--dim); font-size: 0.9rem; line-height: 1.5; margin: 0; }
   .book .status[hidden] { display: none; }
