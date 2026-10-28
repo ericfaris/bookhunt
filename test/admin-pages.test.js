@@ -62,6 +62,15 @@ test('Watchlist page: failures get their own first tab and an honest badge (crit
   assert.ok(js.includes("} else if (w.fulfilledBy !== 'library') {"), 'no "Watch again" for a book you already have');
 });
 
+test('page hints fit one desktop line: the cap is wider than the longest hint', () => {
+  const cap = Number((css.match(/\.page-head \.hint \{[^}]*max-width: (\d+)ch/) || [])[1]);
+  assert.ok(cap, 'page hint has a ch cap');
+  const hints = [...html.matchAll(/<header class="page-head[\s\S]*?<p class="hint">([^<]*)<\/p>/g)].map((m) => m[1]);
+  assert.ok(hints.length >= 4, 'found the page hints');
+  for (const h of hints) assert.ok(h.length <= cap, `"${h}" (${h.length}) fits in ${cap}ch`);
+  assert.match(css, /\.page-head \.hint \{[^}]*text-wrap: pretty/);
+});
+
 test('Activity page: day groups, type filters, sends rendered as sends, no file paths', () => {
   assert.ok(js.includes('function dayLabel('));
   assert.ok(js.includes("['notify', 'Sends']"));

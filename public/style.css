@@ -1323,7 +1323,9 @@ main { padding-inline: max(var(--space-6), env(safe-area-inset-left, 0px)); }
 }
 .page-head h2 { margin: 0; font-size: var(--text-2xl); line-height: 1.15; }
 .page-head h2:focus { outline: none; }
-.page-head .hint { margin: var(--space-1) 0 0; max-width: 62ch; }
+/* Page hints are single sentences (longest ~104 chars): give them room to sit
+   on one line on a desktop, and when they must wrap, avoid a lone last word. */
+.page-head .hint { margin: var(--space-1) 0 0; max-width: 110ch; text-wrap: pretty; }
 .page-count { font-size: var(--text-sm); font-weight: 600; color: var(--text-dim); white-space: nowrap; font-variant-numeric: tabular-nums; }
 .page-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-3); margin-bottom: var(--space-4); }
 .page-toolbar input[type="search"] { flex: 1 1 320px; min-width: 0; }
