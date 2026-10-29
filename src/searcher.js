@@ -257,6 +257,10 @@ async function closeSession() {
   _context = _page = null;
 }
 
+const LOGIN_FAILED_MSG =
+  'Could not log in to Mobilism. Usually a Cloudflare challenge — open /warm and ' +
+  'solve it (or use "Log into Mobilism" there); the session then persists.';
+
 /**
  * Make sure the session is authenticated. Reuses an existing logged-in profile;
  * otherwise submits the login form and waits for the session to come up
@@ -297,10 +301,7 @@ async function ensureLoggedIn(page) {
     /* fall through to the check below */
   }
   if (!(await isLoggedIn(page))) {
-    throw new Error(
-      'Could not log in to Mobilism. If a Cloudflare challenge appeared, run with ' +
-        'HEADLESS unset (headed) and solve it once — the session will then persist.'
-    );
+    throw new Error(LOGIN_FAILED_MSG);
   }
 }
 
@@ -1141,6 +1142,7 @@ module.exports = {
   CancelledError,
   // exported for unit tests
   _setSessionForTests,
+  LOGIN_FAILED_MSG,
   politeWaitMs,
   CHROMIUM_ARGS,
   normalize,

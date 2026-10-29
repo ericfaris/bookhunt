@@ -84,3 +84,11 @@ test('classifyError: every result has the full shape', () => {
     }
   }
 });
+
+test('searcher login-failure message: classified as needWarm, points at /warm', () => {
+  const { LOGIN_FAILED_MSG } = require('../src/searcher');
+  const out = classifyError(LOGIN_FAILED_MSG);
+  assert.equal(out.needWarm, true);
+  assert.match(LOGIN_FAILED_MSG, /\/warm/);
+  assert.doesNotMatch(LOGIN_FAILED_MSG, /HEADLESS/);
+});
