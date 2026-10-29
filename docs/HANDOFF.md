@@ -8,7 +8,7 @@ Personal web app that searches the Mobilism ebook forum (headed Chromium via Pla
 
 ## Commands
 - Tests: `npm test` (sets `STORAGE=local DATA_STORE=file`, temp store files — never touches live JSON).
-- Rebuild/deploy: `npm run docker:up` (stamps version/commit/build time). Use the `deploy` skill. Add `--pull` (`docker compose build --pull`) when bumping the base image.
+- Deploy: **pushing to `main` deploys** (test.yml `deploy` job → Sentinel `/api/deploy`, stamps version/commit). Then `gh run watch`; do NOT also run `npm run docker:up`, which races it ("container name already in use", leaves a stray `Created` container to `docker rm`). Use `npm run docker:up` only for an unpushed local rebuild.
 - Local smoke run: `PORT=3999 STORAGE=local DATA_STORE=file WATCH_ENABLED=false LISTS_ENABLED=false node src/server.js` with `*_FILE` env vars pointed at copies. **Stop it by PID, not `pkill -f "node src/server.js"`**: that pattern also kills the prod container's process.
 
 ## Config not in git (`.env`, names only)
