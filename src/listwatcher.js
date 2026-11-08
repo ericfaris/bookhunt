@@ -272,7 +272,7 @@ function buildDigest(events) {
   const html = emailShell(
     'New-release radar',
     bodyRows.join(''),
-    'Compiled from the NYT bestseller and Goodreads adult-fiction lists. To remove a title, delete it from your Library.',
+    'Compiled from the NYT bestseller, GMA Book Club and Goodreads adult-fiction lists. To remove a title, delete it from your Library.',
     'Automated digest from your BookHunt server'
   );
   return { subject, text: textParts.join('\n\n'), html, attachments };

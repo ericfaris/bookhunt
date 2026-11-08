@@ -1,7 +1,7 @@
 # BookHunt — handoff
 
 ## What it is / where it runs
-Personal web app that searches the Mobilism ebook forum (headed Chromium via Playwright, under Xvfb), downloads ePUBs via the premium downloader, stores them in Cloudflare R2, and sends them to people's Kindles / inboxes. Also: a watchlist that re-checks searches, a new-release "radar" (NYT + Goodreads Most Read lists → auto-watch), and a passwordless reader portal at `/reader`.
+Personal web app that searches the Mobilism ebook forum (headed Chromium via Playwright, under Xvfb), downloads ePUBs via the premium downloader, stores them in Cloudflare R2, and sends them to people's Kindles / inboxes. Also: a watchlist that re-checks searches, a new-release "radar" (NYT + GMA Book Club + Goodreads Most Read lists → auto-watch), and a passwordless reader portal at `/reader`.
 
 - Live: `https://bookhunt.mooseflip.com`, Docker container `bookhunt-app-1` on this machine (`127.0.0.1:3000`), exposed by the lab Cloudflare Tunnel, gated by Cloudflare Access (origin verifies the Access JWT). `/reader/*` is the one path with an Access bypass app (token-gated instead).
 - `/warm` proxies noVNC to the in-container browser to clear an interactive Cloudflare challenge (autowarm emails when that's needed).
