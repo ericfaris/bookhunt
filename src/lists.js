@@ -8,8 +8,8 @@
 // (gitignored, bind-mounted in Docker), same posture as watchlist.json.
 //
 // Sources are pluggable modules under src/listsources/ (same pattern as
-// notify channels): NYT Books API (Phase 1 anchor), plus two scraped Goodreads
-// adult-fiction genre pages (Phase 2) — each breaks independently. Lists
+// notify channels): NYT Books API (Phase 1 anchor), plus a scraped Goodreads
+// adult-fiction "most read" page (Phase 2). Lists
 // refresh weekly-ish, so the diff is what makes the schedule safe to run daily:
 // an unchanged list yields no entrants, no watches, no email.
 //
@@ -36,8 +36,8 @@ const LIST_TAGS = ['New release'];
 
 /** Every registered source, in pull order: { id, label, tag, configured,
  *  priority, fetch }. Sorted by `priority` (lower first) so the per-pull intake
- *  cap is spent on the highest-signal lists first — NYT, then Goodreads New
- *  Releases, then Goodreads Most Read. Stable for equal priorities. */
+ *  cap is spent on the highest-signal lists first — NYT, then Goodreads Most
+ *  Read. Stable for equal priorities. */
 function sources() {
   return [...nyt.sources(), ...goodreads.sources()]
     .map((s, i) => ({ s, i }))

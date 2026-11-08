@@ -1,25 +1,21 @@
 'use strict';
 
-// Goodreads genre pages (issue #33 Phase 2, revised): two adult-fiction genre
-// pages — "most read" (popularity signal) and "new releases" (recency signal).
-// Unlike the old monthly page, these are server-rendered with no embedded
-// Apollo/JSON blob. Instead each book cover carries a prototip tooltip as an
-// escaped JS string literal inside a `new Tip($('bookCoverNNN_ID'), "...", ...)`
-// call in a <script> block. The escaped HTML in that string holds the title
-// (a.readable.bookTitle anchor) and author(s) (a.authorName anchor(s)). We
-// regex the escaped argument out, unescape the JS string, then pull title/author
-// from the anchors. Following the NYT pattern, the two pages are two separate
-// sources sharing one fetch/parse helper (parameterized by URL only — the markup
-// is identical between them). The parser is PURE for tests.
+// Goodreads genre page (issue #33 Phase 2, revised): the adult-fiction "most
+// read" page (popularity signal). The "New Releases" page was dropped on
+// request (2026-11-08) — don't re-add it without asking. Unlike the old monthly
+// page, this is server-rendered with no embedded Apollo/JSON blob. Instead each
+// book cover carries a prototip tooltip as an escaped JS string literal inside a
+// `new Tip($('bookCoverNNN_ID'), "...", ...)` call in a <script> block. The
+// escaped HTML in that string holds the title (a.readable.bookTitle anchor) and
+// author(s) (a.authorName anchor(s)). We regex the escaped argument out, unescape
+// the JS string, then pull title/author from the anchors. The parser is PURE for
+// tests.
 
 const { cleanTitle, cleanAuthor, decodeEntities, SCRAPE_HEADERS } = require('./util');
 
 // `priority` orders sources for the per-pull intake cap (lower = consumed
-// first): "New Releases" is the higher-signal "acquire this now" list, so it
-// gets first claim on the day's intake budget ahead of the churnier, long-tail
-// "Most Read" page. NYT (see nyt.js) ranks ahead of both.
+// first). NYT (see nyt.js) ranks ahead of this page.
 const PAGES = [
-  { id: 'goodreads-new-releases-adult-fiction', label: 'Goodreads New Releases (Adult Fiction)', url: 'https://www.goodreads.com/genres/new_releases/adult-fiction', priority: 2 },
   { id: 'goodreads-most-read-adult-fiction', label: 'Goodreads Most Read (Adult Fiction)', url: 'https://www.goodreads.com/genres/most_read/adult-fiction', priority: 3 },
 ];
 

@@ -192,13 +192,13 @@ test('goodreads.fetchGenrePage: rejects on non-OK and on 0-book parse, resolves 
   }
 });
 
-test('goodreads.sources: two genre-page sources with the expected ids/tag', () => {
+test('goodreads.sources: only the Most Read page, with the expected id/tag', () => {
   const { sources } = require('../src/listsources/goodreads');
   const s = sources();
-  assert.equal(s.length, 2);
-  // New Releases is listed first so it gets first claim on the per-pull intake
-  // budget (priority 2) ahead of the churnier Most Read page (priority 3).
-  assert.deepEqual(s.map((x) => x.id), ['goodreads-new-releases-adult-fiction', 'goodreads-most-read-adult-fiction']);
+  assert.equal(s.length, 1);
+  // Regression guard: the Goodreads New Releases page was removed on request
+  // (2026-11-08) and must not come back by accident.
+  assert.deepEqual(s.map((x) => x.id), ['goodreads-most-read-adult-fiction']);
   for (const x of s) {
     assert.equal(x.tag, 'Goodreads Adult Fiction');
     assert.equal(x.configured, true);
@@ -342,16 +342,15 @@ test('clampListHours: clamps to bounds and falls back on junk', () => {
 
 // --- source priority (spend the per-pull intake budget on the best lists first) ---
 
-test('sources: ordered NYT → Goodreads New Releases → Goodreads Most Read', () => {
+test('sources: ordered NYT → Goodreads Most Read, no Goodreads New Releases', () => {
   const { sources } = require('../src/lists');
   const ids = sources().map((s) => s.id);
-  const nr = ids.indexOf('goodreads-new-releases-adult-fiction');
+  assert.ok(!ids.includes('goodreads-new-releases-adult-fiction'), 'New Releases source is removed');
   const mr = ids.indexOf('goodreads-most-read-adult-fiction');
-  // Every NYT source (priority 1) precedes both Goodreads pages.
-  const firstGoodreads = Math.min(nr, mr);
+  assert.ok(mr > 0, 'Most Read is registered');
+  // Every NYT source (priority 1) precedes the Goodreads page.
   const lastNyt = ids.reduce((acc, id, i) => (id.startsWith('goodreads-') ? acc : i), -1);
-  assert.ok(lastNyt < firstGoodreads, 'NYT sources come before Goodreads');
-  assert.ok(nr < mr, 'New Releases is consumed before Most Read');
+  assert.ok(lastNyt < mr, 'NYT sources come before Goodreads');
 });
 
 // --- classifyEntrant (the radar intake gate) --------------------------------------
